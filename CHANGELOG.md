@@ -5,6 +5,47 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-07-05
+
+Post-release QA hardening — a full adversarial review of the 1.0.0 code turned up
+a set of reachable defects (concurrency, second-copy resume, faces-privacy, and a
+viewer crash); all are fixed here. No data was lost in normal use, but a couple of
+these could have, in specific interrupted-then-reconfigured scenarios.
+
+### Fixed — data safety
+- **Two sessions could start at once (critical).** The "one session at a time"
+  guard was a check-then-act race across `await` points: a card event interleaving
+  with user consent could launch a second `SessionRunner` that no control
+  (pause/cancel/wipe) could reach — it would run to its own wipe uncontrolled. A
+  start is now reserved synchronously before the first suspension.
+- **Resume could wipe with only one copy when a second drive was enabled after the
+  fact.** If files were NAS-verified with no second destination, the session was
+  interrupted, and you *then* turned on a second drive, resume treated those files
+  as settled and skipped the second copy — yet still wiped the card. Resume now
+  backfills the second copy (sourcing from the NAS) before wiping, **and** the wipe
+  gate now refuses to delete any card file that isn't present on the configured
+  second drive. New harness mode `secondary-resume` proves it.
+- A queued card pulled from the reader before its turn no longer starts a spurious
+  session against a ghost mount.
+
+### Fixed — privacy (faces)
+- **"Delete all face data" now removes every sidecar.** A recovered-from-corruption
+  `.damaged` copy of the face/identity index (full embeddings) was left behind by
+  the wipe; it is now purged along with the main file and `.bak`.
+- The `.bak` copy of the face/identity index is now hardened (owner-only,
+  excluded from backups/sync) like the main file, instead of being written with
+  default permissions and swept into Time Machine / iCloud.
+
+### Fixed — viewer / library
+- **A single photo with a malformed EXIF shutter (0, ∞, NaN) crashed the whole
+  Library grid** via a trapping `Double`→`Int` conversion. Guarded, and such values
+  are filtered at read time.
+- A delete that fails on disk (read-only volume, locked file) is now surfaced with
+  an alert instead of the photo silently vanishing and reappearing on reload.
+- Date folders with an out-of-range day (e.g. `2026/02/31`) fall back to the raw
+  name instead of rolling forward to the wrong day (Mar 3).
+- The card-free ETA can no longer briefly exceed the 72 h sanity clamp.
+
 ## [1.0.0] — 2026-07-05
 
 First public release (as **SD Offload**).
