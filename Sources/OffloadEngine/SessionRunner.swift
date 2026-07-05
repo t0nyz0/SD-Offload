@@ -538,30 +538,30 @@ public actor SessionRunner {
         var sdRemaining: Int64 = 0, sdFiles = 0
         var svRemaining: Int64 = 0, svFiles = 0
         var nwRemaining: Int64 = 0, nwFiles = 0
-        var nvRemaining: Int64 = 0, nvFiles = 0
         for file in record.files {
             switch file.state {
             case .pending, .copying:
                 sdRemaining += file.size; sdFiles += 1
                 svRemaining += file.size; svFiles += 1
                 nwRemaining += file.size; nwFiles += 1
-                nvRemaining += file.size; nvFiles += 1
             case .staged:
                 svRemaining += file.size; svFiles += 1
                 nwRemaining += file.size; nwFiles += 1
-                nvRemaining += file.size; nvFiles += 1
             case .stagedVerified, .uploading:
                 nwRemaining += file.size; nwFiles += 1
-                nvRemaining += file.size; nvFiles += 1
-            case .uploaded:
-                nvRemaining += file.size; nvFiles += 1
-            case .nasVerified, .skippedDuplicate, .wiped, .failed:
+            case .uploaded, .nasVerified, .skippedDuplicate, .wiped, .failed:
                 break
             }
         }
         // Subtract in-flight partial progress where the counters run ahead of states.
         sdRemaining = max(0, hop1TotalBytes - hop1BaseBytes - meter.bytesTotal(.sdRead))
 
+        // The pipeline's wall-clock is governed by its two continuously-active,
+        // throughput-bound stages — card read and NAS write. The verify stages
+        // overlap their writes and are captured by the last-file tail below.
+        // Do NOT fold a verify stage into this max(): verification runs in
+        // bursts, so its EWMA rate decays toward zero between bursts, and
+        // B/rate then explodes into a nonsense multi-thousand-hour ETA.
         let rSD = ETAMath.stageRemaining(bytesRemaining: sdRemaining, filesRemaining: sdFiles,
                                          rate: meter.rate(.sdRead), overheadSeconds: meter.overheadSeconds(.sdRead),
                                          workers: max(1, config.hop1Workers))
@@ -571,23 +571,25 @@ public actor SessionRunner {
         let rNW = ETAMath.stageRemaining(bytesRemaining: nwRemaining, filesRemaining: nwFiles,
                                          rate: meter.rate(.nasWrite), overheadSeconds: meter.overheadSeconds(.nasWrite),
                                          workers: max(1, config.hop2Workers))
-        let rNV = ETAMath.stageRemaining(bytesRemaining: nvRemaining, filesRemaining: nvFiles,
-                                         rate: meter.rate(.nasVerify), overheadSeconds: meter.overheadSeconds(.nasVerify),
-                                         workers: max(1, config.hop2Workers))
 
+        // Last-file drain: after the final byte lands on the NAS it still has to
+        // be read back and hashed. Approximate read-back throughput by the write
+        // rate (SMB read-back is at least as fast as write) rather than the
+        // bursty nasVerify EWMA, which is ~0 between bursts and would blow the
+        // tail up the same way a verify max() term would.
         var tail: TimeInterval = 0
-        if nwFiles > 0, let rw = meter.rate(.nasWrite), let rv = meter.rate(.nasVerify), rw > 0, rv > 0 {
+        if nwFiles > 0, let rw = meter.rate(.nasWrite), rw > 0 {
             let meanSize = Double(nwRemaining) / Double(max(1, nwFiles))
-            tail = meter.overheadSeconds(.nasWrite) + meter.overheadSeconds(.nasVerify) + meanSize * (1 / rw + 1 / rv)
+            tail = meter.overheadSeconds(.nasWrite) + meter.overheadSeconds(.nasVerify) + meanSize * (2 / rw)
         }
 
-        let allSafeRaw = ETAMath.pipelineETA(stages: [rSD, rSV, rNW, rNV], tail: tail)
+        let allSafeRaw = ETAMath.clampETA(ETAMath.pipelineETA(stages: [rSD, rNW], tail: tail))
         let wipeTime = Double(totalFiles) * 0.005 + Double(config.wipeCountdownSeconds)
         let cardFreeRaw: TimeInterval?
         switch config.wipePolicy {
         case .afterStagingVerify:
             if let rSD, let rSV {
-                cardFreeRaw = max(rSD, rSV) + wipeTime
+                cardFreeRaw = ETAMath.clampETA(max(rSD, rSV) + wipeTime)
             } else {
                 cardFreeRaw = nil
             }

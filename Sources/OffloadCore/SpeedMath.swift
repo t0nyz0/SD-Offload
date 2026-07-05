@@ -67,6 +67,17 @@ public enum ETAMath {
         return maxR + tail
     }
 
+    /// A photo-card offload legitimately runs from minutes to a few hours; a value
+    /// beyond a few days means a rate estimate collapsed (a stage went briefly
+    /// idle and its EWMA decayed toward zero, so B/rate exploded). Rather than
+    /// surface a nonsense "53446:21:00", treat such a value — and any non-finite
+    /// or negative one — as "estimating…" (nil). Feeding nil to the display
+    /// smoother also resets it, so a single spike can't bleed into later frames.
+    public static func clampETA(_ eta: TimeInterval?, max maxSane: TimeInterval = 72 * 3600) -> TimeInterval? {
+        guard let eta, eta.isFinite, eta >= 0, eta <= maxSane else { return nil }
+        return eta
+    }
+
     /// Warm-up gate: a stage's rate is trustworthy after ≥ minSeconds of samples
     /// AND (≥ minBytes observed OR ≥ minFiles completed).
     public static func isWarm(sampledSeconds: Double, bytesObserved: Int64, filesObserved: Int,

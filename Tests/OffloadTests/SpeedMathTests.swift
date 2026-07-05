@@ -56,6 +56,25 @@ final class SpeedMathTests: XCTestCase {
         XCTAssertNil(ETAMath.pipelineETA(stages: [10, nil], tail: 5))
     }
 
+    func testClampETAPassesSaneValues() {
+        XCTAssertEqual(ETAMath.clampETA(0), 0)
+        XCTAssertEqual(ETAMath.clampETA(90), 90)
+        XCTAssertEqual(ETAMath.clampETA(6 * 3600), 6 * 3600)   // a long-but-plausible transfer
+        XCTAssertNil(ETAMath.clampETA(nil))
+    }
+
+    func testClampETARejectsGarbage() {
+        // The real-world blow-up: ~9.8 GB divided by a verify rate that decayed
+        // to near zero produced ~192,000,000 s ("53446:21:00" in the UI).
+        let bytes = 9_800_000_000.0
+        let decayedRate = 51.0                       // B/s — EWMA collapsed toward 0
+        let explodedETA = bytes / decayedRate        // ~1.9e8 s
+        XCTAssertNil(ETAMath.clampETA(explodedETA))
+        XCTAssertNil(ETAMath.clampETA(.infinity))
+        XCTAssertNil(ETAMath.clampETA(.nan))
+        XCTAssertNil(ETAMath.clampETA(-5))
+    }
+
     func testWarmupGate() {
         XCTAssertFalse(ETAMath.isWarm(sampledSeconds: 1, bytesObserved: 1 << 30, filesObserved: 100))
         XCTAssertFalse(ETAMath.isWarm(sampledSeconds: 10, bytesObserved: 1 << 20, filesObserved: 2))

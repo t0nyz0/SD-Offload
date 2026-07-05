@@ -22,6 +22,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
   with its RAW/sidecars), with a single confirmation.
 
 ### Fixed
+- **ETAs no longer flash absurd values** (e.g. "Card free in ~53446:21:00"). The
+  pipeline estimate used to fold the NAS-verify stage into its `max()` and divide
+  by that stage's live rate — but verification runs in bursts, so between bursts
+  the rate decays toward zero and `bytes ÷ ~0` exploded into a multi-thousand-hour
+  number, appearing intermittently depending on where the sampler landed in a
+  burst. The estimate is now driven by the two continuously-active stages (card
+  read + NAS write); the read-back tail is figured from the write rate; and a
+  final sanity clamp shows "estimating…" instead of any non-finite or wildly
+  out-of-range value.
 - **Library thumbnails no longer overflow into each other** (for real this time).
   Tiles are now uniform squares sized from the cell width, with the image
   overlaid into that definite box and clipped — the previous `maxWidth:.infinity`
