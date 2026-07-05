@@ -82,7 +82,7 @@ private struct LibraryHeader: View {
                     .font(.system(size: 26))
                     .foregroundStyle(model.mounted ? DS.safe : DS.Palette.textTertiary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.source == .nas ? "NAS · Photos" : "SD Card")
+                    Text(model.sourceTitle)
                         .font(.system(size: 17, weight: .bold))
                     countLine
                     if let geo = model.geoSummary {

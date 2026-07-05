@@ -79,6 +79,18 @@ final class LibraryModel {
     var currentDir: URL? { pathStack.last }
     var rootURL: URL? { pathStack.first }
 
+    /// Header title for the current source — the mounted volume's own name (so it
+    /// reads correctly on anyone's machine, not a hard-coded NAS name), or "SD Card".
+    var sourceTitle: String {
+        switch source {
+        case .card: return "SD Card"
+        case .nas:
+            guard let root = rootURL else { return "Photos" }
+            let name = (try? root.resourceValues(forKeys: [.volumeLocalizedNameKey]))?.volumeLocalizedName
+            return name ?? root.lastPathComponent
+        }
+    }
+
     /// Breadcrumb labels (root shown as the source name).
     var breadcrumb: [(label: String, index: Int)] {
         pathStack.enumerated().map { i, url in
