@@ -183,14 +183,57 @@ final class LibraryModel {
     }
 
     func delete(_ item: DisplayItem) async {
+        await deleteFiles(for: [item])
+    }
+
+    // MARK: - Multi-selection
+
+    var selection: Set<String> = []
+    @ObservationIgnored private var anchorID: String?
+    var selectedCount: Int { selection.count }
+
+    /// Click behavior: plain = select only; ⌘ = toggle; ⇧ = range from anchor.
+    /// Folders never select (they navigate).
+    func handleTap(_ item: DisplayItem, command: Bool, shift: Bool) {
+        guard !item.isFolder else { clearSelection(); return }
+        let ids = displayedItems.filter { !$0.isFolder }.map(\.id)
+        if shift, let anchor = anchorID,
+           let a = ids.firstIndex(of: anchor), let b = ids.firstIndex(of: item.id) {
+            selection = Set(ids[min(a, b)...max(a, b)])
+        } else if command {
+            if selection.contains(item.id) { selection.remove(item.id) } else { selection.insert(item.id) }
+            anchorID = item.id
+        } else {
+            selection = [item.id]
+            anchorID = item.id
+        }
+    }
+
+    func clearSelection() { selection.removeAll(); anchorID = nil }
+
+    func selectAllPhotos() {
+        selection = Set(displayedItems.filter { !$0.isFolder }.map(\.id))
+        anchorID = selection.first
+    }
+
+    func deleteSelection() async {
+        let items = displayedItems.filter { selection.contains($0.id) && !$0.isFolder }
+        await deleteFiles(for: items)
+    }
+
+    private func deleteFiles(for items: [DisplayItem]) async {
+        guard !items.isEmpty else { return }
         let targets = await Task.detached(priority: .userInitiated) {
-            Self.deleteTargets(for: item)
+            var urls = Set<URL>()
+            for item in items { urls.formUnion(Self.deleteTargets(for: item)) }
+            return urls
         }.value
         await Task.detached(priority: .userInitiated) {
             for url in targets { try? FileManager.default.removeItem(at: url) }
         }.value
         await photoIndex.remove(paths: targets.map(\.path))
         await photoIndex.save()
+        clearSelection()
         if isSearching { runSearch() } else { loadEntries() }
         if let root = rootURL { startCount(root); refreshVolumeStats(root) }
     }
@@ -327,6 +370,7 @@ final class LibraryModel {
     }
 
     private func loadEntries() {
+        clearSelection()
         guard let dir = currentDir else { entries = []; return }
         loading = true
         let browser = self.browser

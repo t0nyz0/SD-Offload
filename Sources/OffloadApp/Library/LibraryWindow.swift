@@ -218,27 +218,26 @@ private struct SuggestionChips: View {
 private struct LibraryGrid: View {
     let model: LibraryModel
     @State private var pendingDelete: DisplayItem?
+    @State private var bulkConfirm = false
     private let columns = [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)]
 
+    private var canDelete: Bool { model.source == .nas }
+
     var body: some View {
-        ScrollView {
-            let items = model.displayedItems
-            if items.isEmpty {
-                ContentUnavailableView(emptyTitle,
-                                       systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
-                                       description: Text(emptyDetail))
-                    .padding(.top, 60)
-            } else {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(items) { item in
-                        LibraryTile(item: item, tags: model.tags(for: item.primary))
-                            .onTapGesture(count: 2) { open(item) }
-                            .contextMenu { menu(for: item) }
-                    }
-                }
-                .padding(DS.Space.l)
-            }
+        VStack(spacing: 0) {
+            if !model.selection.isEmpty { selectionBar }
+            grid
         }
+        .background(
+            // Off-screen shortcut hosts: ⌘A select all, ⌦/⌫ delete selection.
+            Group {
+                Button("") { model.selectAllPhotos() }
+                    .keyboardShortcut("a", modifiers: .command)
+                Button("") { if canDelete && !model.selection.isEmpty { bulkConfirm = true } }
+                    .keyboardShortcut(.delete, modifiers: [])
+            }
+            .opacity(0).allowsHitTesting(false)
+        )
         .confirmationDialog("Delete this photo?",
                             isPresented: Binding(get: { pendingDelete != nil },
                                                  set: { if !$0 { pendingDelete = nil } }),
@@ -252,6 +251,66 @@ private struct LibraryGrid: View {
         } message: { item in
             Text(deleteMessage(item))
         }
+        .confirmationDialog("Delete \(model.selectedCount) photos?",
+                            isPresented: $bulkConfirm) {
+            Button("Delete \(model.selectedCount) Photos", role: .destructive) {
+                Task { await model.deleteSelection() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Permanently deletes \(model.selectedCount) photos (with their RAW/sidecar files) from your NAS. This can't be undone.")
+        }
+    }
+
+    private var selectionBar: some View {
+        HStack(spacing: DS.Space.m) {
+            Text("\(model.selectedCount) selected")
+                .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+            Spacer()
+            Button("Select All") { model.selectAllPhotos() }
+                .controlSize(.small)
+            Button("Clear") { model.clearSelection() }
+                .controlSize(.small)
+            if canDelete {
+                Button(role: .destructive) { bulkConfirm = true } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .tint(.red)
+            }
+        }
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+        .background(.quaternary.opacity(0.3))
+    }
+
+    private var grid: some View {
+        ScrollView {
+            let items = model.displayedItems
+            if items.isEmpty {
+                ContentUnavailableView(emptyTitle,
+                                       systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
+                                       description: Text(emptyDetail))
+                    .padding(.top, 60)
+            } else {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(items) { item in
+                        LibraryTile(item: item, tags: model.tags(for: item.primary),
+                                    selected: model.selection.contains(item.id))
+                            .onTapGesture(count: 2) { open(item) }
+                            .onTapGesture {
+                                let flags = NSEvent.modifierFlags
+                                model.handleTap(item,
+                                                command: flags.contains(.command),
+                                                shift: flags.contains(.shift))
+                            }
+                            .contextMenu { menu(for: item) }
+                    }
+                }
+                .padding(DS.Space.l)
+            }
+        }
+        .onExitCommand { model.clearSelection() }
     }
 
     private func deleteMessage(_ item: DisplayItem) -> String {
@@ -276,7 +335,11 @@ private struct LibraryGrid: View {
             // are protected until the verified offload wipes them).
             if model.source == .nas {
                 Divider()
-                Button("Delete…", role: .destructive) { pendingDelete = item }
+                if model.selection.contains(item.id) && model.selectedCount > 1 {
+                    Button("Delete \(model.selectedCount) Photos…", role: .destructive) { bulkConfirm = true }
+                } else {
+                    Button("Delete…", role: .destructive) { pendingDelete = item }
+                }
             }
         }
     }
@@ -300,6 +363,7 @@ private struct LibraryGrid: View {
 private struct LibraryTile: View {
     let item: DisplayItem
     var tags: [String] = []
+    var selected: Bool = false
     @State private var thumb: NSImage?
 
     private var entry: LibraryEntry { item.primary }
@@ -334,7 +398,17 @@ private struct LibraryTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
                 .overlay(alignment: .topTrailing) { formatBadge }
                 .overlay(alignment: .bottomLeading) { tagBadge }
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.m).strokeBorder(DS.Palette.hairline, lineWidth: 1))
+                .overlay(alignment: .topLeading) {
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.white, Color.accentColor)
+                            .padding(4)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.m)
+                    .strokeBorder(selected ? Color.accentColor : DS.Palette.hairline,
+                                  lineWidth: selected ? 3 : 1))
 
             Text(titleText)
                 .font(.system(size: 11))

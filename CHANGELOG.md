@@ -5,6 +5,12 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+### Added
+- **Multi-select in the Library**: click to select, ⌘-click to toggle, ⇧-click to
+  select a range, ⌘A to select all. A selection bar shows the count with Delete /
+  Clear, and ⌦ or right-click → "Delete N Photos" removes them all at once (each
+  with its RAW/sidecars), with a single confirmation.
+
 ### Fixed
 - **Library thumbnails no longer overflow into each other** (for real this time).
   Tiles are now uniform squares sized from the cell width, with the image
