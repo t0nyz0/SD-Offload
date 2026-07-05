@@ -129,7 +129,6 @@ public actor FaceIndex {
     public func deleteAll() {
         byPath.removeAll()
         dirty = false
-        try? FileManager.default.removeItem(at: file)
-        try? FileManager.default.removeItem(at: file.appendingPathExtension("bak"))
+        JSONIO.purge(file)   // main + .bak + .damaged — leave no biometric residue
     }
 }

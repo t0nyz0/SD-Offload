@@ -102,7 +102,6 @@ public actor IdentityIndex {
     public func deleteAll() {
         identities.removeAll()
         dirty = false
-        try? FileManager.default.removeItem(at: file)
-        try? FileManager.default.removeItem(at: file.appendingPathExtension("bak"))
+        JSONIO.purge(file)   // main + .bak + .damaged — leave no biometric residue
     }
 }

@@ -44,6 +44,20 @@ final class JSONIOTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathExtension("damaged").path))
     }
 
+    func testPurgeRemovesMainAndAllSidecars() throws {
+        // "Delete all face data" must leave NO biometric residue — the main file
+        // and every sidecar (.bak, .damaged) it can produce.
+        let url = dir.appendingPathComponent("faces.json")
+        let bak = url.appendingPathExtension("bak")
+        let damaged = url.appendingPathExtension("damaged")
+        for u in [url, bak, damaged] { try Data("{}".utf8).write(to: u) }
+        for u in [url, bak, damaged] { XCTAssertTrue(FileManager.default.fileExists(atPath: u.path)) }
+        JSONIO.purge(url)
+        for u in [url, bak, damaged] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: u.path), "leftover: \(u.lastPathComponent)")
+        }
+    }
+
     func testSaveDurableRoundtripAndNoTempLeftovers() throws {
         let url = dir.appendingPathComponent("durable.json")
         let doc = Doc(name: "durable", count: 9)
