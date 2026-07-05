@@ -5,7 +5,7 @@ import OffloadEngine
 
 struct SettingsView: View {
     @Environment(AppState.self) private var app
-    @AppStorage(ThumbnailQuality.storageKey) private var thumbQuality = ThumbnailQuality.balanced.rawValue
+    @AppStorage(ThumbnailQuality.storageKey) private var thumbQuality = ThumbnailQuality.defaultQuality.rawValue
 
     var body: some View {
         @Bindable var settings = app.settings

@@ -531,7 +531,7 @@ private struct LibraryTile: View {
     var selected: Bool = false
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
-    @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.balanced.rawValue
+    @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
 
     private var entry: LibraryEntry { item.primary }
     private var isVideo: Bool { if case .media(.video) = entry.kind { return true }; return false }
@@ -597,7 +597,7 @@ private struct LibraryTile: View {
             guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(
                 url: entry.url, size: entry.size, mtime: entry.modified, side: 220,
-                quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .balanced)
+                quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .defaultQuality)
         }
         .task(id: entry.id) {
             guard !item.isFolder, !isVideo else { return }

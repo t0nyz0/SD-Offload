@@ -9,26 +9,34 @@ import OffloadCore
 /// embedded preview, at more pixels and less cache compression — noticeably
 /// heavier over SMB, especially for RAW.
 enum ThumbnailQuality: Int, CaseIterable, Sendable {
-    case fast = 0, balanced = 1, high = 2
+    case fast = 0, balanced = 1, high = 2, maximum = 3
+
+    static let defaultQuality: ThumbnailQuality = .high
 
     var label: String {
-        switch self { case .fast: "Fast"; case .balanced: "Balanced"; case .high: "High" }
+        switch self {
+        case .fast: "Fast"; case .balanced: "Balanced"; case .high: "High"; case .maximum: "Maximum"
+        }
     }
     /// Pixel budget as a multiple of the base tile side (retina baseline ≈ 2×).
+    /// Maximum bumps this so very large tiles stay sharp.
     var pixelScale: CGFloat {
-        switch self { case .fast: 1.5; case .balanced: 2.2; case .high: 3.2 }
+        switch self { case .fast: 1.5; case .balanced: 2.2; case .high: 3.2; case .maximum: 4.0 }
     }
     /// Decode the full image for a crisp thumbnail rather than the file's small
     /// embedded preview. Off for Fast (embedded preview is quick over SMB).
     var fullDecode: Bool { self != .fast }
     /// JPEG quality of the on-disk thumbnail cache.
     var jpegCompression: CGFloat {
-        switch self { case .fast: 0.6; case .balanced: 0.8; case .high: 0.92 }
+        switch self { case .fast: 0.6; case .balanced: 0.8; case .high: 0.92; case .maximum: 0.97 }
     }
 
     static let storageKey = "offload.library.thumbQuality"
     static var current: ThumbnailQuality {
-        ThumbnailQuality(rawValue: UserDefaults.standard.integer(forKey: storageKey)) ?? .balanced
+        // integer(forKey:) can't tell "unset" from 0 (.fast) — check presence so an
+        // untouched preference resolves to the intended default, not Fast.
+        guard UserDefaults.standard.object(forKey: storageKey) != nil else { return defaultQuality }
+        return ThumbnailQuality(rawValue: UserDefaults.standard.integer(forKey: storageKey)) ?? defaultQuality
     }
 }
 
