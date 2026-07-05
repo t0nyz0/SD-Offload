@@ -128,6 +128,26 @@ search across the whole archive, with per-photo EXIF under each frame:
 
 ![Library — on-device content search, tags, and per-photo EXIF](docs/screenshots/library.png)
 
+## Install
+
+**Download the app** — grab the latest `SD-Offload-x.y.z.zip` from
+[**Releases**](https://github.com/t0nyz0/SD-Offload/releases), unzip it, and drag
+**SD Offload.app** to `/Applications`.
+
+It's ad-hoc signed (not yet notarized — see [Status](#status)), so macOS quarantines a
+downloaded copy. Clear it once and launch:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/SD Offload.app"
+open "/Applications/SD Offload.app"
+```
+
+(Or right-click the app → **Open**; if macOS still refuses, System Settings →
+Privacy & Security → **Open Anyway**.) First launch asks for Removable Volumes +
+Network Volumes permission. It runs in the menu bar — no Dock icon.
+
+Prefer to read the code before trusting it with a card? **Build from source** below.
+
 ## Build & run
 
 Requires **macOS 14+ on Apple Silicon** and a Swift 6 toolchain (Xcode 16+). Zero external
