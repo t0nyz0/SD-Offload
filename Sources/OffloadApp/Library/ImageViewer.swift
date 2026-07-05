@@ -60,7 +60,13 @@ struct ImageViewer: View {
                 meta = await PhotoMetaCache.shared.meta(url: item.primary.url, mtime: item.primary.modified)
             }
             .confirmationDialog("Delete this photo?", isPresented: $confirmingDelete) {
-                Button("Delete", role: .destructive) { Task { await deleteCurrent() } }
+                if item.isRawJpegPair {
+                    Button("Delete JPEG + RAW", role: .destructive) { Task { await deleteCurrent(.all) } }
+                    Button("Delete RAW only", role: .destructive) { Task { await deleteCurrent(.rawOnly) } }
+                    Button("Delete JPEG only", role: .destructive) { Task { await deleteCurrent(.jpegOnly) } }
+                } else {
+                    Button("Delete", role: .destructive) { Task { await deleteCurrent(.all) } }
+                }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(deleteMessage(item))
@@ -68,9 +74,9 @@ struct ImageViewer: View {
         }
     }
 
-    private func deleteCurrent() async {
+    private func deleteCurrent(_ scope: DeleteScope) async {
         guard let i = index, items.indices.contains(i) else { return }
-        await model.delete(items[i])
+        await model.delete(items[i], scope: scope)
         // The model updates its entries synchronously, so re-anchor against the
         // fresh list: stay at the same slot (now the next photo) or clamp/close.
         let remaining = model.displayedItems.filter { !$0.isFolder }
@@ -78,6 +84,9 @@ struct ImageViewer: View {
     }
 
     private func deleteMessage(_ item: DisplayItem) -> String {
+        if item.isRawJpegPair, let jpeg = item.photo, let raw = item.rawCompanion {
+            return "This photo has a JPEG (\(jpeg.name)) and a RAW (\(raw.name)). Choose what to delete from your NAS — this can't be undone."
+        }
         let names = item.all.map { ($0.id as NSString).lastPathComponent }
         let listed = names.count <= 3 ? names.joined(separator: ", ")
             : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
@@ -105,7 +114,7 @@ struct ImageViewer: View {
             }
             .tint(showInfo ? Color.accentColor : nil)
             .help("Show photo info (i)")
-            if let raw = item.raw?.url {
+            if let raw = item.rawCompanion?.url {
                 Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
             }
             Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
@@ -235,13 +244,27 @@ private struct InfoPanel: View {
     @State private var detections: [Detection] = []
     @State private var reloadToken = 0
 
-    private var formatText: String {
-        if case .media(.video) = item.primary.kind { return "Video" }
-        if item.raw != nil { return "JPEG + RAW" }
-        if case .media(.raw) = item.primary.kind { return "RAW" }
-        return "JPEG"
+    private func kindLabel(_ e: LibraryEntry) -> String {
+        switch e.kind {
+        case .media(.raw): return "RAW"
+        case .media(.video): return "Video"
+        default: return "JPEG"
+        }
     }
-    private var fileSize: String { Fmt.bytes(item.all.reduce(Int64(0)) { $0 + $1.size }) }
+    // The File row: for a JPEG+RAW pair, show each file's own size rather than a
+    // combined total; for a lone file, "<KIND> · <size>". (Uses the actual entries,
+    // so a RAW-only item reads "RAW · …", not the old "JPEG + RAW".)
+    private var fileLine: String {
+        func rank(_ e: LibraryEntry) -> Int {
+            switch e.kind { case .media(.photo): return 0; case .media(.raw): return 1; default: return 2 }
+        }
+        let parts = item.all.sorted { rank($0) < rank($1) }
+        if parts.count <= 1 {
+            let e = parts.first ?? item.primary
+            return "\(kindLabel(e)) · \(Fmt.bytes(e.size))"
+        }
+        return parts.map { "\(kindLabel($0)) \(Fmt.bytes($0.size))" }.joined(separator: " · ")
+    }
     private var sizeLine: String? {
         guard let dim = meta?.dimensions else { return nil }
         return meta?.megapixels.map { "\(dim) · \($0)" } ?? dim
@@ -253,7 +276,7 @@ private struct InfoPanel: View {
                 Text("Info")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
-                row("File", "\(formatText) · \(fileSize)")
+                row("File", fileLine)
                 if let d = meta?.dateText { row("Taken", d) }
                 if let c = meta?.cameraName { row("Camera", c) }
                 if let l = meta?.lens { row("Lens", l) }

@@ -342,6 +342,7 @@ private struct LibraryGrid: View {
     let model: LibraryModel
     let openViewer: (DisplayItem) -> Void
     @State private var pendingDelete: DisplayItem?
+    @State private var pendingScope: DeleteScope = .all
     @State private var bulkConfirm = false
     @AppStorage("offload.library.tileSize") private var tileSize = 150.0
     private var columns: [GridItem] {
@@ -373,14 +374,15 @@ private struct LibraryGrid: View {
                             isPresented: Binding(get: { pendingDelete != nil },
                                                  set: { if !$0 { pendingDelete = nil } }),
                             presenting: pendingDelete) { item in
-            Button("Delete", role: .destructive) {
-                let target = item
+            Button(pendingScope == .all ? "Delete" : (pendingScope == .rawOnly ? "Delete RAW" : "Delete JPEG"),
+                   role: .destructive) {
+                let target = item; let scope = pendingScope
                 pendingDelete = nil
-                Task { await model.delete(target) }
+                Task { await model.delete(target, scope: scope) }
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { item in
-            Text(deleteMessage(item))
+            Text(deleteMessage(item, scope: pendingScope))
         }
         .confirmationDialog("Delete \(model.selectedCount) photos?",
                             isPresented: $bulkConfirm) {
@@ -460,11 +462,20 @@ private struct LibraryGrid: View {
         .onExitCommand { model.clearSelection() }
     }
 
-    private func deleteMessage(_ item: DisplayItem) -> String {
-        let names = item.all.map { ($0.id as NSString).lastPathComponent }
-        let listed = names.count <= 3 ? names.joined(separator: ", ")
-            : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
-        return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
+    private func deleteMessage(_ item: DisplayItem, scope: DeleteScope = .all) -> String {
+        switch scope {
+        case .rawOnly:
+            let n = (item.rawCompanion?.name).map { "the RAW (\($0))" } ?? "the RAW"
+            return "Permanently deletes \(n) from your NAS. The JPEG stays. This can't be undone."
+        case .jpegOnly:
+            let n = (item.photo?.name).map { "the JPEG (\($0))" } ?? "the JPEG"
+            return "Permanently deletes \(n) from your NAS. The RAW stays. This can't be undone."
+        case .all:
+            let names = item.all.map { ($0.id as NSString).lastPathComponent }
+            let listed = names.count <= 3 ? names.joined(separator: ", ")
+                : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
+            return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
+        }
     }
 
     @ViewBuilder
@@ -475,7 +486,7 @@ private struct LibraryGrid: View {
         } else {
             Button("Open") { openViewer(item) }
             Button("Open in Preview") { NSWorkspace.shared.open(item.primary.url) }
-            if let rawURL = item.raw?.url {
+            if let rawURL = item.rawCompanion?.url {
                 Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
             }
             Button("Reveal in Finder") { reveal(item.primary.url) }
@@ -485,8 +496,14 @@ private struct LibraryGrid: View {
                 Divider()
                 if model.selection.contains(item.id) && model.selectedCount > 1 {
                     Button("Delete \(model.selectedCount) Photos…", role: .destructive) { bulkConfirm = true }
+                } else if item.isRawJpegPair {
+                    Menu("Delete") {
+                        Button("JPEG + RAW…", role: .destructive) { pendingScope = .all; pendingDelete = item }
+                        Button("RAW only…", role: .destructive) { pendingScope = .rawOnly; pendingDelete = item }
+                        Button("JPEG only…", role: .destructive) { pendingScope = .jpegOnly; pendingDelete = item }
+                    }
                 } else {
-                    Button("Delete…", role: .destructive) { pendingDelete = item }
+                    Button("Delete…", role: .destructive) { pendingScope = .all; pendingDelete = item }
                 }
             }
         }

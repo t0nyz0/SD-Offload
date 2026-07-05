@@ -3,6 +3,9 @@ import Observation
 import OffloadCore
 import OffloadEngine
 
+/// Which parts of a RAW+JPEG item a delete should remove.
+enum DeleteScope: Sendable { case all, rawOnly, jpegOnly }
+
 /// One tile in the grid. A RAW+JPEG pair collapses into a single item: the JPEG
 /// is shown, the RAW rides along (openable via right-click, deleted with it).
 struct DisplayItem: Identifiable, Sendable {
@@ -21,6 +24,21 @@ struct DisplayItem: Identifiable, Sendable {
         raw = group.first { if case .media(.raw) = $0.kind { return true }; return false }
         all = group
     }
+
+    /// The display photo in this item, if any.
+    var photo: LibraryEntry? {
+        all.first { if case .media(.photo) = $0.kind { return true }; return false }
+    }
+    /// A RAW that is a *distinct companion* to the shown photo — nil when the item
+    /// is RAW-only (there the RAW is the primary, not a companion). This is the
+    /// correct "is there a separate RAW" signal; `raw != nil` alone is true even for
+    /// a lone RAW, which is what mislabeled RAW-only files as "JPEG + RAW".
+    var rawCompanion: LibraryEntry? {
+        guard let raw, raw.id != primary.id else { return nil }
+        return raw
+    }
+    /// True when the item bundles both a display photo and a distinct RAW.
+    var isRawJpegPair: Bool { photo != nil && rawCompanion != nil }
 }
 
 /// Drives the Library window: which source (NAS or card), the current folder
@@ -220,23 +238,35 @@ final class LibraryModel {
     /// on-disk RAW or sidecar (XMP/THM/…) that shares the basename. Deliberately
     /// does NOT sweep in unrelated same-stem files (a .txt/.mp3) or a video that
     /// wasn't already part of the tile. Does a directory listing — call off-main.
-    nonisolated static func deleteTargets(for item: DisplayItem) -> [URL] {
-        var set = Set(item.all.map(\.url))
-        let primary = item.primary.url
-        let dir = primary.deletingLastPathComponent()
-        let base = primary.deletingPathExtension().lastPathComponent.lowercased()
-        if let items = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-            for u in items where u.deletingPathExtension().lastPathComponent.lowercased() == base {
-                let ext = u.pathExtension.lowercased()
-                if MediaKind.rawExts.contains(ext) || MediaKind.sidecarExts.contains(ext) { set.insert(u) }
+    nonisolated static func deleteTargets(for item: DisplayItem, scope: DeleteScope = .all) -> [URL] {
+        switch scope {
+        case .rawOnly:
+            // Just the RAW file(s) — the JPEG (and its sidecars) stay.
+            return item.all.compactMap { if case .media(.raw) = $0.kind { return $0.url }; return nil }
+        case .jpegOnly:
+            // Just the display photo — the RAW stays.
+            return item.all.compactMap { if case .media(.photo) = $0.kind { return $0.url }; return nil }
+        case .all:
+            var set = Set(item.all.map(\.url))
+            let primary = item.primary.url
+            let dir = primary.deletingLastPathComponent()
+            let base = primary.deletingPathExtension().lastPathComponent.lowercased()
+            if let items = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                for u in items where u.deletingPathExtension().lastPathComponent.lowercased() == base {
+                    let ext = u.pathExtension.lowercased()
+                    if MediaKind.rawExts.contains(ext) || MediaKind.sidecarExts.contains(ext) { set.insert(u) }
+                }
             }
+            return Array(set)
         }
-        return Array(set)
     }
 
-    func delete(_ item: DisplayItem) async {
-        await deleteFiles(for: [item])
+    func delete(_ item: DisplayItem, scope: DeleteScope = .all) async {
+        let targets = await Task.detached(priority: .userInitiated) {
+            Set(Self.deleteTargets(for: item, scope: scope))
+        }.value
+        await removeURLs(targets)
     }
 
     // MARK: - Multi-selection
@@ -271,16 +301,17 @@ final class LibraryModel {
 
     func deleteSelection() async {
         let items = displayedItems.filter { selection.contains($0.id) && !$0.isFolder }
-        await deleteFiles(for: items)
-    }
-
-    private func deleteFiles(for items: [DisplayItem]) async {
         guard !items.isEmpty else { return }
         let targets = await Task.detached(priority: .userInitiated) {
             var urls = Set<URL>()
-            for item in items { urls.formUnion(Self.deleteTargets(for: item)) }
+            for item in items { urls.formUnion(Self.deleteTargets(for: item, scope: .all)) }
             return urls
         }.value
+        await removeURLs(targets)
+    }
+
+    private func removeURLs(_ targets: Set<URL>) async {
+        guard !targets.isEmpty else { return }
         // Move to the Trash rather than hard-unlink, so a mistaken delete is
         // recoverable. (Falls back to a hard delete if the volume has no Trash.)
         // Track what actually got removed so a failure isn't silently swallowed —
