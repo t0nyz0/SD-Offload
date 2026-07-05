@@ -12,6 +12,9 @@ final class AppState {
     private(set) var recent: [SessionRecord] = []
     private(set) var nasGlance = NASGlance()
     private(set) var pendingConsent: CardInfo?
+    /// Mount path of a currently-inserted card (for the Library window). Set on
+    /// detect/consent/session start, cleared when the card leaves or is ejected.
+    private(set) var cardMountPath: String?
 
     var popoverVisible = false {
         didSet { if popoverVisible && !oldValue { refreshNASGlance(); refreshRecent() } }
@@ -68,19 +71,22 @@ final class AppState {
 
     private func apply(_ event: EngineEvent) {
         switch event {
-        case .cardMounted:
-            break // session events follow
+        case .cardMounted(let card):
+            cardMountPath = card.mountPath
 
         case .cardAwaitingConsent(let card):
             pendingConsent = card
+            cardMountPath = card.mountPath
             recomputeMenuBar()
 
         case .cardGone:
             pendingConsent = nil
+            cardMountPath = nil
             recomputeMenuBar()
 
         case .sessionStarted(let id, let card, let resumed):
             pendingConsent = nil
+            cardMountPath = card.mountPath
             doneResetTask?.cancel()
             session = SessionViewModel(sessionID: id, card: card, resumed: resumed)
             startTick()

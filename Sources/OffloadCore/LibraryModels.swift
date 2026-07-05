@@ -1,0 +1,70 @@
+import Foundation
+
+public enum MediaKind: String, Codable, Sendable {
+    case photo, raw, video
+
+    public static let photoExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tiff", "tif", "bmp"]
+    public static let rawExts: Set<String> = ["arw", "cr2", "cr3", "nef", "raf", "dng", "orf", "rw2", "pef", "srw", "raw", "3fr"]
+    public static let videoExts: Set<String> = ["mov", "mp4", "m4v", "avi", "mts", "m2ts", "mxf", "braw"]
+
+    public static func classify(ext: String) -> MediaKind? {
+        let e = ext.lowercased()
+        if photoExts.contains(e) { return .photo }
+        if rawExts.contains(e) { return .raw }
+        if videoExts.contains(e) { return .video }
+        return nil
+    }
+
+    public static func isMedia(_ ext: String) -> Bool { classify(ext: ext) != nil }
+}
+
+/// A single row in the browser: a folder or a media file.
+public struct LibraryEntry: Identifiable, Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case folder
+        case media(MediaKind)
+    }
+    public let id: String          // absolute path
+    public let name: String
+    public let kind: Kind
+    public let size: Int64
+    public let modified: Date
+
+    public init(id: String, name: String, kind: Kind, size: Int64, modified: Date) {
+        self.id = id; self.name = name; self.kind = kind; self.size = size; self.modified = modified
+    }
+
+    public var url: URL { URL(fileURLWithPath: id) }
+    public var isFolder: Bool { if case .folder = kind { return true }; return false }
+}
+
+/// Cached, progressively-built count of a library root, so the Library window
+/// can show "38,412 photos · 1.3 TB" without re-walking the tree every open.
+public struct LibraryIndex: Codable, Sendable {
+    public var rootPath: String
+    public var totalMedia: Int
+    public var totalBytes: Int64
+    public var byYear: [String: Int]
+    public var updatedAt: Date
+    public var complete: Bool
+
+    public init(rootPath: String, totalMedia: Int = 0, totalBytes: Int64 = 0,
+                byYear: [String: Int] = [:], updatedAt: Date = Date(), complete: Bool = false) {
+        self.rootPath = rootPath
+        self.totalMedia = totalMedia
+        self.totalBytes = totalBytes
+        self.byYear = byYear
+        self.updatedAt = updatedAt
+        self.complete = complete
+    }
+
+    public static func load(rootPath: String) -> LibraryIndex? {
+        guard let cached = JSONIO.loadGuarded(LibraryIndex.self, from: Paths.libraryIndexFile),
+              cached.rootPath == rootPath else { return nil }
+        return cached
+    }
+
+    public func save() {
+        try? JSONIO.save(self, to: Paths.libraryIndexFile)
+    }
+}
