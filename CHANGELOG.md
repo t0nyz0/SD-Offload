@@ -5,6 +5,10 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-05
+
+First public release (as **SD Offload**).
+
 ### Renamed
 - **The app is now "SD Offload"** (was "Offload") — repo `t0nyz0/SD-Offload`, bundle id
   `com.t0nyz0.sdoffload`. Internal Swift module names (OffloadCore/Engine/App) are unchanged.
