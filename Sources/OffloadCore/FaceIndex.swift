@@ -121,6 +121,15 @@ public actor FaceIndex {
         guard dirty else { return }
         let arr = byPath.map { Entry(path: $0.key, detections: $0.value) }
         try? JSONIO.save(arr, to: file)
+        JSONIO.harden(file)   // biometric data: owner-only, never backed up/synced
         dirty = false
+    }
+
+    /// Erase all stored detections (and the on-disk file). For "Delete all face data".
+    public func deleteAll() {
+        byPath.removeAll()
+        dirty = false
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: file.appendingPathExtension("bak"))
     }
 }

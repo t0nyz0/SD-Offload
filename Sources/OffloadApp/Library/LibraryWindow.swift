@@ -92,6 +92,13 @@ private struct LibraryHeader: View {
                         }
                         .foregroundStyle(.tertiary)
                     }
+                    if let faces = model.facesSummary {
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.2.fill").font(.system(size: 9))
+                            Text(faces).font(.system(size: 10.5)).monospacedDigit()
+                        }
+                        .foregroundStyle(.tertiary)
+                    }
                 }
                 Spacer()
                 if model.totalVolumeBytes > 0 {
@@ -179,6 +186,8 @@ private struct Breadcrumb: View {
 private struct SearchBar: View {
     @Bindable var model: LibraryModel
     @AppStorage("offload.library.tileSize") private var tileSize = 150.0
+    @AppStorage("offload.faces.consented") private var facesConsented = false
+    @State private var showFacesConsent = false
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
@@ -220,9 +229,74 @@ private struct SearchBar: View {
                 }
                 .help("Scan this library on-device to tag what's in each photo, so you can search by content.")
             }
+
+            if model.findingFaces {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).scaleEffect(0.8)
+                    Text("Finding faces \(model.facesDone)/\(model.facesTotal)")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    Button("Stop") { model.cancelFindFaces() }.controlSize(.small)
+                }
+            } else {
+                Menu {
+                    Button { startFindFaces() } label: { Label("Find faces & pets", systemImage: "person.crop.rectangle") }
+                    if !model.identities.isEmpty || model.faceUnnamed > 0 {
+                        Divider()
+                        Button(role: .destructive) { model.deleteAllFaceData() } label: {
+                            Label("Delete all face data", systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Label("Faces", systemImage: "person.crop.square")
+                } primaryAction: {
+                    startFindFaces()
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Detect faces & pets on-device so you can name and search them — stored locally only.")
+            }
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
+        .sheet(isPresented: $showFacesConsent) {
+            FacesConsentSheet(
+                onEnable: { facesConsented = true; showFacesConsent = false; model.findFaces() },
+                onCancel: { showFacesConsent = false })
+        }
+    }
+
+    private func startFindFaces() {
+        if facesConsented { model.findFaces() } else { showFacesConsent = true }
+    }
+}
+
+/// One-time disclosure before any face data is created — what's detected, what's
+/// stored, and that it's local-only and removable. (Biometric-data consent.)
+private struct FacesConsentSheet: View {
+    let onEnable: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.m) {
+            Label("Find faces & pets", systemImage: "person.crop.rectangle")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Scans your photos on-device (Apple Vision — no cloud) to detect faces and pets, so you can name them (\"Elizabeth\", \"Hurley\") and search by who's in a shot.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("What's stored: a mathematical face/pet template plus any names you assign — as files on **this Mac only** (owner-only, excluded from backups and cloud sync). Nothing is uploaded. Remove it any time with \"Delete all face data.\"")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Grouping is a starting point you confirm — it can mistake similar-looking people, and never auto-labels.")
+                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Not now", action: onCancel)
+                Button("Enable & scan", action: onEnable).buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(DS.Space.l)
+        .frame(width: 380)
     }
 }
 

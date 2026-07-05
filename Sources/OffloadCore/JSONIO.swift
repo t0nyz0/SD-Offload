@@ -50,6 +50,17 @@ public enum JSONIO {
         try data.write(to: url, options: .atomic)
     }
 
+    /// Lock a file down as owner-only (0600) and exclude it from Time Machine /
+    /// cloud backups — for locally-stored sensitive data (e.g. face embeddings)
+    /// that must never sync or restore off this Mac. Best-effort.
+    public static func harden(_ url: URL) {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        var u = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? u.setResourceValues(values)
+    }
+
     /// Durable save: `Data.write(.atomic)` renames but does not fsync. This does.
     public static func saveDurable<T: Encodable>(_ value: T, to url: URL) throws {
         let data = try encoder.encode(value)

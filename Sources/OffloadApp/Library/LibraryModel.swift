@@ -60,9 +60,28 @@ final class LibraryModel {
         return "\(geoWithGPS.formatted()) of \(geoChecked.formatted()) photos have GPS"
     }
 
+    // Faces & pets (opt-in "Find Faces" pass; embeddings + names stay on this Mac).
+    private(set) var findingFaces = false
+    private(set) var facesDone = 0
+    private(set) var facesTotal = 0
+    private(set) var identities: [Identity] = []
+    private(set) var faceUnnamed = 0
+    var facesSummary: String? {
+        guard !identities.isEmpty || faceUnnamed > 0 else { return nil }
+        var parts: [String] = []
+        if !identities.isEmpty { parts.append("\(identities.count) named") }
+        if faceUnnamed > 0 { parts.append("\(faceUnnamed) to review") }
+        return parts.joined(separator: " · ")
+    }
+
     private let browser = LibraryBrowser()
     private let analyzer = PhotoAnalyzer()
     let photoIndex = PhotoIndex()
+    let faceIndex = FaceIndex()
+    let identityIndex = IdentityIndex()
+    private let faceDetector = FaceDetector()
+    @ObservationIgnored private var faceTask: Task<Void, Never>?
+    @ObservationIgnored private var faceEpoch = 0
     @ObservationIgnored private var countTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeEpoch = 0
@@ -141,6 +160,7 @@ final class LibraryModel {
         loadEntries()
         startCount(root)
         refreshSuggestions()
+        Task { await refreshFaceState() }
     }
 
     /// What the grid shows: content-search results when searching, else the
@@ -419,6 +439,87 @@ final class LibraryModel {
         analyzeTask?.cancel()
         analyzing = false
         Task { await photoIndex.save() }
+    }
+
+    // MARK: - Faces & pets (opt-in, on-device, local-only)
+
+    /// Heavier than content Analyze: face detection needs a larger decode per
+    /// photo, so it's a separate action. Detects faces/pets, embeds each, proposes
+    /// (never auto-assigns) an identity, and stores the result locally.
+    func findFaces() {
+        guard !findingFaces, let root = rootURL else { return }
+        findingFaces = true
+        facesDone = 0
+        facesTotal = 0
+        faceEpoch += 1
+        let epoch = faceEpoch
+        let browser = self.browser
+        let detector = self.faceDetector
+        let faces = faceIndex
+        let ids = identityIndex
+        faceTask = Task { [weak self] in
+            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
+            let primaries = Self.primaryEntries(media)
+            await faces.pruneMissing(underPrefix: root.path, keeping: Set(media.map(\.id)))
+            var todo: [LibraryEntry] = []
+            for e in primaries where await faces.needsScan(path: e.id) { todo.append(e) }
+            await MainActor.run { [weak self] in self?.facesTotal = todo.count }
+
+            let width = 2   // larger decode + per-crop embeds — go easier than Analyze
+            var i = 0
+            while i < todo.count {
+                if Task.isCancelled { break }
+                let batch = Array(todo[i..<min(i + width, todo.count)])
+                await withTaskGroup(of: (String, [Detection]).self) { group in
+                    for e in batch { group.addTask { (e.id, detector.detect(url: e.url)) } }
+                    for await (path, dets) in group {
+                        var stamped: [Detection] = []
+                        for var d in dets {
+                            if let s = await ids.suggest(for: d.embedding, embedderID: d.embedderID,
+                                                         kind: d.identityKind, excluding: d.rejectedIDs) {
+                                d.suggestedID = s.id
+                            }
+                            stamped.append(d)
+                        }
+                        await faces.setDetections(stamped, for: path)
+                        await MainActor.run { [weak self] in self?.facesDone += 1 }
+                    }
+                }
+                i += width
+            }
+            await faces.save()
+            guard let self else { return }
+            await self.refreshFaceState()
+            await MainActor.run {
+                guard self.faceEpoch == epoch else { return }
+                self.findingFaces = false
+                if self.isSearching { self.runSearch() }
+            }
+        }
+    }
+
+    func cancelFindFaces() {
+        faceTask?.cancel()
+        findingFaces = false
+        Task { await faceIndex.save() }
+    }
+
+    /// Reload the named-identity list + unnamed count (after a scan or a label).
+    func refreshFaceState() async {
+        let all = await identityIndex.all()
+        let counts = await faceIndex.counts(underPrefix: rootURL?.path)
+        identities = all
+        faceUnnamed = counts.unnamed
+    }
+
+    /// Erase all locally-stored face/pet embeddings and names.
+    func deleteAllFaceData() {
+        Task {
+            await faceIndex.deleteAll()
+            await identityIndex.deleteAll()
+            identities = []
+            faceUnnamed = 0
+        }
     }
 
     func enter(_ entry: LibraryEntry) {

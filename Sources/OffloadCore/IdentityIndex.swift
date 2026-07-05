@@ -94,6 +94,15 @@ public actor IdentityIndex {
     public func save() {
         guard dirty else { return }
         try? JSONIO.save(Array(identities.values), to: file)
+        JSONIO.harden(file)   // biometric data: owner-only, never backed up/synced
         dirty = false
+    }
+
+    /// Erase all named identities (and the on-disk file). For "Delete all face data".
+    public func deleteAll() {
+        identities.removeAll()
+        dirty = false
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: file.appendingPathExtension("bak"))
     }
 }
