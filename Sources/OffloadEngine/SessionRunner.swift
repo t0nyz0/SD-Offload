@@ -343,11 +343,13 @@ public actor SessionRunner {
 
             // Destination collision: same size ⇒ hash the existing NAS file
             // (that read IS a verify pass); equal ⇒ hash-proven duplicate.
+            // Uncached: a match here marks the file skippedDuplicate → wipe-
+            // eligible, so it must read the server's real bytes, not our cache.
             if fm.fileExists(atPath: destURL.path) {
                 let existingSize = (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
                 if existingSize == file.size {
                     let meter = self.meter
-                    let existingHash = try await ChunkedIO.hashFile(destURL, noCache: config.thoroughNASVerify, gate: pauseGate) {
+                    let existingHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
                         meter.addBytes($0, stage: .nasVerify)
                     }
                     if existingHash == sourceHash {
@@ -402,13 +404,17 @@ public actor SessionRunner {
         }
 
         // END-TO-END verify: read the uploaded file back and compare against the
-        // ORIGINAL SD-read hash. Standard mode reads through the SMB cache (fast,
-        // still catches transport/staging corruption); Thorough mode forces
-        // uncached reads straight off the server (slower over SMB). We fsync'd
-        // before this, so the server already holds the bytes either way.
+        // ORIGINAL SD-read hash. This read is ALWAYS uncached (F_NOCACHE). fsync
+        // flushes our dirty pages to the server, but it does NOT invalidate the
+        // client read cache — a cached read here would re-hash the very bytes we
+        // just wrote out of the SMB/OS page cache, "verifying" our own memory
+        // instead of the server's stored copy. Since this verdict gates wiping
+        // the card, it must be a genuine server read-back. (Uncached is the
+        // correct, sufficient mechanism over smbfs; deeper on-platter durability
+        // isn't reachable there — F_FULLFSYNC is ENOTSUP.)
         let verifyStarted = Date()
         let meter = self.meter
-        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: config.thoroughNASVerify, gate: pauseGate) {
+        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
             meter.addBytes($0, stage: .nasVerify)
         }
         if nasHash == sourceHash {

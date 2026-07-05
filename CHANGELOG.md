@@ -30,6 +30,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
   with its RAW/sidecars), with a single confirmation.
 
 ### Fixed
+- **Data-safety: the wipe-gating NAS read-back is now always uncached.** The
+  end-to-end verify (and the collision/dedup hash) previously defaulted to a
+  *cached* read of the just-uploaded file. Over SMB, `fsync` flushes our bytes to
+  the server but does **not** invalidate the client read cache — so the "verify"
+  could re-hash the very bytes we just wrote out of local page cache and pass
+  without ever reading the server's stored copy, yet still clear the card for
+  wiping. Both read-backs now force `F_NOCACHE` unconditionally, so a match proves
+  the server truly holds the bytes. The now-redundant "Thorough NAS verification"
+  setting has been removed (verification is always thorough). Validated across all
+  five harness modes (happy path, NAS-drop, one-failure-blocks-wipe, crash-resume,
+  wrong-card). Verification can now only make the wipe gate *more* conservative.
 - **ETAs no longer flash absurd values** (e.g. "Card free in ~53446:21:00"). The
   pipeline estimate used to fold the NAS-verify stage into its `max()` and divide
   by that stage's live rate — but verification runs in bursts, so between bursts
