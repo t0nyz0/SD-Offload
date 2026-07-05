@@ -18,8 +18,10 @@ let workspace = FileManager.default.temporaryDirectory
 try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
 let nasRoot = workspace.appendingPathComponent("nas", isDirectory: true)
 let staging = workspace.appendingPathComponent("staging", isDirectory: true)
+let secondary = workspace.appendingPathComponent("secondary", isDirectory: true)
 try FileManager.default.createDirectory(at: nasRoot, withIntermediateDirectories: true)
 try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+try FileManager.default.createDirectory(at: secondary, withIntermediateDirectories: true)
 
 func log(_ s: String) { print("  \(s)") }
 func fail(_ s: String) -> Never { print("\n❌ FAIL: \(s)"); exit(1) }
@@ -93,6 +95,14 @@ config.wipePolicy = .afterNASVerify
 config.autoEject = false            // we detach the DMG ourselves
 config.wipeCountdownSeconds = 0     // no countdown in the harness
 config.testAllowLocalNAS = true
+if mode == "secondary" || mode == "chaos-secondary" {
+    config.secondaryDestPath = secondary.path
+}
+if mode == "chaos-secondary" {
+    // Make the second drive read-only so writes to it fail — the wipe MUST block.
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: secondary.path)
+    log("second drive is read-only — the wipe must be blocked")
+}
 
 let journalDir = workspace.appendingPathComponent("journal", isDirectory: true)
 let historyDir = workspace.appendingPathComponent("history", isDirectory: true)
@@ -190,6 +200,20 @@ if mode == "chaos-unreadable" {
     exit(0)
 }
 
+// Safety-critical: if the SECOND destination can't be verified, the card must
+// stay 100% intact (a file isn't wipe-eligible until it's on BOTH drives).
+if mode == "chaos-secondary" {
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: secondary.path)  // restore for cleanup
+    guard final.state == .doneWipeBlocked else { fail("expected doneWipeBlocked, got \(final.state)") }
+    guard final.wipeReport?.ran != true else { fail("WIPE RAN despite the second copy failing — safety violation!") }
+    for rel in sourceHashes.keys where !FileManager.default.fileExists(atPath: cardRoot.appendingPathComponent(rel).path) {
+        fail("file deleted despite the wipe being blocked: \(rel)")
+    }
+    log("second-drive failure blocked the wipe; card intact")
+    print("\n✅ PASS — a failing second copy blocked the whole wipe; card untouched. (\(mode))")
+    exit(0)
+}
+
 // 1. Session completed with a successful wipe.
 guard final.state == .done else { fail("session state is \(final.state), expected done. events=\(eventLog.all)") }
 guard final.wipeReport?.ran == true else { fail("wipe did not run: \(String(describing: final.wipeReport))") }
@@ -213,6 +237,18 @@ for file in final.files {
     verified += 1
 }
 log("all \(verified) files present on NAS with matching SHA-256 (\(suffixed) collision-suffixed)")
+
+// 2b. With a second destination, every file must ALSO be there, byte-identical.
+if mode == "secondary" {
+    var sec = 0
+    for file in final.files {
+        let dest = secondary.appendingPathComponent(file.destRelPath)
+        guard FileManager.default.fileExists(atPath: dest.path) else { fail("missing on second drive: \(file.destRelPath)") }
+        guard try Fixtures.sha256(dest) == sourceHashes[file.relPath] else { fail("second-drive hash mismatch: \(file.destRelPath)") }
+        sec += 1
+    }
+    log("all \(sec) files also on the second drive with matching SHA-256")
+}
 
 // 3. Date routing sanity: files carry YYYY/MM/DD.
 let routed = final.files.allSatisfy { $0.destRelPath.range(of: #"^\d{4}/\d{2}/\d{2}/"#, options: .regularExpression) != nil }

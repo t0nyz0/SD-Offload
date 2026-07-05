@@ -27,6 +27,25 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Second copy (optional)") {
+                LabeledContent("Second drive") {
+                    HStack(spacing: 8) {
+                        Text(settings.config.secondaryDestPath ?? "Off")
+                            .lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(settings.config.secondaryDestPath == nil ? .secondary : .primary)
+                        Button("Change…") { pickFolder { settings.config.secondaryDestPath = $0 } }
+                            .controlSize(.small)
+                        if settings.config.secondaryDestPath != nil {
+                            Button("Off") { settings.config.secondaryDestPath = nil }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+                Text("When set, each photo is verified on this drive too, and the card isn't erased until it's confirmed on BOTH here and the NAS — so a wipe never leaves a single copy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Ingest") {
                 Picker("Copy", selection: $settings.config.ingestScope) {
                     Text("Camera folders only (DCIM & video)").tag(IngestScope.mediaRootsOnly)

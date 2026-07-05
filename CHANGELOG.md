@@ -25,6 +25,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
   no-warranty disclaimer.
 
 ### Added
+- **Optional second verified copy, before any wipe.** Point SD Offload at a second
+  local/external drive in Settings and every photo is mirrored there and read back
+  **uncached** too — a file isn't wipe-eligible until it's confirmed on **both** the
+  NAS and the second drive, so an auto-wipe never leaves a single copy standing. Off
+  by default; a second-drive failure blocks the whole wipe (the wipe gate is
+  unchanged — a file simply can't reach the safe state until both destinations
+  verify). Validated by two new harness modes (`secondary`, `chaos-secondary`).
 - **Named faces & pets (on-device, opt-in).** A "Find Faces" pass detects faces and
   pets with Apple Vision (on the Neural Engine); the photo viewer's info inspector
   lets you name them ("Elizabeth", "Hurley"), confirm/reject suggestions, and it

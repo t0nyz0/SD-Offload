@@ -4,7 +4,7 @@
 # and asserts end-to-end integrity + the all-or-nothing wipe safety property.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for mode in run chaos-nas chaos-unreadable chaos-crash chaos-wrongcard; do
+for mode in run chaos-nas chaos-unreadable chaos-crash chaos-wrongcard secondary chaos-secondary; do
   swift run offload-harness "$mode"
   echo
 done

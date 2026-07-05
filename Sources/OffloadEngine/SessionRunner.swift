@@ -359,6 +359,10 @@ public actor SessionRunner {
                         meter.addBytes($0, stage: .nasVerify)
                     }
                     if existingHash == sourceHash {
+                        // Already on the NAS — still mirror to the second drive
+                        // before the file counts as safe.
+                        do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash) }
+                        catch { await handleSecondaryFailure(file, error); return }
                         await journal.transition(file: file.id, to: .skippedDuplicate, in: sessionID)
                         await finishFile(file)
                         return
@@ -424,8 +428,12 @@ public actor SessionRunner {
             meter.addBytes($0, stage: .nasVerify)
         }
         if nasHash == sourceHash {
-            await journal.transition(file: file.id, to: .nasVerified, in: sessionID)
             meter.fileCompleted(stage: .nasVerify, wall: Date().timeIntervalSince(verifyStarted), size: file.size)
+            // Mirror to the second drive and read it back BEFORE the file becomes
+            // wipe-eligible — so the card is never the last copy standing.
+            do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash) }
+            catch { await handleSecondaryFailure(file, error); return }
+            await journal.transition(file: file.id, to: .nasVerified, in: sessionID)
             await finishFile(file)
         } else {
             // One re-upload from staging; if that fails again the file is
@@ -455,6 +463,75 @@ public actor SessionRunner {
         }
         Task { await budget.release(file.id) }
         settle()
+    }
+
+    /// Mirror a NAS-verified file to the optional second destination (a local /
+    /// external drive), then read it back UNCACHED. Throws on any failure so the
+    /// caller doesn't mark the file safe. No-op when no second drive is configured.
+    /// Idempotent: an already-present, hash-matching copy is accepted.
+    private nonisolated func copyToSecondary(_ file: FileRecord, from stagedURL: URL, sourceHash: String) async throws {
+        guard let root = config.secondaryDestPath, !root.isEmpty else { return }
+        let fm = FileManager.default
+        let meter = self.meter
+        let destURL = URL(fileURLWithPath: root).appendingPathComponent(file.destRelPath)
+        try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        // Already mirrored (resume / re-run)? Verify uncached and accept.
+        if fm.fileExists(atPath: destURL.path),
+           (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) == file.size {
+            let existing = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
+                meter.addBytes($0, stage: .nasVerify)
+            }
+            if existing == sourceHash { return }
+        }
+
+        let partial = destURL.deletingLastPathComponent()
+            .appendingPathComponent(".offload-\(file.id.uuidString).2.partial")
+        var options = ChunkedIO.CopyOptions()
+        options.preallocate = false
+        let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: partial, options: options,
+                                                     gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
+        guard result.sha256Hex == sourceHash else {
+            try? fm.removeItem(at: partial)
+            throw OffloadError(.hashMismatch(stage: "second-copy staging re-read"))
+        }
+        guard rename(partial.path, destURL.path) == 0 else {
+            let err = errno; try? fm.removeItem(at: partial)
+            throw OffloadError.posix(err, stage: "rename on second drive")
+        }
+        var values = URLResourceValues(); values.contentModificationDate = file.mtime
+        var mutableURL = destURL
+        try? mutableURL.setResourceValues(values)
+
+        let back = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
+            meter.addBytes($0, stage: .nasVerify)
+        }
+        guard back == sourceHash else {
+            try? fm.removeItem(at: destURL)
+            throw OffloadError(.hashMismatch(stage: "second-copy verification"))
+        }
+    }
+
+    /// A second-copy failure: retry from staging up to the limit, then fail the
+    /// file — which keeps the card from being wiped (all-or-nothing).
+    private func handleSecondaryFailure(_ file: FileRecord, _ error: Error) async {
+        let failure = (error as? OffloadError)?.failure ?? .internalError("\(error)")
+        let attempts = file.attempts + 1
+        await journal.bumpAttempts(file: file.id, in: sessionID)
+        await journal.transition(file: file.id, to: .stagedVerified, in: sessionID)
+        if attempts < RetryPolicy.maxAttempts {
+            try? await Task.sleep(for: .seconds(RetryPolicy.backoffSeconds(attempt: attempts)))
+            var updated = file
+            updated.attempts = attempts
+            updated.state = .stagedVerified
+            await uploadQueue.send(updated)
+        } else {
+            await journal.transition(file: file.id, to: .failed(failure), in: sessionID)
+            emit(.attention(AttentionItem(severity: .error,
+                                          title: "Second copy failed: \(file.fileName)",
+                                          detail: "Couldn't verify \(file.fileName) on your second drive. The card will NOT be wiped.")))
+            settle()
+        }
     }
 
     private nonisolated func waitForHealthyNAS() async throws -> URL {

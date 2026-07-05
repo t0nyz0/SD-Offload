@@ -10,6 +10,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var nasExpectedMntFromName: String?
     /// smb:// URL for NetFS remount, learned from the live mount.
     public var nasSMBURL: String?
+    /// Optional second verified destination (a local/external drive folder). When
+    /// set, each file is mirrored here and read back before the card is wipe-eligible,
+    /// so the card is never reduced to a single copy at wipe time. nil = off.
+    public var secondaryDestPath: String?
 
     // Wipe. Default to asking before erasing a card — a new user should opt in to
     // unattended wipes, not discover them. (Existing configs keep their setting.)
@@ -59,6 +63,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         nasRootPath = try c.decodeIfPresent(String.self, forKey: .nasRootPath) ?? d.nasRootPath
         nasExpectedMntFromName = try c.decodeIfPresent(String.self, forKey: .nasExpectedMntFromName)
         nasSMBURL = try c.decodeIfPresent(String.self, forKey: .nasSMBURL)
+        secondaryDestPath = try c.decodeIfPresent(String.self, forKey: .secondaryDestPath)
         wipePolicy = try c.decodeIfPresent(WipePolicy.self, forKey: .wipePolicy) ?? d.wipePolicy
         autoEject = try c.decodeIfPresent(Bool.self, forKey: .autoEject) ?? d.autoEject
         wipeCountdownSeconds = try c.decodeIfPresent(Int.self, forKey: .wipeCountdownSeconds) ?? d.wipeCountdownSeconds
