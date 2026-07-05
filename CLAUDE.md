@@ -24,7 +24,9 @@ progress; popover shows speeds, dual ETAs, history; Library window browses NAS +
 3. **No cron, no launchd.** The one sanctioned persistence is the `SMAppService` launch-at-login
    login item.
 4. **Zero external dependencies.** System frameworks only.
-5. Bump `VERSION` once per meaningful session; build number = git commit count (build-app.sh).
+5. Bump `VERSION` once per meaningful session and **add a `CHANGELOG.md` entry
+   for every user-visible change** (Added / Fixed / Changed). Build number = git
+   commit count (build-app.sh).
 
 ## Build / run / verify
 

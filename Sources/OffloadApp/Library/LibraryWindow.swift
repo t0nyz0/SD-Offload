@@ -217,56 +217,89 @@ private struct SuggestionChips: View {
 
 private struct LibraryGrid: View {
     let model: LibraryModel
+    @State private var pendingDelete: DisplayItem?
     private let columns = [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)]
 
     var body: some View {
         ScrollView {
-            let entries = model.displayedEntries
-            if entries.isEmpty {
+            let items = model.displayedItems
+            if items.isEmpty {
                 ContentUnavailableView(emptyTitle,
                                        systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
                                        description: Text(emptyDetail))
                     .padding(.top, 60)
             } else {
                 LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(entries) { entry in
-                        LibraryTile(entry: entry, tags: model.tags(for: entry))
-                            .onTapGesture(count: 2) { open(entry) }
+                    ForEach(items) { item in
+                        LibraryTile(item: item, tags: model.tags(for: item.primary))
+                            .onTapGesture(count: 2) { open(item) }
+                            .contextMenu { menu(for: item) }
                     }
                 }
                 .padding(DS.Space.l)
             }
         }
+        .confirmationDialog("Delete this photo?",
+                            isPresented: Binding(get: { pendingDelete != nil },
+                                                 set: { if !$0 { pendingDelete = nil } }),
+                            presenting: pendingDelete) { item in
+            Button("Delete", role: .destructive) {
+                let target = item
+                pendingDelete = nil
+                Task { await model.delete(target) }
+            }
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: { item in
+            Text("Permanently deletes \(item.primary.name)\(item.raw != nil || model.rawSibling(of: item.primary.url) != nil ? " and its RAW" : "") from the NAS. This can't be undone.")
+        }
     }
 
-    private var emptyTitle: String {
-        if model.isSearching { return "No matches" }
-        return "Nothing here"
+    @ViewBuilder
+    private func menu(for item: DisplayItem) -> some View {
+        if item.isFolder {
+            Button("Open") { model.enter(item.primary) }
+            Button("Reveal in Finder") { reveal(item.primary.url) }
+        } else {
+            Button("Open") { NSWorkspace.shared.open(item.primary.url) }
+            if let rawURL = item.raw?.url ?? model.rawSibling(of: item.primary.url) {
+                Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
+            }
+            Button("Reveal in Finder") { reveal(item.primary.url) }
+            Divider()
+            Button("Delete…", role: .destructive) { pendingDelete = item }
+        }
     }
+
+    private func reveal(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private var emptyTitle: String { model.isSearching ? "No matches" : "Nothing here" }
     private var emptyDetail: String {
         if model.isSearching { return "No analyzed photos match “\(model.searchText)”. Try Analyze first, or a different word." }
         return model.loading ? "Loading…" : "This folder has no photos or subfolders."
     }
 
-    private func open(_ entry: LibraryEntry) {
-        if entry.isFolder {
-            model.enter(entry)
-        } else {
-            NSWorkspace.shared.open(entry.url)
-        }
+    private func open(_ item: DisplayItem) {
+        if item.isFolder { model.enter(item.primary) }
+        else { NSWorkspace.shared.open(item.primary.url) }
     }
 }
 
 private struct LibraryTile: View {
-    let entry: LibraryEntry
+    let item: DisplayItem
     var tags: [String] = []
     @State private var thumb: NSImage?
+
+    private var entry: LibraryEntry { item.primary }
+    private var isVideo: Bool { if case .media(.video) = entry.kind { return true }; return false }
+    private var isRawOnly: Bool { if case .media(.raw) = entry.kind { return true }; return false }
 
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
                 RoundedRectangle(cornerRadius: DS.Radius.m).fill(DS.Palette.surfaceRaised)
-                if entry.isFolder {
+                if item.isFolder {
                     Image(systemName: "folder.fill")
                         .font(.system(size: 34))
                         .foregroundStyle(DS.safe.opacity(0.85))
@@ -286,8 +319,8 @@ private struct LibraryTile: View {
             .frame(height: 120)
             .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
             .overlay(alignment: .topTrailing) {
-                if case .media(.raw) = entry.kind { badge("RAW") }
-                else if case .media(.video) = entry.kind { badge("▶") }
+                if isVideo { badge("▶") }
+                else if item.raw != nil || isRawOnly { badge("RAW") }   // RAW available (right-click to open)
             }
             .overlay(alignment: .bottomLeading) {
                 if let top = tags.first {
@@ -307,7 +340,7 @@ private struct LibraryTile: View {
                 .foregroundStyle(.secondary)
         }
         .task(id: entry.id) {
-            guard !entry.isFolder else { return }
+            guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(url: entry.url, size: entry.size,
                                                            mtime: entry.modified, side: 160)
         }

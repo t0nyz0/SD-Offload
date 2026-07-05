@@ -62,6 +62,10 @@ public actor PhotoIndex {
         dirty = true
     }
 
+    public func remove(paths: [String]) {
+        for p in paths where records[p] != nil { records.removeValue(forKey: p); dirty = true }
+    }
+
     public func record(_ path: String) -> PhotoRecord? { records[path] }
 
     public func records(forPaths paths: [String]) -> [String: PhotoRecord] {

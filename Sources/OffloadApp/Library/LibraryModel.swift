@@ -3,6 +3,26 @@ import Observation
 import OffloadCore
 import OffloadEngine
 
+/// One tile in the grid. A RAW+JPEG pair collapses into a single item: the JPEG
+/// is shown, the RAW rides along (openable via right-click, deleted with it).
+struct DisplayItem: Identifiable {
+    let id: String
+    let isFolder: Bool
+    let primary: LibraryEntry       // folder, or the shown photo (JPEG preferred)
+    let raw: LibraryEntry?
+    let all: [LibraryEntry]         // every file this item represents
+
+    init(folder: LibraryEntry) {
+        id = folder.id; isFolder = true; primary = folder; raw = nil; all = [folder]
+    }
+    init(group: [LibraryEntry]) {
+        let p = LibraryModel.pickPrimary(group)
+        id = p.id; isFolder = false; primary = p
+        raw = group.first { if case .media(.raw) = $0.kind { return true }; return false }
+        all = group
+    }
+}
+
 /// Drives the Library window: which source (NAS or card), the current folder
 /// path within it, the entries to show, and the progressive media count.
 @MainActor @Observable
@@ -98,7 +118,77 @@ final class LibraryModel {
     var displayedEntries: [LibraryEntry] { searchResults ?? entries }
     var isSearching: Bool { searchResults != nil }
 
+    /// Grid items with RAW+JPEG pairs collapsed. Folders first, then photos.
+    var displayedItems: [DisplayItem] {
+        var folders: [DisplayItem] = []
+        var byKey: [String: [LibraryEntry]] = [:]
+        var order: [String] = []
+        for e in displayedEntries {
+            if e.isFolder { folders.append(DisplayItem(folder: e)); continue }
+            let key = Self.groupKey(e.id)
+            if byKey[key] == nil { order.append(key) }
+            byKey[key, default: []].append(e)
+        }
+        return folders + order.map { DisplayItem(group: byKey[$0]!) }
+    }
+
     func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
+
+    /// Directory + basename (no extension), so DSCF0037.JPG and DSCF0037.RAF group.
+    nonisolated static func groupKey(_ path: String) -> String {
+        let dir = (path as NSString).deletingLastPathComponent
+        let base = ((path as NSString).lastPathComponent as NSString).deletingPathExtension.lowercased()
+        return dir + "/" + base
+    }
+
+    nonisolated static func pickPrimary(_ group: [LibraryEntry]) -> LibraryEntry {
+        group.first { if case .media(.photo) = $0.kind { return true }; return false }
+            ?? group.first { if case .media(.video) = $0.kind { return true }; return false }
+            ?? group[0]
+    }
+
+    /// One representative per RAW+JPEG group (JPEG preferred) — avoids analyzing
+    /// a RAW when its JPEG twin carries the same content.
+    nonisolated static func primaryEntries(_ media: [LibraryEntry]) -> [LibraryEntry] {
+        var byKey: [String: [LibraryEntry]] = [:]
+        var order: [String] = []
+        for e in media {
+            let key = groupKey(e.id)
+            if byKey[key] == nil { order.append(key) }
+            byKey[key, default: []].append(e)
+        }
+        return order.map { pickPrimary(byKey[$0]!) }
+    }
+
+    // MARK: - Delete + RAW helpers
+
+    /// The RAW file that pairs with this photo, if one exists on disk (even when
+    /// it isn't in the current view, e.g. content-search results).
+    func rawSibling(of url: URL) -> URL? {
+        siblingFiles(of: url).first {
+            MediaKind.classify(ext: $0.pathExtension) == .raw
+        }
+    }
+
+    /// All files in the same folder sharing this file's basename — the JPEG, its
+    /// RAW, and any sidecars (THM/XMP). Deleting a photo removes the whole set.
+    func siblingFiles(of url: URL) -> [URL] {
+        let dir = url.deletingLastPathComponent()
+        let base = url.deletingPathExtension().lastPathComponent.lowercased()
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [url] }
+        let sibs = items.filter { $0.deletingPathExtension().lastPathComponent.lowercased() == base }
+        return sibs.isEmpty ? [url] : sibs
+    }
+
+    func delete(_ item: DisplayItem) async {
+        let targets = siblingFiles(of: item.primary.url)
+        for url in targets { try? FileManager.default.removeItem(at: url) }
+        await photoIndex.remove(paths: targets.map(\.path))
+        await photoIndex.save()
+        if isSearching { runSearch() } else { loadEntries() }
+        if let root = rootURL { startCount(root); refreshVolumeStats(root) }
+    }
 
     // MARK: - Content search
 
@@ -148,17 +238,18 @@ final class LibraryModel {
         let index = photoIndex
         analyzeTask = Task { [weak self] in
             let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
-            // Which still need analysis (new or changed since last time)?
+            // One representative per RAW+JPEG pair — no point analyzing both.
+            let primaries = Self.primaryEntries(media)
             var todo: [LibraryEntry] = []
-            for e in media where await index.needsAnalysis(path: e.id, mtime: e.modified) {
+            for e in primaries where await index.needsAnalysis(path: e.id, mtime: e.modified) {
                 todo.append(e)
             }
             await MainActor.run { [weak self] in
                 self?.analyzeTotal = todo.count
-                self?.tagsByPath.reserveCapacity(media.count)
+                self?.tagsByPath.reserveCapacity(primaries.count)
             }
             // Populate tag overlays for already-analyzed photos too.
-            let existing = await index.records(forPaths: media.map(\.id))
+            let existing = await index.records(forPaths: primaries.map(\.id))
             await MainActor.run { [weak self] in
                 for (p, r) in existing { self?.tagsByPath[p] = Array(r.tags.prefix(3)) }
             }
