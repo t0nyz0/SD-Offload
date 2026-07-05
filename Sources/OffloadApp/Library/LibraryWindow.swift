@@ -64,6 +64,14 @@ struct LibraryWindow: View {
             ImageViewer(items: model.displayedItems.filter { !$0.isFolder },
                         index: $viewerIndex, model: model)
         }
+        .alert("Delete failed", isPresented: Binding(
+            get: { model.deleteError != nil },
+            set: { if !$0 { model.deleteError = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.deleteError = nil }
+        } message: {
+            Text(model.deleteError ?? "")
+        }
     }
 
     private func openInViewer(_ item: DisplayItem, _ model: LibraryModel) {

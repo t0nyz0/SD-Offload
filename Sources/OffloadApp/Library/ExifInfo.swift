@@ -21,8 +21,14 @@ struct ExifInfo: Sendable {
     var hasAny: Bool { iso != nil || aperture != nil || shutter != nil || focalLength != nil }
 
     static func shutter(_ s: Double) -> String {
+        // Malformed EXIF can carry 0, ∞, or NaN (0/1 is a legal rational some
+        // cameras write). Guard before any Double→Int conversion, which traps on
+        // non-finite input and would crash the whole grid on one bad file.
+        guard s.isFinite, s > 0 else { return "—" }
         if s >= 1 { return s == s.rounded() ? "\(Int(s))s" : String(format: "%.1fs", s) }
-        return "1/\(Int((1 / s).rounded()))"
+        let denom = (1 / s).rounded()
+        guard denom.isFinite, denom <= Double(Int.max) else { return "—" }
+        return "1/\(Int(denom))"
     }
 }
 
@@ -60,9 +66,11 @@ final class ExifCache: @unchecked Sendable {
         } else if let iso = exif?[kCGImagePropertyExifISOSpeedRatings] as? Int {
             info.iso = iso
         }
-        info.aperture = exif?[kCGImagePropertyExifFNumber] as? Double
-        info.shutter = exif?[kCGImagePropertyExifExposureTime] as? Double
-        info.focalLength = exif?[kCGImagePropertyExifFocalLength] as? Double
+        // Only keep finite, positive values — a malformed 0/∞/NaN would otherwise
+        // reach the caption (and trap the Int conversions in shutter/focalLength).
+        if let a = exif?[kCGImagePropertyExifFNumber] as? Double, a.isFinite, a > 0 { info.aperture = a }
+        if let s = exif?[kCGImagePropertyExifExposureTime] as? Double, s.isFinite, s > 0 { info.shutter = s }
+        if let f = exif?[kCGImagePropertyExifFocalLength] as? Double, f.isFinite, f > 0 { info.focalLength = f }
         return info.hasAny ? info : nil
     }
 }

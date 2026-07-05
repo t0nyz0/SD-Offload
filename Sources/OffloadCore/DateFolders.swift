@@ -37,7 +37,14 @@ public enum DateFolders {
             guard comps[2].count <= 2, let d = Int(comps[2]), (1...31).contains(d) else { return nil }
             dc.day = d
         } else { dc.day = 1 }
-        return Calendar.current.date(from: dc)
+        // Calendar.date(from:) is lenient — it rolls 2026/02/31 forward to Mar 3
+        // rather than failing. Round-trip the result and reject anything that
+        // didn't survive intact, so a non-calendar folder falls back to its raw
+        // name instead of rendering the wrong day.
+        guard let date = Calendar.current.date(from: dc) else { return nil }
+        let out = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        guard out.year == dc.year, out.month == dc.month, out.day == dc.day else { return nil }
+        return date
     }
 
     private static func formatted(_ template: String, _ date: Date) -> String {

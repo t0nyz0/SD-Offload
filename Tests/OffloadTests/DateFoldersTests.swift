@@ -48,4 +48,17 @@ final class DateFoldersTests: XCTestCase {
         // Garbage numeric-ish but out of range.
         XCTAssertNil(DateFolders.headerLabel(folderPath: "/V/2026/13/40", rootPath: "/V"))
     }
+
+    func testOutOfRangeDayFallsBackNotRollover() {
+        // 2026/02/31 is not a real date. Calendar.date(from:) would leniently roll
+        // it forward to Mar 3 — the round-trip guard must reject it so the folder
+        // falls back to its raw name instead of showing the wrong day.
+        XCTAssertNil(DateFolders.headerLabel(folderPath: "/V/2026/02/31", rootPath: "/V"))
+        XCTAssertNil(DateFolders.headerLabel(folderPath: "/V/2026/04/31", rootPath: "/V"))  // April has 30
+        XCTAssertEqual(
+            DateFolders.caption(folderPath: "/V/2026/02/31", rootPath: "/V", rawName: "31").title, "31")
+        // Leap-day correctness both ways.
+        XCTAssertNotNil(DateFolders.headerLabel(folderPath: "/V/2024/02/29", rootPath: "/V"))  // 2024 is a leap year
+        XCTAssertNil(DateFolders.headerLabel(folderPath: "/V/2026/02/29", rootPath: "/V"))     // 2026 is not
+    }
 }

@@ -107,9 +107,11 @@ final class PhotoMetaCache: @unchecked Sendable {
             } else if let iso = exif[kCGImagePropertyExifISOSpeedRatings] as? Int {
                 m.exif.iso = iso
             }
-            m.exif.aperture = exif[kCGImagePropertyExifFNumber] as? Double
-            m.exif.shutter = exif[kCGImagePropertyExifExposureTime] as? Double
-            m.exif.focalLength = exif[kCGImagePropertyExifFocalLength] as? Double
+            // Keep only finite, positive values — a malformed 0/∞/NaN would trap
+            // the Int conversions in ExifInfo.shutter/caption on render.
+            if let a = exif[kCGImagePropertyExifFNumber] as? Double, a.isFinite, a > 0 { m.exif.aperture = a }
+            if let s = exif[kCGImagePropertyExifExposureTime] as? Double, s.isFinite, s > 0 { m.exif.shutter = s }
+            if let f = exif[kCGImagePropertyExifFocalLength] as? Double, f.isFinite, f > 0 { m.exif.focalLength = f }
         }
         if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
            var lat = gps[kCGImagePropertyGPSLatitude] as? Double,

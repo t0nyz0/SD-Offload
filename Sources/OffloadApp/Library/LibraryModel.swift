@@ -42,6 +42,10 @@ final class LibraryModel {
     private(set) var totalVolumeBytes: Int64 = 0
     private(set) var mounted = false
 
+    // Set when a delete couldn't complete (read-only volume, locked/in-use file, …)
+    // so the UI can surface it, instead of the file silently reappearing on reload.
+    var deleteError: String?
+
     // Content search / AI analysis.
     var searchText = "" { didSet { if searchText != oldValue { runSearch() } } }
     private(set) var searchResults: [LibraryEntry]?      // nil = not searching
@@ -277,22 +281,34 @@ final class LibraryModel {
             for item in items { urls.formUnion(Self.deleteTargets(for: item)) }
             return urls
         }.value
-        await Task.detached(priority: .userInitiated) {
-            // Move to the Trash rather than hard-unlink, so a mistaken delete is
-            // recoverable. (Falls back to a hard delete if the volume has no Trash.)
+        // Move to the Trash rather than hard-unlink, so a mistaken delete is
+        // recoverable. (Falls back to a hard delete if the volume has no Trash.)
+        // Track what actually got removed so a failure isn't silently swallowed —
+        // otherwise the file vanishes from the grid, then reappears on reload.
+        let failed = await Task.detached(priority: .userInitiated) { () -> Set<URL> in
+            var failures = Set<URL>()
             for url in targets {
                 do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
-                catch { try? FileManager.default.removeItem(at: url) }
+                catch {
+                    do { try FileManager.default.removeItem(at: url) }
+                    catch { failures.insert(url) }
+                }
             }
+            return failures
         }.value
-        await photoIndex.remove(paths: targets.map(\.path))
+        let removed = targets.subtracting(failed)
+        await photoIndex.remove(paths: removed.map(\.path))
         await photoIndex.save()
-        // Drop the deleted files from the in-memory lists right away so the grid
-        // and the open viewer reflect the removal synchronously (the authoritative
-        // reload below reconciles a beat later).
-        entries.removeAll { targets.contains($0.url) }
-        searchResults?.removeAll { targets.contains($0.url) }
+        // Drop only the files that actually went away from the in-memory lists so
+        // the grid/viewer reflect the removal synchronously (the authoritative
+        // reload below reconciles the rest).
+        entries.removeAll { removed.contains($0.url) }
+        searchResults?.removeAll { removed.contains($0.url) }
         clearSelection()
+        if !failed.isEmpty {
+            let n = failed.count
+            deleteError = "Couldn't delete \(n) item\(n == 1 ? "" : "s"). The volume may be read-only, or the file\(n == 1 ? " may be" : "s may be") locked or in use."
+        }
         if isSearching { runSearch() } else { loadEntries() }
         if let root = rootURL { startCount(root); refreshVolumeStats(root) }
     }
