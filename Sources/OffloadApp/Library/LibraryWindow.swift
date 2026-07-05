@@ -531,6 +531,7 @@ private struct LibraryTile: View {
     var selected: Bool = false
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
+    @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.balanced.rawValue
 
     private var entry: LibraryEntry { item.primary }
     private var isVideo: Bool { if case .media(.video) = entry.kind { return true }; return false }
@@ -592,10 +593,11 @@ private struct LibraryTile: View {
                 }
             }
         }
-        .task(id: entry.id) {
+        .task(id: "\(entry.id)#q\(thumbQualityRaw)") {   // re-fetch when quality changes
             guard !item.isFolder else { return }
-            thumb = await ThumbnailLoader.shared.thumbnail(url: entry.url, size: entry.size,
-                                                           mtime: entry.modified, side: 220)
+            thumb = await ThumbnailLoader.shared.thumbnail(
+                url: entry.url, size: entry.size, mtime: entry.modified, side: 220,
+                quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .balanced)
         }
         .task(id: entry.id) {
             guard !item.isFolder, !isVideo else { return }
@@ -606,15 +608,15 @@ private struct LibraryTile: View {
     /// The tiny line under the name: format + basic EXIF ("JPG+RAW · ISO 400 · ƒ2.8").
     private var infoLine: String? {
         guard !item.isFolder else { return nil }
-        let format: String = isVideo ? "VIDEO" : (item.raw != nil ? "JPG+RAW" : (isRawOnly ? "RAW" : "JPG"))
+        let format: String = isVideo ? "VIDEO" : (item.rawCompanion != nil ? "JPG+RAW" : (isRawOnly ? "RAW" : "JPG"))
         if let exif, exif.hasAny { return "\(format) · \(exif.caption)" }
         return format
     }
 
-    // When a RAW is attached, title the card by its base name (no extension) so
-    // it reads as one photo, and flag both formats.
+    // When a distinct RAW is attached, title the card by its base name (no
+    // extension) so a JPEG+RAW pair reads as one photo; a lone file keeps its name.
     private var titleText: String {
-        item.raw != nil ? (entry.name as NSString).deletingPathExtension : entry.name
+        item.rawCompanion != nil ? (entry.name as NSString).deletingPathExtension : entry.name
     }
 
     // Format now lives in the info line under the tile; only flag video on the

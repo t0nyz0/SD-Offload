@@ -5,6 +5,7 @@ import OffloadEngine
 
 struct SettingsView: View {
     @Environment(AppState.self) private var app
+    @AppStorage(ThumbnailQuality.storageKey) private var thumbQuality = ThumbnailQuality.balanced.rawValue
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -87,6 +88,18 @@ struct SettingsView: View {
                 Stepper("Parallel NAS uploads: \(settings.config.hop2Workers)",
                         value: $settings.config.hop2Workers, in: 1...8)
                 Text("Each uploaded file is read back from the NAS uncached and checksummed against the card before the card can be wiped — always. More parallel uploads can help on fast links; a single spinning-disk NAS may prefer fewer.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Library") {
+                Picker("Thumbnail quality", selection: $thumbQuality) {
+                    ForEach(ThumbnailQuality.allCases, id: \.rawValue) { q in
+                        Text(q.label).tag(q.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("Higher quality decodes the full photo for sharper thumbnails; lower is faster, especially over a slow NAS connection. Applies to newly generated thumbnails.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
