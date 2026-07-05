@@ -6,6 +6,8 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **Adjustable thumbnail size**: a slider in the Library toolbar scales the grid
+  tiles up or down (remembered across launches).
 - **Per-photo info line** under each thumbnail: format (JPG+RAW / RAW / VIDEO)
   plus basic EXIF — ISO, aperture, shutter, focal length — read cheaply from the
   file header (no full decode) and cached.

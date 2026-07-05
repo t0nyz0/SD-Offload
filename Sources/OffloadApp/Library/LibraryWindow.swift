@@ -160,6 +160,7 @@ private struct Breadcrumb: View {
 
 private struct SearchBar: View {
     @Bindable var model: LibraryModel
+    @AppStorage("offload.library.tileSize") private var tileSize = 150.0
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
@@ -175,6 +176,16 @@ private struct SearchBar: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(DS.Palette.surfaceRaised.opacity(0.6), in: RoundedRectangle(cornerRadius: DS.Radius.s))
+
+            // Tile size
+            HStack(spacing: 5) {
+                Image(systemName: "photo").font(.system(size: 9)).foregroundStyle(.tertiary)
+                Slider(value: $tileSize, in: 110...320)
+                    .frame(width: 90)
+                    .controlSize(.small)
+                Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(.tertiary)
+            }
+            .help("Thumbnail size")
 
             if model.analyzing {
                 HStack(spacing: 6) {
@@ -229,7 +240,10 @@ private struct LibraryGrid: View {
     let openViewer: (DisplayItem) -> Void
     @State private var pendingDelete: DisplayItem?
     @State private var bulkConfirm = false
-    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)]
+    @AppStorage("offload.library.tileSize") private var tileSize = 150.0
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: tileSize, maximum: tileSize + 60), spacing: 12)]
+    }
 
     private var canDelete: Bool { model.source == .nas }
 
@@ -431,7 +445,9 @@ private struct LibraryTile: View {
                     Text(info)
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
-                        .lineLimit(1).truncationMode(.tail)
+                        .lineLimit(2)                       // wrap so aperture/shutter never get cut off
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .monospacedDigit()
                 }
             }
@@ -469,12 +485,12 @@ private struct LibraryTile: View {
 
     @ViewBuilder private var tagBadge: some View {
         if let top = tags.first {
-            Text(top.capitalized)
-                .font(.system(size: 8.5, weight: .semibold))
-                .padding(.horizontal, 5).padding(.vertical, 2)
-                .background(DS.safe.opacity(0.9), in: Capsule())
-                .foregroundStyle(.black)
-                .padding(5)
+            Text(top.lowercased())
+                .font(.system(size: 8, weight: .medium))
+                .padding(.horizontal, 4).padding(.vertical, 1)
+                .background(.black.opacity(0.4), in: Capsule())
+                .foregroundStyle(.white.opacity(0.8))
+                .padding(4)
         }
     }
 
