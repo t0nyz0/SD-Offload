@@ -10,7 +10,9 @@ struct ImageViewer: View {
     @Binding var index: Int?
     var model: LibraryModel
     @State private var meta: PhotoMeta?
-    @State private var showInfo = false
+    // Persisted + on by default, so the inspector stays open across photos and
+    // launches until you close it.
+    @AppStorage("offload.viewer.showInfo") private var showInfo = true
     @State private var confirmingDelete = false
 
     private var current: DisplayItem? {
@@ -269,6 +271,15 @@ private struct InfoPanel: View {
         guard let dim = meta?.dimensions else { return nil }
         return meta?.megapixels.map { "\(dim) · \($0)" } ?? dim
     }
+    // Where this photo lives, relative to the library root (e.g. "2026/07/04").
+    private var folderText: String? {
+        guard let root = model.rootURL?.path else { return nil }
+        let base = root.hasSuffix("/") ? String(root.dropLast()) : root
+        let dir = (item.primary.id as NSString).deletingLastPathComponent
+        if dir == base { return nil }                                   // in the root itself
+        if dir.hasPrefix(base + "/") { return String(dir.dropFirst(base.count + 1)) }
+        return (dir as NSString).lastPathComponent
+    }
 
     var body: some View {
         ScrollView {
@@ -281,12 +292,25 @@ private struct InfoPanel: View {
                 if let c = meta?.cameraName { row("Camera", c) }
                 if let l = meta?.lens { row("Lens", l) }
                 if let e = meta?.exif, e.hasAny { row("Exposure", e.caption) }
+                if let f = meta?.focalLen35Text { row("35 mm equiv", f) }
+                if let ev = meta?.exposureBiasText { row("Exposure comp", ev) }
+                if let mode = meta?.exposureProgramText { row("Shooting mode", mode) }
+                if let mt = meta?.meteringText { row("Metering", mt) }
+                if let wb = meta?.whiteBalanceText { row("White balance", wb) }
+                if let fl = meta?.flashText { row("Flash", fl) }
                 if let s = sizeLine { row("Dimensions", s) }
+                if let cp = meta?.colorProfileText { row("Color", cp) }
+                if let sw = meta?.software { row("Software", sw) }
                 if let g = meta?.gpsText {
                     VStack(alignment: .leading, spacing: 3) {
                         label("Location")
                         Text(g).font(.system(size: 12)).monospacedDigit()
                             .foregroundStyle(.white.opacity(0.9)).textSelection(.enabled)
+                        if let alt = meta?.altitudeText {
+                            Text("Altitude \(alt)")
+                                .font(.system(size: 11)).monospacedDigit()
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
                         if let url = meta?.mapsURL {
                             Button { NSWorkspace.shared.open(url) } label: {
                                 Label("Open in Maps", systemImage: "map").font(.system(size: 11))
@@ -295,6 +319,7 @@ private struct InfoPanel: View {
                         }
                     }
                 }
+                if let folder = folderText { row("Folder", folder) }
                 if !tags.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         label("Contents")

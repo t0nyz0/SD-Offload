@@ -14,6 +14,16 @@ struct PhotoMeta: Sendable {
     var dateTaken: Date?
     var exif = ExifInfo()          // iso / aperture / shutter / focal
     var gps: GeoPoint?
+    // Extra shooting + technical metadata (all optional — shown only when present).
+    var focalLen35: Int?           // 35mm-equivalent focal length
+    var exposureBias: Double?      // EV compensation
+    var flashFired: Bool?
+    var whiteBalanceAuto: Bool?    // true = auto, false = manual
+    var meteringMode: Int?
+    var exposureProgram: Int?
+    var colorProfile: String?
+    var software: String?          // camera firmware / editing software
+    var altitude: Double?          // meters, signed (negative = below sea level)
 
     var dimensions: String? {
         guard let w = pixelWidth, let h = pixelHeight, w > 0, h > 0 else { return nil }
@@ -43,6 +53,48 @@ struct PhotoMeta: Sendable {
     var gpsText: String? {
         guard let g = gps else { return nil }
         return String(format: "%.5f, %.5f", g.lat, g.lon)
+    }
+    var altitudeText: String? {
+        guard let a = altitude else { return nil }
+        return String(format: "%.0f m%@", abs(a), a < -0.5 ? " below sea level" : "")
+    }
+    var focalLen35Text: String? { focalLen35.map { "\($0) mm" } }
+    var exposureBiasText: String? {
+        guard let ev = exposureBias, abs(ev) > 0.01 else { return nil }   // omit a plain 0
+        return String(format: "%+.1f EV", ev)
+    }
+    var flashText: String? { flashFired.map { $0 ? "Fired" : "Did not fire" } }
+    var whiteBalanceText: String? { whiteBalanceAuto.map { $0 ? "Auto" : "Manual" } }
+    var meteringText: String? {
+        switch meteringMode {
+        case 1: return "Average"
+        case 2: return "Center-weighted"
+        case 3: return "Spot"
+        case 4: return "Multi-spot"
+        case 5: return "Multi-segment"
+        case 6: return "Partial"
+        default: return nil
+        }
+    }
+    var exposureProgramText: String? {
+        switch exposureProgram {
+        case 1: return "Manual"
+        case 2: return "Program"
+        case 3: return "Aperture priority"
+        case 4: return "Shutter priority"
+        case 5: return "Creative (slow)"
+        case 6: return "Action (fast)"
+        case 7: return "Portrait"
+        case 8: return "Landscape"
+        default: return nil
+        }
+    }
+    var colorProfileText: String? {
+        guard let p = colorProfile else { return nil }
+        if p.localizedCaseInsensitiveContains("Display P3") { return "Display P3" }
+        if p.localizedCaseInsensitiveContains("sRGB") { return "sRGB" }
+        if p.localizedCaseInsensitiveContains("Adobe RGB") { return "Adobe RGB" }
+        return p
     }
     var mapsURL: URL? {
         guard let g = gps else { return nil }
@@ -92,10 +144,12 @@ final class PhotoMetaCache: @unchecked Sendable {
 
         m.pixelWidth = props[kCGImagePropertyPixelWidth] as? Int
         m.pixelHeight = props[kCGImagePropertyPixelHeight] as? Int
+        m.colorProfile = props[kCGImagePropertyProfileName] as? String
 
         if let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
             m.make = tiff[kCGImagePropertyTIFFMake] as? String
             m.model = tiff[kCGImagePropertyTIFFModel] as? String
+            m.software = tiff[kCGImagePropertyTIFFSoftware] as? String
         }
         if let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] {
             m.lens = exif[kCGImagePropertyExifLensModel] as? String
@@ -112,6 +166,12 @@ final class PhotoMetaCache: @unchecked Sendable {
             if let a = exif[kCGImagePropertyExifFNumber] as? Double, a.isFinite, a > 0 { m.exif.aperture = a }
             if let s = exif[kCGImagePropertyExifExposureTime] as? Double, s.isFinite, s > 0 { m.exif.shutter = s }
             if let f = exif[kCGImagePropertyExifFocalLength] as? Double, f.isFinite, f > 0 { m.exif.focalLength = f }
+            if let f35 = exif[kCGImagePropertyExifFocalLenIn35mmFilm] as? Int, f35 > 0 { m.focalLen35 = f35 }
+            if let ev = exif[kCGImagePropertyExifExposureBiasValue] as? Double, ev.isFinite { m.exposureBias = ev }
+            if let flash = exif[kCGImagePropertyExifFlash] as? Int { m.flashFired = (flash & 0x1) == 1 }
+            if let wb = exif[kCGImagePropertyExifWhiteBalance] as? Int { m.whiteBalanceAuto = (wb == 0) }
+            if let mm = exif[kCGImagePropertyExifMeteringMode] as? Int, mm != 0 { m.meteringMode = mm }
+            if let ep = exif[kCGImagePropertyExifExposureProgram] as? Int, ep != 0 { m.exposureProgram = ep }
         }
         if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
            var lat = gps[kCGImagePropertyGPSLatitude] as? Double,
@@ -121,6 +181,10 @@ final class PhotoMetaCache: @unchecked Sendable {
             if (-90...90).contains(lat), (-180...180).contains(lon),
                !(abs(lat) < 0.0001 && abs(lon) < 0.0001) {
                 m.gps = GeoPoint(lat: lat, lon: lon)
+                if let alt = gps[kCGImagePropertyGPSAltitude] as? Double, alt.isFinite {
+                    let below = (gps[kCGImagePropertyGPSAltitudeRef] as? Int) == 1
+                    m.altitude = below ? -alt : alt
+                }
             }
         }
         return m
