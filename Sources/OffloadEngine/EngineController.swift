@@ -46,6 +46,11 @@ private actor Coordinator {
     let nas: NASLocator
 
     private(set) var runner: SessionRunner?
+    // Set synchronously the instant a start is committed to — BEFORE the first
+    // await in startSession — so two callers (e.g. user consent racing a card
+    // event) can't both pass the `runner == nil` guard while the first is
+    // suspended at an await and launch two concurrent runners.
+    private var startingSession = false
     private var pendingCandidates: [String: CandidateVolume] = [:]
     // Cards inserted while a session is running — offloaded in turn, FIFO, so you
     // can stack several readers and walk away.
@@ -109,7 +114,7 @@ private actor Coordinator {
             // Unfinished work for this card resumes even if its policy is now
             // "ignore"/"ask" — otherwise an interrupted session would be
             // stranded forever, its card never wiped.
-            if runner == nil, await journal.hasIncompleteSession(cardUUID: volume.info.volumeUUID) {
+            if runner == nil, !startingSession, await journal.hasIncompleteSession(cardUUID: volume.info.volumeUUID) {
                 await startSession(volume)
                 return
             }
@@ -156,9 +161,10 @@ private actor Coordinator {
     // MARK: - Session lifecycle
 
     private func startSession(_ volume: CandidateVolume) async {
-        guard runner == nil else {
-            // Busy — queue this card and start it automatically when the current
-            // one finishes (skip the card already running and any dup already queued).
+        guard runner == nil, !startingSession else {
+            // Busy (a session is running, or a start is already in flight) — queue
+            // this card and start it automatically when the current one finishes
+            // (skip the card already running and any dup already queued).
             if runner?.card.volumeUUID != volume.info.volumeUUID,
                !queue.contains(where: { $0.info.volumeUUID == volume.info.volumeUUID }) {
                 queue.append(volume)
@@ -168,6 +174,11 @@ private actor Coordinator {
             }
             return
         }
+        // Reserve the slot before any suspension. Cleared on every exit path; by
+        // the time it clears on the launch paths, `runner` is already set (launch
+        // is synchronous), so the guard keeps rejecting concurrent starts.
+        startingSession = true
+        defer { startingSession = false }
         lastVolume = volume
         let config = await configProvider()
         emit(.cardMounted(volume.info))
@@ -192,6 +203,14 @@ private actor Coordinator {
             await journal.replaceFiles(plan.files, in: incomplete.id)
             let bytes = plan.files.reduce(Int64(0)) { $0 + $1.size }
             emit(.planned(files: plan.files.count, bytes: bytes))
+            // The card may have been pulled during the scan/merge awaits above.
+            // (The fresh-session branch is covered by its empty-scan guard; the
+            // resume branch has no scan gate, so check the mount explicitly.)
+            guard statfsInfo(path: volume.info.mountPath) != nil else {
+                emit(.cardGone)
+                emit(.phase(.idle))
+                return
+            }
             launchRunner(sessionID: incomplete.id, card: volume.info, config: config, staging: staging)
             return
         }
@@ -251,13 +270,19 @@ private actor Coordinator {
     private func runnerFinished(_ finished: SessionRunner) async {
         if runner === finished { runner = nil }
         await emitGlance()
-        // Auto-start the next queued card (still-mounted, pre-approved).
-        if runner == nil, !queue.isEmpty {
+        // Auto-start the next queued card that is STILL physically present. A card
+        // pulled while waiting in the queue is dropped, not started against a ghost
+        // mount; we fall through to the next queued card if any.
+        while runner == nil, !queue.isEmpty {
             let next = queue.removeFirst()
+            guard statfsInfo(path: next.info.mountPath) != nil else {
+                emit(.cardGone)   // queued card was pulled before its turn
+                continue
+            }
             emit(.attention(AttentionItem(severity: .info,
                                           title: "Starting queued card",
                                           detail: "Offloading \(next.info.volumeName).")))
-            await startSession(next)
+            await startSession(next)   // sets `runner` on launch → loop exits; bails cleanly → tries next
         }
     }
 
