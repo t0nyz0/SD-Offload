@@ -101,6 +101,7 @@ public actor Journal {
         guard var record = active[sessionID],
               let idx = record.files.firstIndex(where: { $0.id == fileID }) else { return }
         let old = record.files[idx].state
+        if old == newState { return }   // idempotent rollbacks are no-ops
         guard FileState.isLegal(from: old, to: newState) else {
             // Never crash mid-transfer: coerce to failed (which blocks the wipe)
             // and leave the evidence in the journal.

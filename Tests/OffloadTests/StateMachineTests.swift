@@ -12,7 +12,9 @@ final class StateMachineTests: XCTestCase {
     }
 
     func testDuplicateSkipPath() {
-        XCTAssertTrue(FileState.isLegal(from: .copying, to: .skippedDuplicate))
+        // Duplicates are detected at upload time by hashing the existing NAS file.
+        XCTAssertTrue(FileState.isLegal(from: .uploading, to: .skippedDuplicate))
+        XCTAssertFalse(FileState.isLegal(from: .copying, to: .skippedDuplicate))
         XCTAssertTrue(FileState.isLegal(from: .skippedDuplicate, to: .wiped))
     }
 

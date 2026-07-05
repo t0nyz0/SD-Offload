@@ -89,12 +89,14 @@ public enum FileState: Codable, Equatable, Sendable {
         switch (from, to) {
         case (.pending, .copying),
              (.copying, .staged),
-             (.copying, .skippedDuplicate),
              (.copying, .pending),                 // retry rollback
              (.staged, .stagedVerified),
              (.staged, .pending),                  // verify mismatch → re-copy
              (.stagedVerified, .uploading),
+             (.stagedVerified, .pending),          // staging lost → re-copy
              (.uploading, .uploaded),
+             (.uploading, .pending),               // staging rot found at upload → re-copy
+             (.uploading, .skippedDuplicate),      // dest hash matched — no upload needed
              (.uploading, .stagedVerified),        // retry rollback
              (.uploaded, .nasVerified),
              (.uploaded, .stagedVerified),         // NAS verify mismatch → re-upload
