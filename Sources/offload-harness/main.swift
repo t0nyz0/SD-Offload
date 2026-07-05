@@ -106,6 +106,14 @@ let cardInfo = CardInfo(volumeUUID: "\(volName)#test", bsdName: cardDev ?? "disk
                         mountPath: cardMountPath, volumeName: volName,
                         capacityBytes: 96 << 20, freeBytes: 80 << 20, hasDCIM: true)
 
+// Crash/reopen resume proof — seeds a mid-transfer journal and resumes it.
+if mode == "chaos-crash" {
+    try await runCrashResumeScenario(cardRoot: cardRoot, nasRoot: nasRoot, staging: stagingStore,
+                                     journalDir: journalDir, historyDir: historyDir, config: cfg,
+                                     cardInfo: cardInfo, sourceHashes: sourceHashes)
+    // exits(0) on success
+}
+
 // Plan the manifest exactly as the real coordinator would.
 let planner = IngestPlanner()
 let scanned = planner.scan(cardRoot: cardRoot, scope: .mediaRootsOnly)

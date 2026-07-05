@@ -66,10 +66,10 @@ final class SessionViewModel {
         set(\.currentFileName, s.currentFileName)
     }
 
-    /// 1 Hz from the engine; keep the last 60 for the sparkline.
+    /// 1 Hz from the engine; keep a longer tail for the sparkline.
     func appendSample(_ sample: SpeedSample) {
         samples.append(sample)
-        if samples.count > 60 { samples.removeFirst(samples.count - 60) }
+        if samples.count > 180 { samples.removeFirst(samples.count - 180) }
     }
 
     private func set<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<SessionViewModel, T>, _ value: T) {
