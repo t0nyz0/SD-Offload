@@ -61,7 +61,8 @@ struct LibraryWindow: View {
             .background(DS.Palette.ink)
         }
         .overlay {
-            ImageViewer(items: model.displayedItems.filter { !$0.isFolder }, index: $viewerIndex)
+            ImageViewer(items: model.displayedItems.filter { !$0.isFolder },
+                        index: $viewerIndex, model: model)
         }
     }
 

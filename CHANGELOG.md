@@ -6,6 +6,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **Viewer info inspector + delete.** The in-app viewer gained a **Delete** button
+  (⌦, NAS only, with confirmation — card originals stay protected) that removes the
+  photo and its RAW/sidecars and advances to the next shot. An **Info** toggle (the
+  ⓘ button or the `i` key) opens a right-side inspector packed with everything we
+  know: format + total size, capture date/time, camera + lens, full exposure,
+  pixel dimensions + megapixels, GPS coordinates (with "Open in Maps"), and the
+  content tags from Analyze.
 - **Photo GPS (phase 1 of location)**: Analyze now reads each photo's EXIF GPS
   coordinate (fully on-device, header-only — no network, no place lookup yet) and
   stores it in the index. Photos analyzed before this are back-filled cheaply on

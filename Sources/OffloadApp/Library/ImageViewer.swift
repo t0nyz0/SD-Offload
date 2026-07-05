@@ -2,16 +2,21 @@ import SwiftUI
 
 /// A fast in-app image viewer — opens instantly instead of launching Preview.
 /// Always shows the JPEG (the display copy); the RAW opens externally on demand.
-/// Arrow keys move between photos, Escape/Space closes, scroll/pinch zooms.
+/// Arrow keys move between photos, Escape/Space closes, scroll/pinch zooms,
+/// "i" toggles the info inspector, ⌦ deletes (NAS only).
 struct ImageViewer: View {
     let items: [DisplayItem]
     @Binding var index: Int?
-    @State private var exif: ExifInfo?
+    var model: LibraryModel
+    @State private var meta: PhotoMeta?
+    @State private var showInfo = false
+    @State private var confirmingDelete = false
 
     private var current: DisplayItem? {
         guard let i = index, items.indices.contains(i) else { return nil }
         return items[i]
     }
+    private var canDelete: Bool { model.source == .nas }
 
     var body: some View {
         if let i = index, let item = current {
@@ -28,20 +33,54 @@ struct ImageViewer: View {
                     Spacer()
                 }
 
-                // Prev / next chevrons
-                HStack {
-                    navButton("chevron.left", enabled: i > 0) { step(-1) }
-                    Spacer()
-                    navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
+                // Prev / next chevrons (hidden while the inspector is open so it
+                // doesn't sit under the panel — arrow keys still navigate).
+                if !showInfo {
+                    HStack {
+                        navButton("chevron.left", enabled: i > 0) { step(-1) }
+                        Spacer()
+                        navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
+                    }
+                    .padding(.horizontal, 12)
                 }
-                .padding(.horizontal, 12)
+
+                if showInfo {
+                    HStack(spacing: 0) {
+                        Spacer()
+                        InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary))
+                    }
+                    .padding(.top, 44)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
             .background(shortcuts)
             .transition(.opacity)
             .task(id: item.id) {
-                exif = await ExifCache.shared.info(url: item.primary.url, mtime: item.primary.modified)
+                meta = await PhotoMetaCache.shared.meta(url: item.primary.url, mtime: item.primary.modified)
+            }
+            .confirmationDialog("Delete this photo?", isPresented: $confirmingDelete) {
+                Button("Delete", role: .destructive) { Task { await deleteCurrent() } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(deleteMessage(item))
             }
         }
+    }
+
+    private func deleteCurrent() async {
+        guard let i = index, items.indices.contains(i) else { return }
+        await model.delete(items[i])
+        // The model updates its entries synchronously, so re-anchor against the
+        // fresh list: stay at the same slot (now the next photo) or clamp/close.
+        let remaining = model.displayedItems.filter { !$0.isFolder }
+        index = remaining.isEmpty ? nil : min(i, remaining.count - 1)
+    }
+
+    private func deleteMessage(_ item: DisplayItem) -> String {
+        let names = item.all.map { ($0.id as NSString).lastPathComponent }
+        let listed = names.count <= 3 ? names.joined(separator: ", ")
+            : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
+        return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
     }
 
     private func topBar(item: DisplayItem, position: Int) -> some View {
@@ -53,18 +92,30 @@ struct ImageViewer: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer()
-            if let exif, exif.hasAny {
+            if let exif = meta?.exif, exif.hasAny {
                 Text(exif.caption)
                     .font(.system(size: 11))
                     .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.45))
                     .padding(.trailing, DS.Space.s)
             }
+            Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
+                Label("Info", systemImage: "info.circle")
+            }
+            .tint(showInfo ? Color.accentColor : nil)
+            .help("Show photo info (i)")
             if let raw = item.raw?.url {
                 Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
             }
             Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
                 Label("Reveal", systemImage: "folder")
+            }
+            if canDelete {
+                Button(role: .destructive) { confirmingDelete = true } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .tint(.red)
+                .help("Delete from NAS (⌦)")
             }
             Button { index = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 18)) }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -94,6 +145,10 @@ struct ImageViewer: View {
             Button("") { step(1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { index = nil }.keyboardShortcut(.cancelAction)
             Button("") { index = nil }.keyboardShortcut(KeyEquivalent(" "), modifiers: [])
+            Button("") { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } }
+                .keyboardShortcut("i", modifiers: [])
+            Button("") { if canDelete { confirmingDelete = true } }
+                .keyboardShortcut(.delete, modifiers: [])
         }
         .opacity(0)
     }
@@ -166,5 +221,123 @@ private struct ZoomableImage: View {
         let u = url
         let loaded = await Task.detached(priority: .userInitiated) { NSImage(contentsOf: u) }.value
         if let loaded { image = loaded } else { failed = true }
+    }
+}
+
+/// The right-side inspector: everything we know about the photo — format + size,
+/// capture date, camera + lens, exposure, dimensions, GPS, and content tags.
+private struct InfoPanel: View {
+    let item: DisplayItem
+    let meta: PhotoMeta?
+    let tags: [String]
+
+    private var formatText: String {
+        if case .media(.video) = item.primary.kind { return "Video" }
+        if item.raw != nil { return "JPEG + RAW" }
+        if case .media(.raw) = item.primary.kind { return "RAW" }
+        return "JPEG"
+    }
+    private var fileSize: String { Fmt.bytes(item.all.reduce(Int64(0)) { $0 + $1.size }) }
+    private var sizeLine: String? {
+        guard let dim = meta?.dimensions else { return nil }
+        return meta?.megapixels.map { "\(dim) · \($0)" } ?? dim
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: DS.Space.m) {
+                Text("Info")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                row("File", "\(formatText) · \(fileSize)")
+                if let d = meta?.dateText { row("Taken", d) }
+                if let c = meta?.cameraName { row("Camera", c) }
+                if let l = meta?.lens { row("Lens", l) }
+                if let e = meta?.exif, e.hasAny { row("Exposure", e.caption) }
+                if let s = sizeLine { row("Dimensions", s) }
+                if let g = meta?.gpsText {
+                    VStack(alignment: .leading, spacing: 3) {
+                        label("Location")
+                        Text(g).font(.system(size: 12)).monospacedDigit()
+                            .foregroundStyle(.white.opacity(0.9)).textSelection(.enabled)
+                        if let url = meta?.mapsURL {
+                            Button { NSWorkspace.shared.open(url) } label: {
+                                Label("Open in Maps", systemImage: "map").font(.system(size: 11))
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
+                }
+                if !tags.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        label("Contents")
+                        FlowLayout(spacing: 5) {
+                            ForEach(tags, id: \.self) { tag in
+                                Text(tag)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(.white.opacity(0.12), in: Capsule())
+                                    .foregroundStyle(.white.opacity(0.85))
+                            }
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(DS.Space.l)
+            .frame(width: 260, alignment: .leading)
+        }
+        .frame(width: 260)
+        .frame(maxHeight: .infinity)
+        .background(.ultraThinMaterial)
+        .foregroundStyle(.white)
+    }
+
+    private func row(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            label(title)
+            Text(value)
+                .font(.system(size: 12)).monospacedDigit()
+                .foregroundStyle(.white.opacity(0.9))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func label(_ t: String) -> some View {
+        Text(t.uppercased())
+            .font(.system(size: 9, weight: .semibold))
+            .tracking(0.5)
+            .foregroundStyle(.white.opacity(0.4))
+    }
+}
+
+/// Minimal wrapping layout for the content-tag chips (macOS 14 Layout protocol).
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for s in subviews {
+            let sz = s.sizeThatFits(.unspecified)
+            if x + sz.width > maxWidth, x > 0 { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            x += sz.width + spacing
+            rowHeight = max(rowHeight, sz.height)
+        }
+        return CGSize(width: maxWidth.isFinite ? maxWidth : x, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x: CGFloat = bounds.minX, y: CGFloat = bounds.minY, rowHeight: CGFloat = 0
+        for s in subviews {
+            let sz = s.sizeThatFits(.unspecified)
+            if x - bounds.minX + sz.width > bounds.width, x > bounds.minX {
+                x = bounds.minX; y += rowHeight + spacing; rowHeight = 0
+            }
+            s.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(sz))
+            x += sz.width + spacing
+            rowHeight = max(rowHeight, sz.height)
+        }
     }
 }

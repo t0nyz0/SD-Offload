@@ -250,6 +250,11 @@ final class LibraryModel {
         }.value
         await photoIndex.remove(paths: targets.map(\.path))
         await photoIndex.save()
+        // Drop the deleted files from the in-memory lists right away so the grid
+        // and the open viewer reflect the removal synchronously (the authoritative
+        // reload below reconciles a beat later).
+        entries.removeAll { targets.contains($0.url) }
+        searchResults?.removeAll { targets.contains($0.url) }
         clearSelection()
         if isSearching { runSearch() } else { loadEntries() }
         if let root = rootURL { startCount(root); refreshVolumeStats(root) }
