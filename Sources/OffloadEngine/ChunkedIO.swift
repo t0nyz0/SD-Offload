@@ -42,7 +42,10 @@ public enum ChunkedIO {
         deinit { pointer.deallocate() }
     }
 
-    private static let ioQueue = DispatchQueue(label: "offload.chunkio", qos: .utility, attributes: .concurrent)
+    // .userInitiated, not .utility: an offload the user is actively watching
+    // shouldn't be scheduled at background priority (utility gets throttled hard
+    // under Low Power Mode / thermal pressure).
+    private static let ioQueue = DispatchQueue(label: "offload.chunkio", qos: .userInitiated, attributes: .concurrent)
 
     private static func blocking<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in

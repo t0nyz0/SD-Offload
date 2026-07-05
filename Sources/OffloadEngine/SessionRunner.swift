@@ -346,7 +346,7 @@ public actor SessionRunner {
                 let existingSize = (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
                 if existingSize == file.size {
                     let meter = self.meter
-                    let existingHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
+                    let existingHash = try await ChunkedIO.hashFile(destURL, noCache: config.thoroughNASVerify, gate: pauseGate) {
                         meter.addBytes($0, stage: .nasVerify)
                     }
                     if existingHash == sourceHash {
@@ -370,7 +370,7 @@ public actor SessionRunner {
             let partialURL = destURL.deletingLastPathComponent()
                 .appendingPathComponent(".offload-\(file.id.uuidString).partial")
             var options = ChunkedIO.CopyOptions()
-            options.preallocate = true    // ENOTSUP on smbfs is ignored inside
+            options.preallocate = false   // smbfs returns ENOTSUP; skip the wasted fcntl per file
             let meter = self.meter
             let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: partialURL, options: options,
                                                          gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
@@ -400,11 +400,14 @@ public actor SessionRunner {
             destURL = nasRoot.appendingPathComponent(file.destRelPath)
         }
 
-        // END-TO-END verify: fresh fd, F_NOCACHE (bytes come from the server,
-        // not our own page cache), compared against the ORIGINAL SD-read hash.
+        // END-TO-END verify: read the uploaded file back and compare against the
+        // ORIGINAL SD-read hash. Standard mode reads through the SMB cache (fast,
+        // still catches transport/staging corruption); Thorough mode forces
+        // uncached reads straight off the server (slower over SMB). We fsync'd
+        // before this, so the server already holds the bytes either way.
         let verifyStarted = Date()
         let meter = self.meter
-        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
+        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: config.thoroughNASVerify, gate: pauseGate) {
             meter.addBytes($0, stage: .nasVerify)
         }
         if nasHash == sourceHash {

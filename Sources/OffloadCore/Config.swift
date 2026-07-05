@@ -37,7 +37,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
 
     // Performance
     public var hop1Workers: Int = 1
-    public var hop2Workers: Int = 3
+    public var hop2Workers: Int = 4
+    /// NAS read-back verification mode. false (default, "Standard") reads the
+    /// uploaded file back through the SMB client cache — fast, and still hashes
+    /// the whole file end-to-end against the card's hash. true ("Thorough")
+    /// forces uncached reads (F_NOCACHE) so bytes come straight off the server —
+    /// maximally paranoid but far slower over SMB. Staging (local SSD) is always
+    /// verified uncached regardless.
+    public var thoroughNASVerify: Bool = false
 
     // Notifications / general
     public var notifyCardDetected: Bool = true
@@ -69,6 +76,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         keepStagedDays = try c.decodeIfPresent(Int.self, forKey: .keepStagedDays) ?? d.keepStagedDays
         hop1Workers = try c.decodeIfPresent(Int.self, forKey: .hop1Workers) ?? d.hop1Workers
         hop2Workers = try c.decodeIfPresent(Int.self, forKey: .hop2Workers) ?? d.hop2Workers
+        thoroughNASVerify = try c.decodeIfPresent(Bool.self, forKey: .thoroughNASVerify) ?? d.thoroughNASVerify
         notifyCardDetected = try c.decodeIfPresent(Bool.self, forKey: .notifyCardDetected) ?? d.notifyCardDetected
         notifyComplete = try c.decodeIfPresent(Bool.self, forKey: .notifyComplete) ?? d.notifyComplete
         notifyProblems = try c.decodeIfPresent(Bool.self, forKey: .notifyProblems) ?? d.notifyProblems

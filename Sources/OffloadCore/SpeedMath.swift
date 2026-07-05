@@ -70,7 +70,7 @@ public enum ETAMath {
     /// Warm-up gate: a stage's rate is trustworthy after ≥ minSeconds of samples
     /// AND (≥ minBytes observed OR ≥ minFiles completed).
     public static func isWarm(sampledSeconds: Double, bytesObserved: Int64, filesObserved: Int,
-                              minSeconds: Double = 3, minBytes: Int64 = 32 << 20, minFiles: Int = 5) -> Bool {
+                              minSeconds: Double = 2, minBytes: Int64 = 16 << 20, minFiles: Int = 3) -> Bool {
         sampledSeconds >= minSeconds && (bytesObserved >= minBytes || filesObserved >= minFiles)
     }
 

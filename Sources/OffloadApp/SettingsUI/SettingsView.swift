@@ -64,6 +64,15 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Performance") {
+                Stepper("Parallel NAS uploads: \(settings.config.hop2Workers)",
+                        value: $settings.config.hop2Workers, in: 1...8)
+                Toggle("Thorough NAS verification (slower)", isOn: $settings.config.thoroughNASVerify)
+                Text("Standard reads each uploaded file back through the SMB cache and checksums it end-to-end. Thorough forces uncached reads straight off the server — safest, but much slower over a network share.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Notifications") {
                 Toggle("Card detected", isOn: $settings.config.notifyCardDetected)
                 Toggle("Transfer complete (safe to remove)", isOn: $settings.config.notifyComplete)
