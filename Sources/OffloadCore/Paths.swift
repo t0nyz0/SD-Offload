@@ -12,6 +12,11 @@ public enum Paths {
     public static var stagingRoot: URL { appSupport.appendingPathComponent("Staging", isDirectory: true) }
     public static var libraryIndexFile: URL { appSupport.appendingPathComponent("library-index.json") }
     public static var photoIndexFile: URL { appSupport.appendingPathComponent("photo-index.json") }
+    // Face/pet detections (per-photo, holds the embeddings) and the named
+    // people/pets store. Separate from the content index so the (eagerly-loaded)
+    // photo index stays lean, and so identities survive a photo-index rebuild.
+    public static var faceIndexFile: URL { appSupport.appendingPathComponent("face-index.json") }
+    public static var identityIndexFile: URL { appSupport.appendingPathComponent("identity-index.json") }
 
     /// Hidden marker file written to a card to tie it to a session (per-card
     /// identity that survives synthesized-UUID collisions). Hidden, so the
