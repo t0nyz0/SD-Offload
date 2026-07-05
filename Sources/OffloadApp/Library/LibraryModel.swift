@@ -5,7 +5,7 @@ import OffloadEngine
 
 /// One tile in the grid. A RAW+JPEG pair collapses into a single item: the JPEG
 /// is shown, the RAW rides along (openable via right-click, deleted with it).
-struct DisplayItem: Identifiable {
+struct DisplayItem: Identifiable, Sendable {
     let id: String
     let isFolder: Bool
     let primary: LibraryEntry       // folder, or the shown photo (JPEG preferred)
@@ -56,6 +56,7 @@ final class LibraryModel {
     let photoIndex = PhotoIndex()
     @ObservationIgnored private var countTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeTask: Task<Void, Never>?
+    @ObservationIgnored private var analyzeEpoch = 0
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var nasRootPath: String
     @ObservationIgnored private var cardRootPath: String?
@@ -162,28 +163,32 @@ final class LibraryModel {
 
     // MARK: - Delete + RAW helpers
 
-    /// The RAW file that pairs with this photo, if one exists on disk (even when
-    /// it isn't in the current view, e.g. content-search results).
-    func rawSibling(of url: URL) -> URL? {
-        siblingFiles(of: url).first {
-            MediaKind.classify(ext: $0.pathExtension) == .raw
+    /// Files a delete will remove: everything grouped into the tile, plus any
+    /// on-disk RAW or sidecar (XMP/THM/…) that shares the basename. Deliberately
+    /// does NOT sweep in unrelated same-stem files (a .txt/.mp3) or a video that
+    /// wasn't already part of the tile. Does a directory listing — call off-main.
+    nonisolated static func deleteTargets(for item: DisplayItem) -> [URL] {
+        var set = Set(item.all.map(\.url))
+        let primary = item.primary.url
+        let dir = primary.deletingLastPathComponent()
+        let base = primary.deletingPathExtension().lastPathComponent.lowercased()
+        if let items = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for u in items where u.deletingPathExtension().lastPathComponent.lowercased() == base {
+                let ext = u.pathExtension.lowercased()
+                if MediaKind.rawExts.contains(ext) || MediaKind.sidecarExts.contains(ext) { set.insert(u) }
+            }
         }
-    }
-
-    /// All files in the same folder sharing this file's basename — the JPEG, its
-    /// RAW, and any sidecars (THM/XMP). Deleting a photo removes the whole set.
-    func siblingFiles(of url: URL) -> [URL] {
-        let dir = url.deletingLastPathComponent()
-        let base = url.deletingPathExtension().lastPathComponent.lowercased()
-        guard let items = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return [url] }
-        let sibs = items.filter { $0.deletingPathExtension().lastPathComponent.lowercased() == base }
-        return sibs.isEmpty ? [url] : sibs
+        return Array(set)
     }
 
     func delete(_ item: DisplayItem) async {
-        let targets = siblingFiles(of: item.primary.url)
-        for url in targets { try? FileManager.default.removeItem(at: url) }
+        let targets = await Task.detached(priority: .userInitiated) {
+            Self.deleteTargets(for: item)
+        }.value
+        await Task.detached(priority: .userInitiated) {
+            for url in targets { try? FileManager.default.removeItem(at: url) }
+        }.value
         await photoIndex.remove(paths: targets.map(\.path))
         await photoIndex.save()
         if isSearching { runSearch() } else { loadEntries() }
@@ -233,6 +238,8 @@ final class LibraryModel {
         analyzing = true
         analyzeDone = 0
         analyzeTotal = 0
+        analyzeEpoch += 1
+        let epoch = analyzeEpoch
         let browser = self.browser
         let analyzer = self.analyzer
         let index = photoIndex
@@ -240,6 +247,8 @@ final class LibraryModel {
             let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
             // One representative per RAW+JPEG pair — no point analyzing both.
             let primaries = Self.primaryEntries(media)
+            // Drop index entries for photos that no longer exist under this root.
+            await index.pruneMissing(underPrefix: root.path, keeping: Set(media.map(\.id)))
             var todo: [LibraryEntry] = []
             for e in primaries where await index.needsAnalysis(path: e.id, mtime: e.modified) {
                 todo.append(e)
@@ -260,21 +269,23 @@ final class LibraryModel {
             while i < todo.count {
                 if Task.isCancelled { break }
                 let batch = Array(todo[i..<min(i + width, todo.count)])
-                await withTaskGroup(of: (String, PhotoRecord?).self) { group in
+                await withTaskGroup(of: (String, PhotoRecord).self) { group in
                     for e in batch {
                         group.addTask {
-                            let r = analyzer.analyze(url: e.url).map {
-                                PhotoRecord(path: e.id, size: e.size, mtime: e.modified,
-                                            labels: $0.labels, animals: $0.animals)
-                            }
-                            return (e.id, r)
+                            // Always store a record (empty if Vision found nothing)
+                            // so an unlabelable photo isn't re-analyzed every run.
+                            let result = analyzer.analyze(url: e.url)
+                            let rec = PhotoRecord(path: e.id, size: e.size, mtime: e.modified,
+                                                  labels: result?.labels ?? [], animals: result?.animals ?? [])
+                            return (e.id, rec)
                         }
                     }
                     for await (path, rec) in group {
-                        if let rec { await index.put(rec) }
+                        await index.put(rec)
                         await MainActor.run { [weak self] in
                             self?.analyzeDone += 1
-                            if let rec { self?.tagsByPath[path] = Array(rec.tags.prefix(3)) }
+                            let tags = Array(rec.tags.prefix(3))
+                            if !tags.isEmpty { self?.tagsByPath[path] = tags }
                         }
                     }
                 }
@@ -283,6 +294,8 @@ final class LibraryModel {
             await index.save()
             guard let self else { return }
             await MainActor.run {
+                // Ignore a stale task that a newer Analyze run superseded.
+                guard self.analyzeEpoch == epoch else { return }
                 self.analyzing = false
                 self.refreshSuggestions()
                 if self.isSearching { self.runSearch() }

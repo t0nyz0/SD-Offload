@@ -63,7 +63,9 @@ public actor StagingBudget {
     private let capBytes: Int64
     private let headroomBytes: Int64
     private var committed: Int64 = 0
+    private var reserved: [UUID: Int64] = [:]   // keyed so release balances reserve exactly
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var draining = false
 
     public init(stagingPath: String, capBytes: Int64, headroomBytes: Int64) {
         self.stagingPath = stagingPath
@@ -71,18 +73,42 @@ public actor StagingBudget {
         self.headroomBytes = headroomBytes
     }
 
-    public func reserve(_ bytes: Int64) async {
-        while !canReserve(bytes) {
+    /// Reserve for a specific file. Idempotent per id (re-reserving replaces the
+    /// prior amount). Returns early without reserving if the session is draining.
+    public func reserve(_ id: UUID, _ bytes: Int64) async {
+        if let old = reserved[id] { committed = max(0, committed - old); reserved[id] = nil }
+        while !draining && !canReserve(bytes) {
             await withCheckedContinuation { waiters.append($0) }
         }
+        guard !draining else { return }
         committed += bytes
+        reserved[id] = bytes
     }
 
-    public func release(_ bytes: Int64) {
+    /// Release a file's reservation. No-op if it was never reserved (e.g. a file
+    /// preloaded on resume) — so accounting never goes negative or double-counts.
+    public func release(_ id: UUID) {
+        guard let bytes = reserved.removeValue(forKey: id) else { return }
         committed = max(0, committed - bytes)
+        wakeWaiters()
+    }
+
+    /// Session ending (or card removed): unblock everything parked in reserve()
+    /// so cancelled workers can exit instead of leaking a suspended continuation.
+    public func drain() {
+        draining = true
+        wakeWaiters()
+    }
+
+    /// Card re-inserted: allow reservations again after a drain().
+    public func resumeReservations() {
+        draining = false
+    }
+
+    private func wakeWaiters() {
         let woken = waiters
         waiters.removeAll()
-        for waiter in woken { waiter.resume() }   // each re-checks in its reserve() loop
+        for waiter in woken { waiter.resume() }
     }
 
     public var committedBytes: Int64 { committed }

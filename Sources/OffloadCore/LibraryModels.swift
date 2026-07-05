@@ -6,6 +6,8 @@ public enum MediaKind: String, Codable, Sendable {
     public static let photoExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tiff", "tif", "bmp"]
     public static let rawExts: Set<String> = ["arw", "cr2", "cr3", "nef", "raf", "dng", "orf", "rw2", "pef", "srw", "raw", "3fr"]
     public static let videoExts: Set<String> = ["mov", "mp4", "m4v", "avi", "mts", "m2ts", "mxf", "braw"]
+    /// Non-media companion files that belong to a photo (edit/metadata sidecars).
+    public static let sidecarExts: Set<String> = ["xmp", "thm", "aae", "dop", "pp3", "on1", "cos", "lrv"]
 
     public static func classify(ext: String) -> MediaKind? {
         let e = ext.lowercased()

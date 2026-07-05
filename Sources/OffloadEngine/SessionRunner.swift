@@ -163,10 +163,10 @@ public actor SessionRunner {
                 // Cancelled mid-file (user cancel or card gone): partial is
                 // already unlinked by ChunkedIO; roll the state back.
                 await journal.transition(file: file.id, to: .pending, in: sessionID)
-                await budget.release(file.size)
+                await budget.release(file.id)
                 return
             } catch {
-                await budget.release(file.size)
+                await budget.release(file.id)
                 await handleHop1Error(file, error)
             }
         }
@@ -174,7 +174,7 @@ public actor SessionRunner {
 
     private nonisolated func stageOne(_ file: FileRecord) async throws {
         let started = Date()
-        await budget.reserve(file.size)
+        await budget.reserve(file.id, file.size)
         await journal.transition(file: file.id, to: .copying, in: sessionID)
         await setCurrentFile(file.fileName)
 
@@ -266,7 +266,7 @@ public actor SessionRunner {
                     // Staged bytes don't match what we read from the card —
                     // purge and re-copy (attempts guard applies).
                     staging.purgeFile(session: sessionID, file: file)
-                    await budget.release(file.size)
+                    await budget.release(file.id)
                     await journal.transition(file: file.id, to: .pending, in: sessionID)
                     await handleVerifyMismatch(file, stage: "staging verification")
                 }
@@ -274,7 +274,7 @@ public actor SessionRunner {
                 return
             } catch {
                 staging.purgeFile(session: sessionID, file: file)
-                await budget.release(file.size)
+                await budget.release(file.id)
                 await journal.transition(file: file.id, to: .pending, in: sessionID)
                 await handleVerifyMismatch(file, stage: "staging verification")
             }
@@ -321,6 +321,7 @@ public actor SessionRunner {
     private nonisolated func uploadOne(_ file: FileRecord) async throws {
         guard let sourceHash = file.sourceHashHex else {
             // Should not happen (hash is a milestone flush) — recover by re-copy.
+            await budget.release(file.id)   // free this file's reservation; stageOne re-reserves
             await journal.transition(file: file.id, to: .pending, in: sessionID)
             await copyQueue.send(FileRecord(id: file.id, relPath: file.relPath, size: file.size,
                                             mtime: file.mtime, creationDate: file.creationDate,
@@ -379,7 +380,7 @@ public actor SessionRunner {
             guard result.sha256Hex == sourceHash else {
                 try? fm.removeItem(at: partialURL)
                 staging.purgeFile(session: sessionID, file: file)
-                await budget.release(file.size)
+                await budget.release(file.id)
                 await journal.transition(file: file.id, to: .pending, in: sessionID)
                 await handleVerifyMismatch(file, stage: "staging re-read")
                 return
@@ -440,7 +441,7 @@ public actor SessionRunner {
         if config.keepStagedDays == 0 {
             staging.purgeFile(session: sessionID, file: file)
         }
-        Task { await budget.release(file.size) }
+        Task { await budget.release(file.id) }
         settle()
     }
 
@@ -805,6 +806,7 @@ public actor SessionRunner {
         wipeConsentContinuation?.resume(returning: false)
         wipeConsentContinuation = nil
         await pauseGate.open()   // let cancelled workers unwind
+        await budget.drain()     // wake any worker parked in reserve()
         // Unblock run() if it is waiting on settlement.
         allSettledContinuation?.resume()
         allSettledContinuation = nil
@@ -814,6 +816,7 @@ public actor SessionRunner {
         cardPresent = false
         for task in hop1Tasks { task.cancel() }
         hop1Tasks.removeAll()
+        await budget.drain()     // wake hop-1 workers parked in reserve() so they exit
         await journal.setSessionState(.pausedCardGone, in: sessionID)
         emit(.phase(.pausedCardGone))
     }
@@ -822,6 +825,7 @@ public actor SessionRunner {
     /// manifest into the journal. Rebuild the copy queue from journal state.
     public func cardReturned() async {
         cardPresent = true
+        await budget.resumeReservations()
         guard let record = await journal.session(id: sessionID) else { return }
         totalFiles = record.files.count
         settledFiles = record.files.filter { $0.state.isTerminal }.count

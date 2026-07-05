@@ -43,6 +43,28 @@ final class ThumbnailLoader: @unchecked Sendable {
     init() {
         cacheDir = Paths.appSupport.appendingPathComponent("ThumbCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let dir = cacheDir
+        Task.detached(priority: .background) { Self.trimCache(dir, maxBytes: 500 << 20) }
+    }
+
+    /// Evict the oldest on-disk thumbnails so the cache can't grow forever.
+    private static func trimCache(_ dir: URL, maxBytes: Int64) {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys) else { return }
+        var total: Int64 = 0
+        let entries = items.compactMap { url -> (URL, Int64, Date)? in
+            guard let v = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
+            let size = Int64(v.fileSize ?? 0)
+            total += size
+            return (url, size, v.contentAccessDate ?? v.contentModificationDate ?? .distantPast)
+        }
+        guard total > maxBytes else { return }
+        for (url, size, _) in entries.sorted(by: { $0.2 < $1.2 }) {   // oldest first
+            if total <= maxBytes { break }
+            try? fm.removeItem(at: url)
+            total -= size
+        }
     }
 
     private func key(path: String, size: Int64, mtime: Date, side: CGFloat) -> String {
@@ -65,7 +87,10 @@ final class ThumbnailLoader: @unchecked Sendable {
         defer { Task { await limiter.release() } }
         if Task.isCancelled { return nil }
 
-        let img = await Task.detached(priority: .utility) { Self.generate(url: url, side: side) }.value
+        // ImageIO (embedded preview) off the main actor; QuickLook fallback is
+        // its own async bridge — never a blocking wait on a cooperative thread.
+        var img = await Task.detached(priority: .utility) { Self.cgThumbnail(url: url, side: side) }.value
+        if img == nil { img = await Self.qlThumbnail(url: url, side: side) }
         if let img {
             mem.setObject(img, forKey: k as NSString)
             Self.writeJPEG(img, to: diskURL)
@@ -73,36 +98,32 @@ final class ThumbnailLoader: @unchecked Sendable {
         return img
     }
 
-    // MARK: - Generation (off-main)
+    // MARK: - Generation
 
-    private static func generate(url: URL, side: CGFloat) -> NSImage? {
-        let maxPixel = Int(side * 2)
+    private static func cgThumbnail(url: URL, side: CGFloat) -> NSImage? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
             kCGImageSourceCreateThumbnailFromImageAlways: false,   // prefer the embedded preview
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceThumbnailMaxPixelSize: Int(side * 2),
             kCGImageSourceCreateThumbnailWithTransform: true,      // honor EXIF orientation
         ]
-        if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-           let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) {
-            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        }
-        return qlFallback(url: url, side: side)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
     /// QuickLook fallback for anything ImageIO can't thumbnail (some video/RAW).
-    private static func qlFallback(url: URL, side: CGFloat) -> NSImage? {
-        let request = QLThumbnailGenerator.Request(
-            fileAt: url, size: CGSize(width: side, height: side), scale: 2,
-            representationTypes: .thumbnail)
-        let sem = DispatchSemaphore(value: 0)
-        var result: NSImage?
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
-            result = rep?.nsImage
-            sem.signal()
+    /// Bridged via a continuation — QuickLook runs on its own queue, so we never
+    /// block a Swift-concurrency cooperative thread.
+    private static func qlThumbnail(url: URL, side: CGFloat) async -> NSImage? {
+        await withCheckedContinuation { (cont: CheckedContinuation<NSImage?, Never>) in
+            let request = QLThumbnailGenerator.Request(
+                fileAt: url, size: CGSize(width: side, height: side), scale: 2,
+                representationTypes: .thumbnail)
+            QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
+                cont.resume(returning: rep?.nsImage)
+            }
         }
-        _ = sem.wait(timeout: .now() + 20)
-        return result
     }
 
     private static func writeJPEG(_ image: NSImage, to url: URL) {

@@ -72,6 +72,22 @@ public actor Journal {
         try? FileManager.default.removeItem(at: fileURL(id))
         active.removeValue(forKey: id)
         dirty.remove(id)
+        trimHistory(keepLast: 300)
+    }
+
+    /// Keep History bounded — prune the oldest session files beyond `keepLast`.
+    private func trimHistory(keepLast: Int) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: historyDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let files = entries.filter { $0.pathExtension == "json" }
+        guard files.count > keepLast else { return }
+        let sorted = files.sorted {
+            let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return a < b   // oldest first
+        }
+        for url in sorted.prefix(files.count - keepLast) { try? fm.removeItem(at: url) }
     }
 
     /// Recent finished sessions, newest first.

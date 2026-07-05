@@ -250,8 +250,15 @@ private struct LibraryGrid: View {
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { item in
-            Text("Permanently deletes \(item.primary.name)\(item.raw != nil || model.rawSibling(of: item.primary.url) != nil ? " and its RAW" : "") from the NAS. This can't be undone.")
+            Text(deleteMessage(item))
         }
+    }
+
+    private func deleteMessage(_ item: DisplayItem) -> String {
+        let names = item.all.map { ($0.id as NSString).lastPathComponent }
+        let listed = names.count <= 3 ? names.joined(separator: ", ")
+            : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
+        return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
     }
 
     @ViewBuilder
@@ -261,12 +268,16 @@ private struct LibraryGrid: View {
             Button("Reveal in Finder") { reveal(item.primary.url) }
         } else {
             Button("Open") { NSWorkspace.shared.open(item.primary.url) }
-            if let rawURL = item.raw?.url ?? model.rawSibling(of: item.primary.url) {
+            if let rawURL = item.raw?.url {
                 Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
             }
             Button("Reveal in Finder") { reveal(item.primary.url) }
-            Divider()
-            Button("Delete…", role: .destructive) { pendingDelete = item }
+            // Delete manages the NAS archive only — never the card (its originals
+            // are protected until the verified offload wipes them).
+            if model.source == .nas {
+                Divider()
+                Button("Delete…", role: .destructive) { pendingDelete = item }
+            }
         }
     }
 

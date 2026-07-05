@@ -27,6 +27,7 @@ public final class SpeedMeter: @unchecked Sendable {
     private var displayETAAllSafe = EWMA(tau: 3)
     private let startedAt = Date()
     private var timeline: [SpeedSample] = []
+    private var lastTimelineAt = Date.distantPast
 
     public init() {}
 
@@ -64,9 +65,15 @@ public final class SpeedMeter: @unchecked Sendable {
         }
         lastSampleAt = now
         lastSampleBytes = bytes
-        timeline.append(SpeedSample(t: now.timeIntervalSince(startedAt),
-                                    sdReadBps: rates[Stage.sdRead.rawValue].value ?? 0,
-                                    nasWriteBps: rates[Stage.nasWrite.rawValue].value ?? 0))
+        // Rates update at 10 Hz, but the stored timeline only needs ~1 Hz — keep
+        // it there so a multi-hour session doesn't accumulate 100k+ samples in
+        // memory (finals() downsamples the survivors again for persistence).
+        if now.timeIntervalSince(lastTimelineAt) >= 1.0 {
+            lastTimelineAt = now
+            timeline.append(SpeedSample(t: now.timeIntervalSince(startedAt),
+                                        sdReadBps: rates[Stage.sdRead.rawValue].value ?? 0,
+                                        nasWriteBps: rates[Stage.nasWrite.rawValue].value ?? 0))
+        }
     }
 
     // MARK: - Read

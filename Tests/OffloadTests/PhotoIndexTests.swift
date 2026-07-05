@@ -65,6 +65,30 @@ final class PhotoIndexTests: XCTestCase {
         XCTAssertTrue(changed)
     }
 
+    func testPrefixMatchIsBoundaryAware() async {
+        let index = PhotoIndex(file: file)
+        await index.put(rec("/nas/Photos/a.jpg", labels: ["dog"]))
+        await index.put(rec("/nas/PhotosBackup/b.jpg", labels: ["dog"]))   // sibling with shared name prefix
+        let scoped = await index.search("dog", underPrefix: "/nas/Photos")
+        XCTAssertEqual(scoped, ["/nas/Photos/a.jpg"], "must not leak into /nas/PhotosBackup")
+        let count = await index.analyzedCount(underPrefix: "/nas/Photos")
+        XCTAssertEqual(count, 1)
+    }
+
+    func testPruneMissingDropsVanishedFiles() async {
+        let index = PhotoIndex(file: file)
+        await index.put(rec("/nas/a.jpg", labels: ["dog"]))
+        await index.put(rec("/nas/b.jpg", labels: ["cat"]))
+        await index.put(rec("/other/c.jpg", labels: ["dog"]))
+        await index.pruneMissing(underPrefix: "/nas", keeping: ["/nas/a.jpg"])   // b.jpg vanished
+        let dogs = await index.search("dog")
+        XCTAssertEqual(dogs, ["/nas/a.jpg", "/other/c.jpg"])   // b gone, /other untouched
+        let b = await index.record("/nas/b.jpg")
+        XCTAssertNil(b)
+        let c = await index.record("/other/c.jpg")
+        XCTAssertNotNil(c)
+    }
+
     func testPersistenceRoundtrip() async {
         let a = PhotoIndex(file: file)
         await a.put(rec("/nas/a.jpg", labels: ["dog", "grass"], animals: ["Dog"]))

@@ -66,6 +66,23 @@ public actor PhotoIndex {
         for p in paths where records[p] != nil { records.removeValue(forKey: p); dirty = true }
     }
 
+    /// Drop entries under `prefix` whose file is no longer in `keeping` (deleted
+    /// or moved outside the app) so the index doesn't grow stale forever.
+    public func pruneMissing(underPrefix prefix: String, keeping: Set<String>) {
+        for path in records.keys where Self.isUnder(path, prefix) && !keeping.contains(path) {
+            records.removeValue(forKey: path)
+            dirty = true
+        }
+    }
+
+    /// True path containment (boundary-aware): "/nas/Photos" contains
+    /// "/nas/Photos/a.jpg" but NOT "/nas/PhotosBackup/a.jpg".
+    private static func isUnder(_ path: String, _ prefix: String) -> Bool {
+        if path == prefix { return true }
+        let p = prefix.hasSuffix("/") ? prefix : prefix + "/"
+        return path.hasPrefix(p)
+    }
+
     public func record(_ path: String) -> PhotoRecord? { records[path] }
 
     public func records(forPaths paths: [String]) -> [String: PhotoRecord] {
@@ -81,7 +98,7 @@ public actor PhotoIndex {
     }
 
     public func analyzedCount(underPrefix prefix: String) -> Int {
-        records.keys.filter { $0.hasPrefix(prefix) }.count
+        records.keys.filter { Self.isUnder($0, prefix) }.count
     }
 
     /// Paths whose contents match ALL space-separated query terms.
@@ -90,7 +107,7 @@ public actor PhotoIndex {
         guard !terms.isEmpty else { return [] }
         var out = Set<String>()
         for (path, rec) in records {
-            if let prefix, !path.hasPrefix(prefix) { continue }
+            if let prefix, !Self.isUnder(path, prefix) { continue }
             let hay = rec.searchText
             if terms.allSatisfy({ hay.contains($0) }) { out.insert(path) }
         }
@@ -100,7 +117,7 @@ public actor PhotoIndex {
     /// Top content tags with counts — the "what's in your library" suggestions.
     public func topTags(underPrefix prefix: String, limit: Int = 24) -> [(tag: String, count: Int)] {
         var counts: [String: Int] = [:]
-        for (path, rec) in records where path.hasPrefix(prefix) {
+        for (path, rec) in records where Self.isUnder(path, prefix) {
             for t in rec.tags.prefix(4) { counts[t, default: 0] += 1 }
         }
         return counts.sorted { $0.value > $1.value }.prefix(limit).map { (tag: $0.key, count: $0.value) }

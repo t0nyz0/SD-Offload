@@ -38,6 +38,10 @@ final class AppState {
         engine.start()
         refreshNASGlance()
         refreshRecent()
+        // The notification "Eject now" action posts this; wire it to the engine.
+        NotificationCenter.default.addObserver(forName: .offloadEjectRequested, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.ejectTapped() }
+        }
     }
 
     private static func makeEngine(settings: SettingsStore, journal: Journal) -> any EngineControlling {
@@ -73,10 +77,16 @@ final class AppState {
         switch event {
         case .cardMounted(let card):
             cardMountPath = card.mountPath
+            if settings.config.notifyCardDetected {
+                NotificationManager.shared.notifyCardDetected(cardName: card.volumeName)
+            }
 
         case .cardAwaitingConsent(let card):
             pendingConsent = card
             cardMountPath = card.mountPath
+            if settings.config.notifyCardDetected {
+                NotificationManager.shared.notifyCardDetected(cardName: card.volumeName)
+            }
             recomputeMenuBar()
 
         case .cardGone:

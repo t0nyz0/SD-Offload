@@ -3,6 +3,29 @@
 All notable changes to Offload. Format loosely follows [Keep a Changelog];
 the app version lives in `VERSION`, the build number is the git commit count.
 
+## [Unreleased]
+
+### Fixed (QA pass — adversarial full-app review)
+- **Delete no longer destroys un-warned files.** It only removes the photo, its
+  RAW, and known sidecars (XMP/THM/…) — never a same-name video or unrelated
+  file — and the confirmation lists exactly what will go. Delete is limited to
+  the NAS archive; card originals are never deletable from the Library.
+- **Thumbnails no longer stall the app.** The QuickLook fallback was blocking
+  Swift-concurrency threads (up to 20 s each); it's now a proper async bridge.
+  Directory listings for delete/RAW-lookup moved off the main thread.
+- Bounded resource use: on-disk thumbnail cache is capped and evicts oldest;
+  History directory is trimmed; the speed timeline is sampled at 1 Hz in memory;
+  the photo index prunes entries for files deleted outside the app.
+- Staging-budget accounting is now keyed per file (no release-without-reserve on
+  resume, no double-reserve), and workers parked awaiting budget are woken on
+  cancel / card removal instead of leaking.
+- Restarting Analyze no longer lets a stale run flip the UI out of "analyzing";
+  photos Vision can't label are recorded so they aren't re-scanned every run.
+- Content-search path scoping is boundary-aware (no leaking between folders that
+  share a name prefix).
+- Wired up the previously-inert "Eject now" notification action and the
+  "Card detected" notification toggle.
+
 ## [0.9.0] — 2026-07-04
 
 First feature-complete build. Insert an SD card → it copies to local staging,
