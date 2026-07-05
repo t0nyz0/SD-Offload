@@ -165,8 +165,8 @@ mid-upload, one file fails (wipe blocked), crash-and-resume, and a wrong card on
 Everything is in **Settings** (from the popover's gear menu):
 
 - **Destination** — the mounted NAS path (default `/Volumes/Photos`; the share name is yours to set).
-- **Ingest scope** — DCIM-only (default) or the whole card; remembered per-card policy.
-- **Wipe policy** — after NAS-verify (default), after staging-verify, or ask each time; auto-eject toggle.
+- **Ingest scope** — camera media roots only (default) or the whole card; remembered per-card policy.
+- **Wipe policy** — **ask every time (default)**, or automatically after NAS-verify / after staging-verify; auto-eject toggle.
 - **Staging** — location and purge policy (purge on verify by default; keep-N-days optional).
 - **Performance** — parallel NAS uploads (verification is always uncached, regardless).
 - **General** — notifications, completion sound, launch at login.
@@ -190,6 +190,14 @@ A personal tool, built to a high bar and shared so others can read it, learn fro
 themselves. It is **not** on the App Store and is ad-hoc signed — you build it yourself (first launch
 will ask for Removable Volumes and Network Volumes permission). It intentionally has **no** reader
 accounts, telemetry, or cloud services; all AI runs on-device.
+
+**Security posture:** no App Sandbox (it needs full access to removable + network volumes), no
+hardened runtime, no notarization — so build it from source and inspect the destructive path
+yourself ([`WipeGate.swift`](Sources/OffloadEngine/WipeGate.swift)). No prebuilt binaries are
+published. NAS credentials live in the login Keychain, device-only (never synced).
+
+**Independent and open-source** — unaffiliated with Pomfort's "Offload Manager", [offload.app](https://offload.app/),
+or other similarly-named tools.
 
 > ⚠️ **Disclaimer.** Offload can erase removable media. It is provided **as-is, with no warranty**
 > — you are responsible for your data and your configuration. The safe-wipe gate is designed to be
