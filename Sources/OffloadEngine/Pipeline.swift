@@ -124,3 +124,25 @@ public actor StagingBudget {
         return true
     }
 }
+
+/// Serializes NAS destination-directory creation so each `YYYY/MM/DD` dir is
+/// created once per session even under concurrent hop2 workers. Creation happens
+/// inside the actor's critical section, so a second worker can never start a
+/// write into a dir the first worker hasn't finished creating.
+/// `createDirectory(withIntermediateDirectories: true)` is idempotent, so this
+/// is safe even if the dir already exists on the NAS.
+public actor NASDirCache {
+    private var created: Set<String> = []
+
+    public init() {}
+
+    public func ensure(_ dir: URL) throws {
+        if created.contains(dir.path) { return }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        created.insert(dir.path)
+    }
+
+    /// Forget created dirs (after a destination IO error) so recovery re-creates
+    /// a dir that may have vanished with a dropped mount.
+    public func reset() { created.removeAll() }
+}

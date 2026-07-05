@@ -111,7 +111,13 @@ struct ActiveSessionView: View {
         case .pausedCardGone: "card removed"
         case .wiping: "wiping card"
         case .ejecting: "ejecting"
-        default: vm.hop1Fraction >= 1 ? "card read — uploading" : "complete"
+        default:
+            // Name the phase the user is actually in. The card read (hop1)
+            // finishes well before the NAS upload (hop2); once it's done the
+            // work is uploading, then verifying — never "complete" mid-transfer.
+            if vm.hop1Fraction < 1 { "copying from card" }
+            else if vm.hop2Fraction < 1 { "uploading to NAS" }
+            else { "verifying on NAS" }
         }
     }
 

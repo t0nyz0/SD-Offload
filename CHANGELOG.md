@@ -29,6 +29,20 @@ the app version lives in `VERSION`, the build number is the git commit count.
   Clear, and ⌦ or right-click → "Delete N Photos" removes them all at once (each
   with its RAW/sidecars), with a single confirmation.
 
+### Changed
+- **Faster NAS upload start.** The slow-then-ramp start was mostly per-file SMB
+  overhead that's fully exposed before upload concurrency builds up. Three safe
+  wins cut it: each `YYYY/MM/DD` destination dir is now created once per session
+  (not re-`mkdir`'d per file); the per-file NAS health check honors a 5-second
+  cache instead of forcing a `statfs` round-trip before every file (the wipe gate
+  and post-error path still force a fresh check); and SMB write chunks are 16 MiB
+  (was 8), halving write syscalls. None of these touch verification.
+- **Clearer "uploading to NAS" status.** The active-transfer popover now names the
+  real phase — "copying from card" → "uploading to NAS" → "verifying on NAS" —
+  instead of the old "card read — uploading" (and it no longer shows "complete"
+  while the card is still being read). Each transfer row (CARD → MAC, MAC → NAS)
+  now shows its own percentage, so upload progress is visible at a glance.
+
 ### Fixed
 - **Data-safety: the wipe-gating NAS read-back is now always uncached.** The
   end-to-end verify (and the collision/dedup hash) previously defaulted to a

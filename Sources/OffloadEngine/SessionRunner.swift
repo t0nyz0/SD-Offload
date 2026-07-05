@@ -46,6 +46,12 @@ public actor SessionRunner {
     private var wipeCancelled = false
     private var waitingForNAS = false
     private var sessionStartedAt = Date()
+    // Creates each NAS date dir once per session (photos cluster in 1–3 dirs),
+    // so we don't pay a createDirectory SMB round-trip per file. It's a separate
+    // actor because the hop2 workers (and uploadOne) are nonisolated and run
+    // concurrently; creating inside its critical section stops a second worker
+    // writing into a dir the first hasn't created yet.
+    private let nasDirCache = NASDirCache()
 
     public init(sessionID: UUID, card: CardInfo, config: AppConfig, journal: Journal,
                 staging: StagingStore, nas: NASLocator, cardWatcher: CardWatcher,
@@ -339,7 +345,7 @@ public actor SessionRunner {
 
         if file.state != .uploaded {
             await journal.transition(file: file.id, to: .uploading, in: sessionID)
-            try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try await nasDirCache.ensure(destURL.deletingLastPathComponent())
 
             // Destination collision: same size ⇒ hash the existing NAS file
             // (that read IS a verify pass); equal ⇒ hash-proven duplicate.
@@ -452,6 +458,15 @@ public actor SessionRunner {
     }
 
     private nonisolated func waitForHealthyNAS() async throws -> URL {
+        // Fast path: honor NASLocator's ≤5 s health cache so the upload workers
+        // don't each funnel a forced statfs through the actor before every file
+        // (a per-file SMB round-trip that's fully exposed at the low-concurrency
+        // start). The wipe gate still forces a fresh check (force: true), and a
+        // destination IO error invalidates this cache, so a dropped mount can't
+        // be masked for more than one in-flight write.
+        if await nas.validateNow(force: false) == .healthy {
+            return URL(fileURLWithPath: config.nasRootPath, isDirectory: true)
+        }
         let emit = self.emit
         let runner = self
         return try await nas.ensureMountedAndHealthy { health in
@@ -481,6 +496,10 @@ public actor SessionRunner {
         if case .ioError(let err, _) = failure,
            RetryPolicy.isDestinationGone(err) || RetryPolicy.isOutOfSpace(err) {
             // Roll back and re-queue; the worker will park on NAS health.
+            // Force a fresh health check (bypass the ≤5 s cache) and re-create
+            // date dirs, since the mount may have dropped out from under us.
+            await nas.invalidate()
+            await nasDirCache.reset()
             await journal.transition(file: file.id, to: .stagedVerified, in: sessionID)
             if RetryPolicy.isOutOfSpace(err) {
                 emit(.attention(AttentionItem(severity: .error, title: "NAS is out of space",

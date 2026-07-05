@@ -15,11 +15,16 @@ struct StageProgressRow: View {
             ProgressView(value: min(1, max(0, fraction)))
                 .progressViewStyle(.linear)
                 .tint(tint)
+            Text("\(Int((min(1, max(0, fraction)) * 100).rounded()))%")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(width: 34, alignment: .trailing)
             Text(speedText)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-                .frame(width: 64, alignment: .trailing)
+                .frame(width: 62, alignment: .trailing)
         }
     }
 }

@@ -70,6 +70,11 @@ public actor NASLocator {
         return health
     }
 
+    /// Drop the cached health verdict so the next non-forced check re-evaluates.
+    /// Called after a destination IO error so the ≤5 s fast-path can't keep
+    /// reporting "healthy" for a mount that just disappeared.
+    public func invalidate() { cached = nil }
+
     /// Blocks until the share is healthy. Attempts a NetFS remount, then
     /// backoff-retries (5 s → 60 s). Ghost folders are NEVER retried past —
     /// the caller surfaces them loudly and waits for the user.

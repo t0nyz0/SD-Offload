@@ -5,8 +5,9 @@ import OffloadCore
 /// Raw-fd chunked copy/hash loops — the performance core.
 ///
 /// Discipline:
-/// - 8 MiB chunks: ~37 syscalls/s at 300 MB/s (overhead invisible), SMB2
-///   async-write credits stay full, pause/cancel latency ≤ ~30 ms.
+/// - 16 MiB chunks: halves write() syscalls vs 8 MiB and hands smbfs larger
+///   sequential runs to pack into SMB2 WRITEs / fill the credit window; overhead
+///   still invisible and pause/cancel latency stays ≤ ~60 ms.
 /// - F_NOCACHE on one-pass reads so multi-GB transfers don't evict the page
 ///   cache (our explicit big reads replace kernel readahead).
 /// - F_PREALLOCATE on staging (contiguous APFS extents + up-front ENOSPC);
@@ -17,7 +18,7 @@ import OffloadCore
 /// - Blocking syscalls run on a GCD utility queue; between chunks we're back
 ///   in async-land for Task.checkCancellation() + gate parking.
 public enum ChunkedIO {
-    public static let chunkSize = 8 << 20
+    public static let chunkSize = 16 << 20
 
     public struct CopyResult: Sendable {
         public let bytes: Int64
