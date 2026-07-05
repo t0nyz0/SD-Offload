@@ -123,11 +123,15 @@ one being offloaded.
 
 ## Screenshots
 
-The menu-bar popover is up top. Two more views round it out — drop `library.png`
-and `viewer.png` into [`docs/screenshots/`](docs/screenshots) and add:
+The menu-bar popover is up top. Here's the **Library** — on-device content tags and
+search across the whole archive, with per-photo EXIF under each frame:
+
+![Library — on-device content search, tags, and per-photo EXIF](docs/screenshots/library.png)
+
+One more to come — the in-app viewer with its info inspector. Drop `viewer.png` into
+[`docs/screenshots/`](docs/screenshots) and add:
 
 ```md
-![Library — folder collage cards + on-device search](docs/screenshots/library.png)
 ![In-app viewer with the info inspector](docs/screenshots/viewer.png)
 ```
 
