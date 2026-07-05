@@ -4,3 +4,9 @@
 build/
 DerivedData/
 *.xcodeproj
+
+# Signing material / secrets (never commit)
+*.p12
+*.mobileprovision
+.env
+.env.*
