@@ -50,6 +50,10 @@ struct LibraryWindow: View {
         } detail: {
             VStack(spacing: 0) {
                 LibraryHeader(model: model)
+                SearchBar(model: model)
+                if !model.isSearching && !model.suggestions.isEmpty {
+                    SuggestionChips(model: model)
+                }
                 Divider()
                 LibraryGrid(model: model)
             }
@@ -145,27 +149,103 @@ private struct Breadcrumb: View {
     }
 }
 
+private struct SearchBar: View {
+    @Bindable var model: LibraryModel
+
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
+                TextField("Search photos by content — try “dog”, “beach”, “food”…", text: $model.searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                if !model.searchText.isEmpty {
+                    Button { model.searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(DS.Palette.surfaceRaised.opacity(0.6), in: RoundedRectangle(cornerRadius: DS.Radius.s))
+
+            if model.analyzing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small).scaleEffect(0.8)
+                    Text("Analyzing \(model.analyzeDone)/\(model.analyzeTotal)")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    Button("Stop") { model.cancelAnalysis() }.controlSize(.small)
+                }
+            } else {
+                Button {
+                    model.analyzeCurrentSource()
+                } label: {
+                    Label("Analyze", systemImage: "sparkles")
+                }
+                .help("Scan this library on-device to tag what's in each photo, so you can search by content.")
+            }
+        }
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+    }
+}
+
+private struct SuggestionChips: View {
+    @Bindable var model: LibraryModel
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                Text("IN YOUR LIBRARY").dsLabel().padding(.trailing, 2)
+                ForEach(model.suggestions.prefix(20), id: \.tag) { s in
+                    Button {
+                        model.searchText = s.tag
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(s.tag.capitalized).font(.system(size: 11, weight: .medium))
+                            Text("\(s.count)").font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(DS.Palette.surfaceRaised.opacity(0.6), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.bottom, DS.Space.s)
+        }
+    }
+}
+
 private struct LibraryGrid: View {
     let model: LibraryModel
     private let columns = [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)]
 
     var body: some View {
         ScrollView {
-            if model.entries.isEmpty {
-                ContentUnavailableView("Nothing here",
-                                       systemImage: "photo.on.rectangle",
-                                       description: Text(model.loading ? "Loading…" : "This folder has no photos or subfolders."))
+            let entries = model.displayedEntries
+            if entries.isEmpty {
+                ContentUnavailableView(emptyTitle,
+                                       systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
+                                       description: Text(emptyDetail))
                     .padding(.top, 60)
             } else {
                 LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(model.entries) { entry in
-                        LibraryTile(entry: entry)
+                    ForEach(entries) { entry in
+                        LibraryTile(entry: entry, tags: model.tags(for: entry))
                             .onTapGesture(count: 2) { open(entry) }
                     }
                 }
                 .padding(DS.Space.l)
             }
         }
+    }
+
+    private var emptyTitle: String {
+        if model.isSearching { return "No matches" }
+        return "Nothing here"
+    }
+    private var emptyDetail: String {
+        if model.isSearching { return "No analyzed photos match “\(model.searchText)”. Try Analyze first, or a different word." }
+        return model.loading ? "Loading…" : "This folder has no photos or subfolders."
     }
 
     private func open(_ entry: LibraryEntry) {
@@ -179,6 +259,7 @@ private struct LibraryGrid: View {
 
 private struct LibraryTile: View {
     let entry: LibraryEntry
+    var tags: [String] = []
     @State private var thumb: NSImage?
 
     var body: some View {
@@ -207,6 +288,16 @@ private struct LibraryTile: View {
             .overlay(alignment: .topTrailing) {
                 if case .media(.raw) = entry.kind { badge("RAW") }
                 else if case .media(.video) = entry.kind { badge("▶") }
+            }
+            .overlay(alignment: .bottomLeading) {
+                if let top = tags.first {
+                    Text(top.capitalized)
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(DS.safe.opacity(0.85), in: Capsule())
+                        .foregroundStyle(.black)
+                        .padding(5)
+                }
             }
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.m).strokeBorder(DS.Palette.hairline, lineWidth: 1))
 

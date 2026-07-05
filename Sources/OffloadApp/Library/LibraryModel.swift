@@ -22,8 +22,21 @@ final class LibraryModel {
     private(set) var totalVolumeBytes: Int64 = 0
     private(set) var mounted = false
 
+    // Content search / AI analysis.
+    var searchText = "" { didSet { if searchText != oldValue { runSearch() } } }
+    private(set) var searchResults: [LibraryEntry]?      // nil = not searching
+    private(set) var analyzing = false
+    private(set) var analyzeDone = 0
+    private(set) var analyzeTotal = 0
+    private(set) var suggestions: [(tag: String, count: Int)] = []
+    private(set) var tagsByPath: [String: [String]] = [:]   // for tile overlays
+
     private let browser = LibraryBrowser()
+    private let analyzer = PhotoAnalyzer()
+    let photoIndex = PhotoIndex()
     @ObservationIgnored private var countTask: Task<Void, Never>?
+    @ObservationIgnored private var analyzeTask: Task<Void, Never>?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var nasRootPath: String
     @ObservationIgnored private var cardRootPath: String?
 
@@ -72,9 +85,124 @@ final class LibraryModel {
 
     private func openRoot(_ root: URL) {
         pathStack = [root]
+        searchText = ""
+        searchResults = nil
         refreshVolumeStats(root)
         loadEntries()
         startCount(root)
+        refreshSuggestions()
+    }
+
+    /// What the grid shows: content-search results when searching, else the
+    /// current folder's contents.
+    var displayedEntries: [LibraryEntry] { searchResults ?? entries }
+    var isSearching: Bool { searchResults != nil }
+
+    func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
+
+    // MARK: - Content search
+
+    private func runSearch() {
+        searchTask?.cancel()
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { searchResults = nil; return }
+        guard let prefix = rootURL?.path else { return }
+        let index = photoIndex
+        searchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))   // debounce typing
+            guard !Task.isCancelled else { return }
+            let paths = await index.search(query, underPrefix: prefix)
+            let recs = await index.records(forPaths: Array(paths))
+            guard let self, !Task.isCancelled else { return }
+            let results = recs.values
+                .map { rec -> LibraryEntry in
+                    let kind: LibraryEntry.Kind = MediaKind.classify(ext: (rec.path as NSString).pathExtension)
+                        .map { .media($0) } ?? .media(.photo)
+                    return LibraryEntry(id: rec.path, name: (rec.path as NSString).lastPathComponent,
+                                        kind: kind, size: rec.size, modified: rec.mtime)
+                }
+                .sorted { $0.name < $1.name }
+            self.searchResults = results
+        }
+    }
+
+    private func refreshSuggestions() {
+        guard let prefix = rootURL?.path else { return }
+        let index = photoIndex
+        Task { [weak self] in
+            let tags = await index.topTags(underPrefix: prefix)
+            guard let self else { return }
+            self.suggestions = tags
+        }
+    }
+
+    // MARK: - AI analysis
+
+    func analyzeCurrentSource() {
+        guard !analyzing, let root = rootURL else { return }
+        analyzing = true
+        analyzeDone = 0
+        analyzeTotal = 0
+        let browser = self.browser
+        let analyzer = self.analyzer
+        let index = photoIndex
+        analyzeTask = Task { [weak self] in
+            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
+            // Which still need analysis (new or changed since last time)?
+            var todo: [LibraryEntry] = []
+            for e in media where await index.needsAnalysis(path: e.id, mtime: e.modified) {
+                todo.append(e)
+            }
+            await MainActor.run { [weak self] in
+                self?.analyzeTotal = todo.count
+                self?.tagsByPath.reserveCapacity(media.count)
+            }
+            // Populate tag overlays for already-analyzed photos too.
+            let existing = await index.records(forPaths: media.map(\.id))
+            await MainActor.run { [weak self] in
+                for (p, r) in existing { self?.tagsByPath[p] = Array(r.tags.prefix(3)) }
+            }
+
+            // Analyze up to 4 at a time.
+            let width = 4
+            var i = 0
+            while i < todo.count {
+                if Task.isCancelled { break }
+                let batch = Array(todo[i..<min(i + width, todo.count)])
+                await withTaskGroup(of: (String, PhotoRecord?).self) { group in
+                    for e in batch {
+                        group.addTask {
+                            let r = analyzer.analyze(url: e.url).map {
+                                PhotoRecord(path: e.id, size: e.size, mtime: e.modified,
+                                            labels: $0.labels, animals: $0.animals)
+                            }
+                            return (e.id, r)
+                        }
+                    }
+                    for await (path, rec) in group {
+                        if let rec { await index.put(rec) }
+                        await MainActor.run { [weak self] in
+                            self?.analyzeDone += 1
+                            if let rec { self?.tagsByPath[path] = Array(rec.tags.prefix(3)) }
+                        }
+                    }
+                }
+                i += width
+            }
+            await index.save()
+            guard let self else { return }
+            await MainActor.run {
+                self.analyzing = false
+                self.refreshSuggestions()
+                if self.isSearching { self.runSearch() }
+            }
+        }
+    }
+
+    func cancelAnalysis() {
+        analyzeTask?.cancel()
+        analyzing = false
+        Task { await photoIndex.save() }
     }
 
     func enter(_ entry: LibraryEntry) {

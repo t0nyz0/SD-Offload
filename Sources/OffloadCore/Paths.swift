@@ -11,6 +11,7 @@ public enum Paths {
     public static var historyDir: URL { appSupport.appendingPathComponent("History", isDirectory: true) }
     public static var stagingRoot: URL { appSupport.appendingPathComponent("Staging", isDirectory: true) }
     public static var libraryIndexFile: URL { appSupport.appendingPathComponent("library-index.json") }
+    public static var photoIndexFile: URL { appSupport.appendingPathComponent("photo-index.json") }
 
     /// Hidden marker file written to a card to tie it to a session (per-card
     /// identity that survives synthesized-UUID collisions). Hidden, so the

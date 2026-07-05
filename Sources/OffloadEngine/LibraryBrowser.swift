@@ -34,6 +34,23 @@ public struct LibraryBrowser: Sendable {
         return folders + media
     }
 
+    /// Every media file under a root (for bulk content analysis).
+    public func allMedia(root: URL, isCancelled: @Sendable () -> Bool = { false }) -> [LibraryEntry] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return [] }
+        var out: [LibraryEntry] = []
+        for case let url as URL in e {
+            if isCancelled() { break }
+            guard let kind = MediaKind.classify(ext: url.pathExtension) else { continue }
+            let v = try? url.resourceValues(forKeys: Set(keys))
+            guard v?.isRegularFile == true else { continue }
+            out.append(LibraryEntry(id: url.path, name: url.lastPathComponent, kind: .media(kind),
+                                    size: Int64(v?.fileSize ?? 0), modified: v?.contentModificationDate ?? .distantPast))
+        }
+        return out
+    }
+
     /// Count media under a root, reporting partial progress as it walks. Cheap
     /// per-file (no hashing); one callback per ~250 files keeps the UI live.
     public func countMedia(root: URL, isCancelled: @Sendable () -> Bool = { false },
