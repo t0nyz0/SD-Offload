@@ -1,12 +1,12 @@
 #!/bin/bash
-# Assembles build/Offload.app from the SPM build.
+# Assembles "build/SD Offload.app" from the SPM build.
 # Version = VERSION file; build number = git commit count.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Offload"
-BIN_NAME="OffloadApp"
-BUNDLE_ID="com.t0nyz0.offload"
+APP_NAME="SD Offload"
+BIN_NAME="OffloadApp"          # SPM executable target name (internal, unchanged)
+BUNDLE_ID="com.t0nyz0.sdoffload"
 VERSION="$(cat VERSION | tr -d '[:space:]')"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 
@@ -69,9 +69,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.photography</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>Offload reads your SD card to copy photos to your NAS, and erases it only after every file is verified.</string>
+	<string>SD Offload reads your SD card to copy photos to your NAS, and erases it only after every file is verified.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
-	<string>Offload copies verified photos to your NAS share.</string>
+	<string>SD Offload copies verified photos to your NAS share.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© Tony Zolnoski</string>
 </dict>
@@ -84,4 +84,4 @@ PLIST
 codesign --force --deep -s - "$APP"
 
 echo "==> Built $APP"
-echo "    relaunch: pkill -9 -f $APP_NAME; open $APP"
+echo "    relaunch: pkill -9 -f 'SD Offload'; open \"$APP\""

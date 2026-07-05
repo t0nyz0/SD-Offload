@@ -1,9 +1,13 @@
 # Changelog
 
-All notable changes to Offload. Format loosely follows [Keep a Changelog];
+All notable changes to SD Offload. Format loosely follows [Keep a Changelog];
 the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
+
+### Renamed
+- **The app is now "SD Offload"** (was "Offload") — repo `t0nyz0/sd-offload`, bundle id
+  `com.t0nyz0.sdoffload`. Internal Swift module names (OffloadCore/Engine/App) are unchanged.
 
 ### Changed (public-release hardening)
 - **Card wipe now defaults to "Ask every time."** A new user opts in to unattended

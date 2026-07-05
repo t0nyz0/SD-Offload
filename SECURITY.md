@@ -1,6 +1,6 @@
 # Security Policy
 
-Offload copies files off SD cards, verifies them, and **erases the card** once every
+SD Offload copies files off SD cards, verifies them, and **erases the card** once every
 file is confirmed on the NAS. Because it deletes data, security and correctness reports
 are taken seriously.
 
@@ -8,7 +8,7 @@ are taken seriously.
 
 Please report security issues **privately**, not in public issues:
 
-- Use GitHub's **[Report a vulnerability](https://github.com/t0nyz0/offload/security/advisories/new)**
+- Use GitHub's **[Report a vulnerability](https://github.com/t0nyz0/sd-offload/security/advisories/new)**
   (the repo's Security → Advisories tab), or
 - open a normal issue **only** for non-sensitive, non-exploitable bugs.
 

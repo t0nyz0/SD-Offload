@@ -45,14 +45,14 @@ enum MenuBarState: Equatable {
 
     var accessibilityText: String {
         switch self {
-        case .idle: "Offload: waiting for a card"
-        case .scanning: "Offload: card detected, scanning"
-        case .transferring(let p): "Offload: transferring, \(p) percent"
-        case .verifying(let p): "Offload: verifying, \(p) percent"
-        case .uploading(let p): "Offload: uploading to NAS, \(p) percent, card is free"
-        case .paused(let p): "Offload: paused at \(p) percent"
-        case .doneFlash: "Offload: card offloaded"
-        case .attention: "Offload: needs attention"
+        case .idle: "SD Offload: waiting for a card"
+        case .scanning: "SD Offload: card detected, scanning"
+        case .transferring(let p): "SD Offload: transferring, \(p) percent"
+        case .verifying(let p): "SD Offload: verifying, \(p) percent"
+        case .uploading(let p): "SD Offload: uploading to NAS, \(p) percent, card is free"
+        case .paused(let p): "SD Offload: paused at \(p) percent"
+        case .doneFlash: "SD Offload: card offloaded"
+        case .attention: "SD Offload: needs attention"
         }
     }
 }

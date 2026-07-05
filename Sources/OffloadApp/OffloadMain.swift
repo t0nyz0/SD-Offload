@@ -45,7 +45,7 @@ struct OffloadMenuBarApp: App {
                 .environment(app)
         }
 
-        Window("Offload History", id: WindowID.history) {
+        Window("SD Offload History", id: WindowID.history) {
             HistoryWindow()
                 .environment(app)
         }

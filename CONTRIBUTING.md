@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking! Offload is a personal, open-source project — issues and PRs are
+Thanks for looking! SD Offload is a personal, open-source project — issues and PRs are
 welcome, but it's maintained on a best-effort basis and not every PR will be merged.
 
 ## Ground rules
@@ -20,7 +20,7 @@ welcome, but it's maintained on a best-effort basis and not every PR will be mer
 swift build                 # compile
 swift test                  # unit tests
 bash Scripts/harness.sh     # end-to-end wipe-path integration (fake card + NAS, no hardware)
-bash Scripts/build-app.sh   # assemble build/Offload.app
+bash Scripts/build-app.sh   # assemble build/SD Offload.app
 ```
 
 macOS 14+ on Apple Silicon, Swift 6 toolchain. See `CLAUDE.md` for the architecture and

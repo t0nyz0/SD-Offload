@@ -2,7 +2,7 @@ import Foundation
 import OffloadCore
 import OffloadEngine
 
-// Offload wipe-path harness. Creates a fake exFAT SD card (hdiutil DMG) full of
+// SD Offload wipe-path harness. Creates a fake exFAT SD card (hdiutil DMG) full of
 // EXIF-dated JPEGs and a local fake NAS, runs a REAL ingest session end to end,
 // and asserts every file landed on the NAS byte-identical and the card was
 // wiped and pruned. This exercises the actual copy/verify/wipe code — the same
@@ -24,7 +24,7 @@ try FileManager.default.createDirectory(at: staging, withIntermediateDirectories
 func log(_ s: String) { print("  \(s)") }
 func fail(_ s: String) -> Never { print("\n❌ FAIL: \(s)"); exit(1) }
 
-print("▸ Offload harness [\(mode)]")
+print("▸ SD Offload harness [\(mode)]")
 print("  workspace: \(workspace.path)")
 
 // --- Build the fake card -----------------------------------------------------

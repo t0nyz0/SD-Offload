@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="Sources/OffloadApp/Resources/icon-1024.png" width="128" alt="Offload">
+  <img src="Sources/OffloadApp/Resources/icon-1024.png" width="128" alt="SD Offload">
 </p>
 
-<h1 align="center">Offload</h1>
+<h1 align="center">SD Offload</h1>
 
 <p align="center"><strong>Insert an SD card. Walk away.</strong></p>
 
@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/menubar.png" width="380" alt="Offload menu-bar popover mid-transfer">
+  <img src="docs/screenshots/menubar.png" width="380" alt="SD Offload menu-bar popover mid-transfer">
   <br><sub><em>Mid-offload: card fully read, uploading to the NAS and verifying — live throughput, dual ETAs, and a card that won't be wiped until every file checks out.</em></sub>
 </p>
 
@@ -35,7 +35,7 @@ Finder copied the files, but did every byte actually land on the server? Did tha
 The honest answer is you don't know, so you either keep the card full "just in case" or you format
 it and hope.
 
-**Offload removes the hope.** It copies, verifies each file end-to-end with SHA-256, and wipes the
+**SD Offload removes the hope.** It copies, verifies each file end-to-end with SHA-256, and wipes the
 card only after it has *read the bytes back off the NAS* and confirmed they match what it read off
 the card. If a single file can't be verified, the card is left completely untouched.
 
@@ -72,7 +72,7 @@ one being offloaded.
 
 > **Why "uncached" matters.** Over SMB, `fsync` flushes your bytes to the server but doesn't
 > invalidate the client read cache — so a normal read-back can re-hash the bytes you just wrote out
-> of local memory and "pass" without ever touching the server. Offload's wipe-gating verify is
+> of local memory and "pass" without ever touching the server. SD Offload's wipe-gating verify is
 > always uncached, so a match *proves the server holds the data*. This is the whole ballgame for a
 > tool that erases cards.
 
@@ -144,9 +144,9 @@ dependencies.
 # Dev run (menu-bar app; no Dock icon)
 swift run OffloadApp
 
-# Build a signed .app bundle → build/Offload.app
+# Build a signed .app bundle → build/SD Offload.app
 bash Scripts/build-app.sh
-open build/Offload.app
+open build/SD Offload.app
 
 # Tests
 swift test
@@ -199,7 +199,7 @@ published. NAS credentials live in the login Keychain, device-only (never synced
 **Independent and open-source** — unaffiliated with Pomfort's "Offload Manager", [offload.app](https://offload.app/),
 or other similarly-named tools.
 
-> ⚠️ **Disclaimer.** Offload can erase removable media. It is provided **as-is, with no warranty**
+> ⚠️ **Disclaimer.** SD Offload can erase removable media. It is provided **as-is, with no warranty**
 > — you are responsible for your data and your configuration. The safe-wipe gate is designed to be
 > strict and fail-closed, but verify your NAS destination and test on a non-critical card before you
 > trust it with a real shoot. The author is not liable for any data loss. (Auto-wipe runs only after

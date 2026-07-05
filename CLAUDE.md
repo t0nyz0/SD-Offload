@@ -1,6 +1,6 @@
-# Offload — Agents Guide
+# SD Offload — Agents Guide
 
-Offload is a macOS menu bar app: insert an SD card → it copies
+SD Offload is a macOS menu bar app: insert an SD card → it copies
 everything to local staging, then to the NAS (`/Volumes/Photos`, date folders `YYYY/MM/DD`),
 verifies SHA-256 end-to-end, and only then wipes + ejects the card. Menu bar icon shows live
 progress; popover shows speeds, dual ETAs, history; Library window browses NAS + card.
@@ -19,7 +19,7 @@ progress; popover shows speeds, dual ETAs, history; Library window browses NAS +
    development. Use `OFFLOAD_DEMO=1` (scripted DemoEngine) or the DMG test harness
    (`Tests/` + `hdiutil`). Any change near deletion must keep the UI's "card has NOT been
    wiped" reassurance truthful.
-2. **Commit early, commit often, always push** (`t0nyz0/offload`, branch `main`). The repo owner
+2. **Commit early, commit often, always push** (`t0nyz0/sd-offload`, branch `main`). The repo owner
    is the sole author of every commit — never add a `Co-Authored-By` trailer.
 3. **No cron, no launchd.** The one sanctioned persistence is the `SMAppService` launch-at-login
    login item.
@@ -34,8 +34,8 @@ progress; popover shows speeds, dual ETAs, history; Library window browses NAS +
 swift build                      # compile check
 swift test                       # unit tests (safety-critical logic lives here)
 swift run OffloadApp             # dev run — menu bar icon appears; NO Dock icon
-bash Scripts/build-app.sh        # assemble build/Offload.app (LSUIElement, icon, ad-hoc signed)
-pkill -9 -f Offload; open build/Offload.app   # relaunch ritual
+bash Scripts/build-app.sh        # assemble build/SD Offload.app (LSUIElement, icon, ad-hoc signed)
+pkill -9 -f 'SD Offload'; open "build/SD Offload.app"   # relaunch ritual
 ```
 
 Caveats under bare `swift run` (no .app bundle): `UNUserNotificationCenter` would crash and

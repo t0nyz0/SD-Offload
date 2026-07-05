@@ -483,7 +483,7 @@ public actor SessionRunner {
         if case .ghostLocalFolder = health {
             emit(.attention(AttentionItem(severity: .error,
                                           title: "NAS path is a local folder",
-                                          detail: "\(config.nasRootPath) exists but the share is not mounted — refusing to write. Remount the share and Offload resumes automatically.")))
+                                          detail: "\(config.nasRootPath) exists but the share is not mounted — refusing to write. Remount the share and SD Offload resumes automatically.")))
         } else {
             emit(.attention(AttentionItem(severity: .info,
                                           title: "Waiting for the NAS",

@@ -27,7 +27,7 @@ struct FooterView: View {
                     Button("Library…") { openAux(WindowID.library) }
                     Button("History…") { openAux(WindowID.history) }
                     Divider()
-                    Button("Quit Offload") { NSApp.terminate(nil) }
+                    Button("Quit SD Offload") { NSApp.terminate(nil) }
                         .keyboardShortcut("q")
                 } label: {
                     Image(systemName: "gearshape")

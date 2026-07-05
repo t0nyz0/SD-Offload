@@ -21,7 +21,7 @@ struct IdleView: View {
             VStack(spacing: DS.Space.xs) {
                 Text("Waiting for a card")
                     .font(DS.Typo.title)
-                Text("Insert an SD card — Offload copies, verifies, and files it on your NAS, then clears the card.")
+                Text("Insert an SD card — SD Offload copies, verifies, and files it on your NAS, then clears the card.")
                     .font(DS.Typo.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
