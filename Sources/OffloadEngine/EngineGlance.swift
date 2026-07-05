@@ -14,6 +14,7 @@ public enum EngineGlance {
         // A network filesystem mounted exactly at our root — anything else
         // (apfs on "/", wrong share) is not a healthy destination.
         let isNetworkFS = ["smbfs", "afpfs", "nfs", "webdav"].contains(info.fsTypeName)
+            || config.testAllowLocalNAS
         let identityOK: Bool = {
             guard let expected = config.nasExpectedMntFromName else { return true } // not learned yet
             return info.mntFromName == expected

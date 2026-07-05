@@ -23,6 +23,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var cardNames: [String: String] = [:]
     /// Volume-name prefixes that classify as cards regardless of DA quirks (test DMGs).
     public var testVolumeAllowlist: [String] = ["OFFLOADTEST"]
+    /// TEST SEAM ONLY. When true, a plain local folder at the NAS path counts as
+    /// a healthy destination — lets the DMG harness stand in for a real share.
+    /// Never set in production: the ghost-mount guard is what stops the app from
+    /// silently filling the boot disk when the share is unmounted.
+    public var testAllowLocalNAS: Bool = false
 
     // Staging
     public var stagingRootPath: String = Paths.stagingRoot.path
@@ -57,6 +62,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         cardPolicies = try c.decodeIfPresent([String: CardPolicy].self, forKey: .cardPolicies) ?? d.cardPolicies
         cardNames = try c.decodeIfPresent([String: String].self, forKey: .cardNames) ?? d.cardNames
         testVolumeAllowlist = try c.decodeIfPresent([String].self, forKey: .testVolumeAllowlist) ?? d.testVolumeAllowlist
+        testAllowLocalNAS = try c.decodeIfPresent(Bool.self, forKey: .testAllowLocalNAS) ?? d.testAllowLocalNAS
         stagingRootPath = try c.decodeIfPresent(String.self, forKey: .stagingRootPath) ?? d.stagingRootPath
         stagingBudgetCapBytes = try c.decodeIfPresent(Int64.self, forKey: .stagingBudgetCapBytes) ?? d.stagingBudgetCapBytes
         stagingHeadroomBytes = try c.decodeIfPresent(Int64.self, forKey: .stagingHeadroomBytes) ?? d.stagingHeadroomBytes

@@ -44,6 +44,10 @@ public actor NASLocator {
         guard let fs = statfsInfo(path: config.nasRootPath) else { return .notMounted }
         let networkTypes = ["smbfs", "afpfs", "nfs", "webdav"]
         guard networkTypes.contains(fs.fsTypeName) else {
+            // TEST SEAM: a local folder is allowed to stand in for a share.
+            if config.testAllowLocalNAS {
+                return fs.isReadOnly ? .readOnly : .healthy
+            }
             // statfs succeeded, so the path exists — on a local volume. Ghost.
             return .ghostLocalFolder(fstype: fs.fsTypeName)
         }

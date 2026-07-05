@@ -17,6 +17,10 @@ let package = Package(
             dependencies: ["OffloadCore", "OffloadEngine"],
             resources: [.process("Resources")]
         ),
+        .executableTarget(
+            name: "offload-harness",
+            dependencies: ["OffloadCore", "OffloadEngine"]
+        ),
         .testTarget(
             name: "OffloadTests",
             dependencies: ["OffloadCore", "OffloadEngine"]

@@ -36,8 +36,14 @@ public struct IngestPlanner: Sendable {
 
     // MARK: - Scan
 
-    public func scan(cardRoot: URL, scope: IngestScope) -> [ScannedFile] {
+    public func scan(cardRoot rawRoot: URL, scope: IngestScope) -> [ScannedFile] {
         let fm = FileManager.default
+        // Compute relative paths by diffing resolved path COMPONENTS, not string
+        // replacement: FileManager's enumerator canonicalizes child URLs (e.g.
+        // /var → /private/var) independently of the root string, which breaks a
+        // naive prefix strip. Resolving both sides makes the root a true prefix.
+        let cardRoot = rawRoot.resolvingSymlinksInPath()
+        let rootComps = cardRoot.pathComponents
         var roots: [URL] = []
         switch scope {
         case .mediaRootsOnly:
@@ -71,7 +77,9 @@ public struct IngestPlanner: Sendable {
                 if values.isSymbolicLink == true { continue }
                 guard values.isRegularFile == true else { continue }
 
-                let relPath = url.path.replacingOccurrences(of: cardRoot.path + "/", with: "")
+                let comps = url.resolvingSymlinksInPath().pathComponents
+                guard comps.count > rootComps.count else { continue }
+                let relPath = comps[rootComps.count...].joined(separator: "/")
                 out.append(ScannedFile(relPath: relPath,
                                        size: Int64(values.fileSize ?? 0),
                                        mtime: values.contentModificationDate ?? .distantPast,
