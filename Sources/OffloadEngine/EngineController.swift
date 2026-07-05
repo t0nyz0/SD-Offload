@@ -47,6 +47,9 @@ private actor Coordinator {
 
     private(set) var runner: SessionRunner?
     private var pendingCandidates: [String: CandidateVolume] = [:]
+    // Cards inserted while a session is running — offloaded in turn, FIFO, so you
+    // can stack several readers and walk away.
+    private var queue: [CandidateVolume] = []
     private var lastVolume: CandidateVolume?
     private var eventsTask: Task<Void, Never>?
 
@@ -125,6 +128,7 @@ private actor Coordinator {
 
         case .volumeUnmounted(let uuid, _):
             pendingCandidates.removeValue(forKey: uuid)
+            queue.removeAll { $0.info.volumeUUID == uuid }   // a queued card pulled before its turn
             if let runner, runner.card.volumeUUID == uuid {
                 await runner.cardGone()
             } else {
@@ -153,9 +157,15 @@ private actor Coordinator {
 
     private func startSession(_ volume: CandidateVolume) async {
         guard runner == nil else {
-            emit(.attention(AttentionItem(severity: .info,
-                                          title: "Already offloading",
-                                          detail: "\(volume.info.volumeName) will be picked up when the current card finishes — re-insert it then.")))
+            // Busy — queue this card and start it automatically when the current
+            // one finishes (skip the card already running and any dup already queued).
+            if runner?.card.volumeUUID != volume.info.volumeUUID,
+               !queue.contains(where: { $0.info.volumeUUID == volume.info.volumeUUID }) {
+                queue.append(volume)
+                emit(.attention(AttentionItem(severity: .info,
+                                              title: "Card queued",
+                                              detail: "\(volume.info.volumeName) will start automatically when the current card finishes.")))
+            }
             return
         }
         lastVolume = volume
@@ -241,6 +251,14 @@ private actor Coordinator {
     private func runnerFinished(_ finished: SessionRunner) async {
         if runner === finished { runner = nil }
         await emitGlance()
+        // Auto-start the next queued card (still-mounted, pre-approved).
+        if runner == nil, !queue.isEmpty {
+            let next = queue.removeFirst()
+            emit(.attention(AttentionItem(severity: .info,
+                                          title: "Starting queued card",
+                                          detail: "Offloading \(next.info.volumeName).")))
+            await startSession(next)
+        }
     }
 
     private func resumeAfterReinsert(_ volume: CandidateVolume) async {

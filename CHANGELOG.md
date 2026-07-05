@@ -25,6 +25,10 @@ the app version lives in `VERSION`, the build number is the git commit count.
   no-warranty disclaimer.
 
 ### Added
+- **Auto-queue for multiple cards.** Insert a card while one's already offloading and
+  it's queued and started automatically when the current one finishes (FIFO) — stack
+  several readers and walk away. A queued card pulled before its turn is dropped; the
+  busy card is never interrupted. (Previously it just told you to re-insert later.)
 - **Optional second verified copy, before any wipe.** Point SD Offload at a second
   local/external drive in Settings and every photo is mirrored there and read back
   **uncached** too — a file isn't wipe-eligible until it's confirmed on **both** the
