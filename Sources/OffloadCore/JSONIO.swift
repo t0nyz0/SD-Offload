@@ -1,7 +1,7 @@
 import Foundation
 
 /// House JSON persistence: pretty, sorted keys, ISO-8601, human-diffable.
-/// `save` = atomic write + `.bak` refresh (an atomic-write pattern).
+/// `save` = atomic write + `.bak` refresh.
 /// `saveDurable` = temp + fsync + rename + parent-dir fsync — journal-grade
 /// durability; the wipe decision depends on the journal being on disk.
 public enum JSONIO {

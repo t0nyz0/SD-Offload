@@ -6,7 +6,7 @@ import OffloadCore
 /// files happens at upload time (dest state can change between plan and
 /// upload); the planner only dedupes within the plan itself.
 public struct IngestPlanner: Sendable {
-    /// Camera media roots. Verified on a Fujifilm card: the root also carries
+    /// Camera media roots. On a Fujifilm card, for example, the root also carries
     /// FFDB/ and UPD/ camera-system folders that must never be uploaded or wiped.
     public static let mediaRoots = ["DCIM", "PRIVATE", "AVCHD", "CLIP", "MP_ROOT"]
     static let skippedDirNames: Set<String> = [".Spotlight-V100", ".Trashes", ".fseventsd", "System Volume Information"]

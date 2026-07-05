@@ -6,7 +6,7 @@ import Foundation
 /// which is how we refuse to write into a ghost.
 public struct StatfsInfo: Sendable, Equatable {
     public let fsTypeName: String     // "smbfs", "apfs", "exfat", …
-    public let mntFromName: String    // "//user@NAS._smb._tcp.local/Photos"
+    public let mntFromName: String    // e.g. "//user@nas.local/Photos"
     public let mntOnName: String      // "/Volumes/Photos"
     public let totalBytes: Int64
     public let freeBytes: Int64

@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Minimal Keychain wrapper (house pattern from a companion app).
+/// Minimal Keychain wrapper.
 public enum Keychain {
     /// SMB credentials for the NAS remount, stored as "user\npassword".
     public static let nasCredentialsService = "offload-nas-smb"

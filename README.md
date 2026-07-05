@@ -187,8 +187,19 @@ themselves. It is **not** on the App Store and is ad-hoc signed — you build it
 will ask for Removable Volumes and Network Volumes permission). It intentionally has **no** reader
 accounts, telemetry, or cloud services; all AI runs on-device.
 
+> ⚠️ **Disclaimer.** Offload can erase removable media. It is provided **as-is, with no warranty**
+> — you are responsible for your data and your configuration. The safe-wipe gate is designed to be
+> strict and fail-closed, but verify your NAS destination and test on a non-critical card before you
+> trust it with a real shoot. The author is not liable for any data loss. (Auto-wipe runs only after
+> end-to-end verification and can be set to "ask each time" in Settings.)
+
 ## Roadmap
 
 - Named faces & pets (suggest-and-confirm; a bundled Core ML face model for higher accuracy later)
 - Opt-in reverse-geocoding of GPS to place names ("Fairhope, Alabama")
 - Decoupled NAS-verify workers to reclaim upload throughput after the always-uncached verify
+
+## License
+
+[MIT](LICENSE) © 2026 Tony Zolnoski. Zero third-party dependencies — only Apple system frameworks,
+so there are no bundled licenses to track.
