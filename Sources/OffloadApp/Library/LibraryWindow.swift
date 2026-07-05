@@ -177,15 +177,18 @@ private struct LibraryHeader: View {
 private struct Breadcrumb: View {
     let model: LibraryModel
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 7) {
             ForEach(model.breadcrumb, id: \.index) { crumb in
+                let isLast = crumb.index == model.breadcrumb.count - 1
                 if crumb.index > 0 {
-                    Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
                 Button(crumb.label) { model.navigate(toBreadcrumb: crumb.index) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: crumb.index == model.breadcrumb.count - 1 ? .semibold : .regular))
-                    .foregroundStyle(crumb.index == model.breadcrumb.count - 1 ? .primary : .secondary)
+                    .font(.system(size: 19, weight: isLast ? .bold : .semibold))
+                    .foregroundStyle(isLast ? .primary : .secondary)
             }
         }
     }
@@ -645,29 +648,53 @@ private struct FolderTile: View {
         DateFolders.caption(folderPath: entry.id, rootPath: rootPath ?? "", rawName: entry.name)
     }
 
+    // The folder body silhouette: a square top-left corner so the tab flows into
+    // it, the other three corners rounded — so the tile reads unmistakably as a
+    // folder holding the photos, not as a group of photos.
+    private var bodyShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: DS.Radius.m,
+                               bottomTrailingRadius: DS.Radius.m, topTrailingRadius: DS.Radius.m)
+    }
+
     var body: some View {
-        RoundedRectangle(cornerRadius: DS.Radius.m)
-            .fill(DS.Palette.surfaceRaised)
-            .aspectRatio(1, contentMode: .fit)
-            .overlay { collage }
-            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
-            .overlay(alignment: .bottomLeading) { captionOverlay }
-            .overlay(alignment: .topTrailing) { folderChip }
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.m)
-                .strokeBorder(DS.Palette.hairline, lineWidth: 1))
-            .task(id: entry.id) {
-                thumbs = await FolderPreviewLoader.shared.preview(folder: entry.url, mtime: entry.modified)
-                loaded = true
+        VStack(alignment: .leading, spacing: 0) {
+            // Folder tab — the silhouette cue. Same fill as the body, flush on top.
+            UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 0,
+                                   bottomTrailingRadius: 0, topTrailingRadius: 6)
+                .fill(DS.Palette.surfaceRaised)
+                .frame(width: 78, height: 15)
+                .padding(.leading, 12)
+
+            VStack(spacing: 0) {
+                // Contents preview, inset so the folder chrome frames it — the
+                // photos clearly sit *inside* the folder.
+                Color.clear
+                    .aspectRatio(4.0 / 3.0, contentMode: .fit)
+                    .overlay { collage }
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.s))
+                    .padding(5)
+                labelBar
             }
+            .background(DS.Palette.surfaceRaised, in: bodyShape)
+            .overlay(bodyShape.strokeBorder(DS.Palette.hairline, lineWidth: 1))
+            .clipShape(bodyShape)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+        .contentShape(Rectangle())
+        .task(id: entry.id) {
+            thumbs = await FolderPreviewLoader.shared.preview(folder: entry.url, mtime: entry.modified)
+            loaded = true
+        }
     }
 
     @ViewBuilder private var collage: some View {
         if thumbs.isEmpty {
             ZStack {
+                DS.Palette.ink
                 if loaded {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 42))
-                        .foregroundStyle(DS.safe.opacity(0.85))
+                    Image(systemName: "photo.stack")
+                        .font(.system(size: 32))
+                        .foregroundStyle(DS.safe.opacity(0.7))
                 } else {
                     ProgressView().controlSize(.small)
                 }
@@ -677,30 +704,27 @@ private struct FolderTile: View {
         }
     }
 
-    private var captionOverlay: some View {
+    // A solid label bar (folder chrome), not a gradient over the photos — the date
+    // reads as the folder's name, and the chevron signals "open".
+    private var labelBar: some View {
         let c = caption
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(c.title).font(.system(size: 16, weight: .bold))
-            if let sub = c.subtitle {
-                Text(sub).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+        return HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(DS.safe)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(c.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                if let sub = c.subtitle {
+                    Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 11).padding(.top, 18).padding(.bottom, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(colors: [.black.opacity(0), .black.opacity(0.6)],
-                           startPoint: .top, endPoint: .bottom)
-        )
-        .foregroundStyle(.white)
-    }
-
-    private var folderChip: some View {
-        Image(systemName: "folder.fill")
-            .font(.system(size: 10, weight: .semibold))
-            .padding(6)
-            .background(.black.opacity(0.35), in: Circle())
-            .foregroundStyle(.white.opacity(0.9))
-            .padding(7)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
     }
 }
 
