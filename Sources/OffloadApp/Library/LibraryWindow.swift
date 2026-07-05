@@ -308,44 +308,35 @@ private struct LibraryTile: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.m).fill(DS.Palette.surfaceRaised)
-                if item.isFolder {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(DS.safe.opacity(0.85))
-                } else if let thumb {
-                    Image(nsImage: thumb)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Image(systemName: placeholderSymbol)
-                        .font(.system(size: 26))
-                        .foregroundStyle(.tertiary)
+            // A definite SQUARE tile: aspectRatio(1) sizes the box from the cell
+            // width, the image is overlaid INTO that fixed box and scaled to fill,
+            // then everything is clipped to the box. (A .frame(maxWidth:.infinity)
+            // would propose infinite width to a fill-scaled image and it overflows
+            // into the neighbouring cells — the bug this replaces.)
+            RoundedRectangle(cornerRadius: DS.Radius.m)
+                .fill(DS.Palette.surfaceRaised)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if item.isFolder {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 34))
+                            .foregroundStyle(DS.safe.opacity(0.85))
+                    } else if let thumb {
+                        Image(nsImage: thumb)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: placeholderSymbol)
+                            .font(.system(size: 26))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-            }
-            // Fix the reported size to the box BEFORE clipping, so an aspect-fill
-            // thumbnail can't overflow and shove the next row.
-            .frame(maxWidth: .infinity)
-            .frame(height: 120)
-            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
-            .overlay(alignment: .topTrailing) {
-                if isVideo { badge("▶") }
-                else if item.raw != nil || isRawOnly { badge("RAW") }   // RAW available (right-click to open)
-            }
-            .overlay(alignment: .bottomLeading) {
-                if let top = tags.first {
-                    Text(top.capitalized)
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(DS.safe.opacity(0.85), in: Capsule())
-                        .foregroundStyle(.black)
-                        .padding(5)
-                }
-            }
-            .overlay(RoundedRectangle(cornerRadius: DS.Radius.m).strokeBorder(DS.Palette.hairline, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
+                .overlay(alignment: .topTrailing) { formatBadge }
+                .overlay(alignment: .bottomLeading) { tagBadge }
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.m).strokeBorder(DS.Palette.hairline, lineWidth: 1))
 
-            Text(entry.name)
+            Text(titleText)
                 .font(.system(size: 11))
                 .lineLimit(1).truncationMode(.middle)
                 .foregroundStyle(.secondary)
@@ -353,7 +344,30 @@ private struct LibraryTile: View {
         .task(id: entry.id) {
             guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(url: entry.url, size: entry.size,
-                                                           mtime: entry.modified, side: 160)
+                                                           mtime: entry.modified, side: 220)
+        }
+    }
+
+    // When a RAW is attached, title the card by its base name (no extension) so
+    // it reads as one photo, and flag both formats.
+    private var titleText: String {
+        item.raw != nil ? (entry.name as NSString).deletingPathExtension : entry.name
+    }
+
+    @ViewBuilder private var formatBadge: some View {
+        if isVideo { badge("VIDEO") }
+        else if item.raw != nil { badge("JPG+RAW") }
+        else if isRawOnly { badge("RAW") }
+    }
+
+    @ViewBuilder private var tagBadge: some View {
+        if let top = tags.first {
+            Text(top.capitalized)
+                .font(.system(size: 8.5, weight: .semibold))
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(DS.safe.opacity(0.9), in: Capsule())
+                .foregroundStyle(.black)
+                .padding(5)
         }
     }
 

@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+### Fixed
+- **Library thumbnails no longer overflow into each other** (for real this time).
+  Tiles are now uniform squares sized from the cell width, with the image
+  overlaid into that definite box and clipped — the previous `maxWidth:.infinity`
+  proposed infinite width to a fill-scaled image, so landscape photos bled into
+  neighbouring cells.
+- **RAW+JPEG pairing is now unmistakable**: a paired shot is one card titled by
+  its base name (no extension) with a "JPG+RAW" badge; RAW-only shows "RAW",
+  video shows "VIDEO". (Pairing already collapsed the files; the overflow bug
+  was hiding it.)
+
 ### Fixed (QA pass — adversarial full-app review)
 - **Delete no longer destroys un-warned files.** It only removes the photo, its
   RAW, and known sidecars (XMP/THM/…) — never a same-name video or unrelated
