@@ -20,6 +20,11 @@
   <img alt="tests" src="https://img.shields.io/badge/tests-73%20passing-brightgreen">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/menubar.png" width="380" alt="Offload menu-bar popover mid-transfer">
+  <br><sub><em>Mid-offload: card fully read, uploading to the NAS and verifying — live throughput, dual ETAs, and a card that won't be wiped until every file checks out.</em></sub>
+</p>
+
 ---
 
 ## The problem
@@ -118,12 +123,12 @@ one being offloaded.
 
 ## Screenshots
 
-_Add PNGs to [`docs/screenshots/`](docs/screenshots) and paste these lines in:_
+The menu-bar popover is up top. Two more views round it out — drop `library.png`
+and `viewer.png` into [`docs/screenshots/`](docs/screenshots) and add:
 
 ```md
-![Menu-bar transfer](docs/screenshots/menubar.png)
-![Library](docs/screenshots/library.png)
-![Viewer + info inspector](docs/screenshots/viewer.png)
+![Library — folder collage cards + on-device search](docs/screenshots/library.png)
+![In-app viewer with the info inspector](docs/screenshots/viewer.png)
 ```
 
 ## Build & run
