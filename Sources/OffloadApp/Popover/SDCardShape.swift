@@ -24,24 +24,43 @@ struct SDCardShape: Shape {
     }
 }
 
-/// The hero: the card silhouette filling bottom-to-top with progress.
+/// The hero gauge: the card silhouette filling bottom-to-top with the
+/// verification gradient. A soft glow rides the leading edge of the fill —
+/// that amber line is "where the data is right now."
 struct CardProgressView: View {
     var progress: Double            // 0…1
-    var size: CGSize = CGSize(width: 84, height: 104)
+    var size: CGSize = CGSize(width: 88, height: 110)
 
     var body: some View {
+        let p = min(1, max(0, progress))
         ZStack {
+            // Empty well.
             SDCardShape()
-                .fill(.quaternary.opacity(0.4))
+                .fill(DS.Palette.ink.opacity(0.6))
+            SDCardShape()
+                .fill(DS.Palette.surfaceRaised.opacity(0.35))
+
+            // Rising verification fill.
             GeometryReader { geo in
-                Rectangle()
-                    .fill(Theme.accentGradient)
-                    .frame(height: geo.size.height * min(1, max(0, progress)))
-                    .frame(maxHeight: .infinity, alignment: .bottom)
+                ZStack(alignment: .bottom) {
+                    Rectangle()
+                        .fill(DS.verificationFill)
+                        .frame(height: geo.size.height * p)
+                    // Leading-edge glow.
+                    Rectangle()
+                        .fill(DS.Palette.motionHot)
+                        .frame(height: 2)
+                        .blur(radius: 3)
+                        .opacity(p > 0.02 && p < 0.99 ? 0.9 : 0)
+                        .offset(y: -geo.size.height * p + 1)
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
             .clipShape(SDCardShape())
+
+            // Machined outline + a subtle top-edge highlight.
             SDCardShape()
-                .stroke(.secondary.opacity(0.5), lineWidth: 1.5)
+                .stroke(DS.Palette.textPrimary.opacity(0.35), lineWidth: 1.5)
         }
         .frame(width: size.width, height: size.height)
         .animation(.linear(duration: 0.3), value: progress)

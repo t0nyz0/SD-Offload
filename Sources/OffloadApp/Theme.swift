@@ -1,15 +1,12 @@
 import SwiftUI
 
-/// Two accents only: amber = data in motion, green = verified safe on the NAS.
-/// Everything else is system materials so the popover follows light/dark.
+/// Thin semantic alias over the design system (`DS`). The verification gradient
+/// (amber "in motion" → emerald "verified safe") is the through-line across the
+/// icon, menu bar, and popover. See DesignSystem.swift.
 enum Theme {
-    static let accent = Color(red: 0.93, green: 0.62, blue: 0.18)
-    static let safe = Color(red: 0.30, green: 0.72, blue: 0.38)
-
-    static let accentGradient = LinearGradient(
-        colors: [accent.opacity(0.7), accent],
-        startPoint: .bottom, endPoint: .top
-    )
+    static let accent = DS.motion
+    static let safe = DS.safe
+    static let accentGradient = DS.verificationFill
 }
 
 enum Fmt {

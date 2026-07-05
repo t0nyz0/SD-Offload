@@ -18,14 +18,15 @@ struct IdleView: View {
             }
             .frame(height: 108)
 
-            VStack(spacing: 4) {
-                Text("Waiting for a card…")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("Insert an SD card and Offload moves everything to your NAS automatically.")
-                    .font(.system(size: 12))
+            VStack(spacing: DS.Space.xs) {
+                Text("Waiting for a card")
+                    .font(DS.Typo.title)
+                Text("Insert an SD card — Offload copies, verifies, and files it on your NAS, then clears the card.")
+                    .font(DS.Typo.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
+                    .padding(.horizontal, DS.Space.xl)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             NASGlanceRow()
