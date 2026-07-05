@@ -128,13 +128,6 @@ search across the whole archive, with per-photo EXIF under each frame:
 
 ![Library — on-device content search, tags, and per-photo EXIF](docs/screenshots/library.png)
 
-One more to come — the in-app viewer with its info inspector. Drop `viewer.png` into
-[`docs/screenshots/`](docs/screenshots) and add:
-
-```md
-![In-app viewer with the info inspector](docs/screenshots/viewer.png)
-```
-
 ## Build & run
 
 Requires **macOS 14+ on Apple Silicon** and a Swift 6 toolchain (Xcode 16+). Zero external
