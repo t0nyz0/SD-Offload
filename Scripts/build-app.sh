@@ -73,7 +73,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>SD Offload copies verified photos to your NAS share.</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>© Tony Zolnoski</string>
+	<string>© t0nyz0</string>
 </dict>
 </plist>
 PLIST

@@ -226,5 +226,5 @@ or other similarly-named tools.
 
 ## License
 
-[MIT](LICENSE) © 2026 Tony Zolnoski. Zero third-party dependencies — only Apple system frameworks,
-so there are no bundled licenses to track.
+[MIT](LICENSE) © [t0nyz0](https://github.com/t0nyz0). Zero third-party dependencies — only Apple
+system frameworks, so there are no bundled licenses to track.
