@@ -233,6 +233,10 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
     public var wipeReport: WipeReport?
     public var endedAt: Date?
 
+    /// Number of files handled this session — the planned manifest size, falling
+    /// back to the journal's file list for older records without stats.
+    public var fileCount: Int { stats.filesPlanned > 0 ? stats.filesPlanned : files.count }
+
     public init(id: UUID = UUID(), startedAt: Date = Date(), cardVolumeUUID: String,
                 cardVolumeName: String, cardCapacityBytes: Int64, nasMntFromName: String? = nil,
                 cardSessionToken: String? = nil,

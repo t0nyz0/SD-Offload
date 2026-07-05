@@ -45,7 +45,7 @@ struct IdleView: View {
             Image(systemName: record.state == .done ? "checkmark.circle.fill" : "exclamationmark.circle")
                 .foregroundStyle(record.state == .done ? Theme.safe : .orange)
                 .font(.system(size: 10))
-            Text("\(record.startedAt.formatted(.relative(presentation: .named))) · \(record.cardVolumeName) · \(Fmt.bytes(record.stats.bytesPlanned))")
+            Text("\(record.startedAt.formatted(.relative(presentation: .named))) · \(record.fileCount) file\(record.fileCount == 1 ? "" : "s") · \(Fmt.bytes(record.stats.bytesPlanned))")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }

@@ -65,7 +65,7 @@ struct FooterView: View {
             Text(record.cardVolumeName)
                 .lineLimit(1)
             Spacer()
-            Text(Fmt.bytes(record.stats.bytesPlanned))
+            Text("\(record.fileCount) file\(record.fileCount == 1 ? "" : "s") · \(Fmt.bytes(record.stats.bytesPlanned))")
                 .foregroundStyle(.secondary)
             if let end = record.endedAt {
                 Text(Fmt.duration(end.timeIntervalSince(record.startedAt)))

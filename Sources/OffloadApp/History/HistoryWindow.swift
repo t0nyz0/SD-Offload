@@ -21,6 +21,10 @@ struct HistoryWindow: View {
                     Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
+                    Text("\(record.fileCount) file\(record.fileCount == 1 ? "" : "s") · \(Fmt.bytes(record.stats.bytesPlanned))")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                 }
                 .tag(record.id)
             }
