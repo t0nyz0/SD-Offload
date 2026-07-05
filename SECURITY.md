@@ -8,7 +8,7 @@ are taken seriously.
 
 Please report security issues **privately**, not in public issues:
 
-- Use GitHub's **[Report a vulnerability](https://github.com/t0nyz0/sd-offload/security/advisories/new)**
+- Use GitHub's **[Report a vulnerability](https://github.com/t0nyz0/SD-Offload/security/advisories/new)**
   (the repo's Security → Advisories tab), or
 - open a normal issue **only** for non-sensitive, non-exploitable bugs.
 

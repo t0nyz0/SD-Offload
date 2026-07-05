@@ -19,7 +19,7 @@ progress; popover shows speeds, dual ETAs, history; Library window browses NAS +
    development. Use `OFFLOAD_DEMO=1` (scripted DemoEngine) or the DMG test harness
    (`Tests/` + `hdiutil`). Any change near deletion must keep the UI's "card has NOT been
    wiped" reassurance truthful.
-2. **Commit early, commit often, always push** (`t0nyz0/sd-offload`, branch `main`). The repo owner
+2. **Commit early, commit often, always push** (`t0nyz0/SD-Offload`, branch `main`). The repo owner
    is the sole author of every commit — never add a `Co-Authored-By` trailer.
 3. **No cron, no launchd.** The one sanctioned persistence is the `SMAppService` launch-at-login
    login item.

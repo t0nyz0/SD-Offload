@@ -1,4 +1,5 @@
 import SwiftUI
+import OffloadCore
 
 /// A fast in-app image viewer — opens instantly instead of launching Preview.
 /// Always shows the JPEG (the display copy); the RAW opens externally on demand.
@@ -47,7 +48,7 @@ struct ImageViewer: View {
                 if showInfo {
                     HStack(spacing: 0) {
                         Spacer()
-                        InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary))
+                        InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary), model: model)
                     }
                     .padding(.top, 44)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -230,6 +231,9 @@ private struct InfoPanel: View {
     let item: DisplayItem
     let meta: PhotoMeta?
     let tags: [String]
+    let model: LibraryModel
+    @State private var detections: [Detection] = []
+    @State private var reloadToken = 0
 
     private var formatText: String {
         if case .media(.video) = item.primary.kind { return "Video" }
@@ -282,6 +286,15 @@ private struct InfoPanel: View {
                         }
                     }
                 }
+                if !detections.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        label("People & Pets")
+                        ForEach(detections) { det in
+                            FaceRow(detection: det, path: item.primary.id, mtime: item.primary.modified,
+                                    model: model, onChanged: { reloadToken += 1 })
+                        }
+                    }
+                }
                 Spacer(minLength: 0)
             }
             .padding(DS.Space.l)
@@ -291,6 +304,9 @@ private struct InfoPanel: View {
         .frame(maxHeight: .infinity)
         .background(.ultraThinMaterial)
         .foregroundStyle(.white)
+        .task(id: "\(item.id)#\(reloadToken)") {
+            detections = await model.detections(for: item.primary.id)
+        }
     }
 
     private func row(_ title: String, _ value: String) -> some View {
@@ -309,6 +325,97 @@ private struct InfoPanel: View {
             .font(.system(size: 9, weight: .semibold))
             .tracking(0.5)
             .foregroundStyle(.white.opacity(0.4))
+    }
+}
+
+/// One detected face/pet in the current photo — a crop plus controls to confirm a
+/// suggestion, pick/enter a name, or reject. Suggest-only: nothing auto-labels.
+private struct FaceRow: View {
+    let detection: Detection
+    let path: String
+    let mtime: Date
+    let model: LibraryModel
+    let onChanged: () -> Void
+
+    @State private var crop: NSImage?
+    @State private var showNameAlert = false
+    @State private var newName = ""
+
+    private var assignedName: String? { model.identityName(detection.assignedID) }
+    private var suggestedName: String? {
+        detection.assignedID == nil ? model.identityName(detection.suggestedID) : nil
+    }
+    private var kindWord: String { detection.kind == .pet ? "pet" : "person" }
+    private var sameKind: [Identity] { model.identities.filter { $0.kind == detection.identityKind } }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            thumb
+            VStack(alignment: .leading, spacing: 2) {
+                if let name = assignedName {
+                    Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.95))
+                    Text(kindWord.capitalized).font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                } else if let s = suggestedName {
+                    Text("\(s)?").font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                    Text("suggested").font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                } else {
+                    Text("Unnamed \(kindWord)").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            Spacer(minLength: 0)
+            controls
+        }
+        .task(id: detection.id) {
+            crop = await FaceCropLoader.shared.crop(url: URL(fileURLWithPath: path), bbox: detection.bbox, mtime: mtime)
+        }
+        .alert("Name this \(kindWord)", isPresented: $showNameAlert) {
+            TextField("Name", text: $newName)
+            Button("Save") { let n = newName; newName = ""; act { await model.nameDetection(detection, in: path, as: n) } }
+            Button("Cancel", role: .cancel) { newName = "" }
+        }
+    }
+
+    @ViewBuilder private var thumb: some View {
+        Group {
+            if let crop {
+                Image(nsImage: crop).resizable().scaledToFill()
+            } else {
+                Image(systemName: detection.kind == .pet ? "pawprint.fill" : "person.crop.square.fill")
+                    .resizable().scaledToFit().padding(9).foregroundStyle(.white.opacity(0.3))
+            }
+        }
+        .frame(width: 40, height: 40)
+        .background(.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder private var controls: some View {
+        HStack(spacing: 2) {
+            if detection.assignedID == nil, detection.suggestedID != nil {
+                Button { act { await model.confirmSuggestion(detection, in: path) } } label: { Image(systemName: "checkmark") }
+                    .buttonStyle(.borderless).help("Confirm")
+                Button { act { await model.rejectSuggestion(detection, in: path) } } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless).help("Not this one")
+            }
+            Menu {
+                ForEach(sameKind) { idn in
+                    Button(idn.name) { act { await model.assignDetection(detection, in: path, to: idn.id) } }
+                }
+                if !sameKind.isEmpty { Divider() }
+                Button("New name…") { newName = ""; showNameAlert = true }
+                if detection.assignedID != nil {
+                    Divider()
+                    Button("Remove name", role: .destructive) { act { await model.unnameDetection(detection, in: path) } }
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).fixedSize()
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.white.opacity(0.8))
+    }
+
+    private func act(_ work: @escaping () async -> Void) {
+        Task { await work(); onChanged() }
     }
 }
 

@@ -305,20 +305,33 @@ final class LibraryModel {
         guard !query.isEmpty else { searchResults = nil; return }
         guard let prefix = rootURL?.path else { return }
         let index = photoIndex
+        let faces = faceIndex
+        // Named people/pets whose name matches a query term (computed on the main
+        // actor from the published list, then unioned into the content results).
+        let terms = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        let namedMatches = identities
+            .filter { idn in terms.contains { idn.name.lowercased().contains($0) } }
+            .map(\.id)
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))   // debounce typing
             guard !Task.isCancelled else { return }
-            let paths = await index.search(query, underPrefix: prefix)
+            var paths = await index.search(query, underPrefix: prefix)
+            for id in namedMatches { paths.formUnion(await faces.photos(withIdentity: id, underPrefix: prefix)) }
             let recs = await index.records(forPaths: Array(paths))
             guard let self, !Task.isCancelled else { return }
-            let results = recs.values
-                .map { rec -> LibraryEntry in
-                    let kind: LibraryEntry.Kind = MediaKind.classify(ext: (rec.path as NSString).pathExtension)
-                        .map { .media($0) } ?? .media(.photo)
-                    return LibraryEntry(id: rec.path, name: (rec.path as NSString).lastPathComponent,
+            let results: [LibraryEntry] = paths.map { path in
+                let kind: LibraryEntry.Kind = MediaKind.classify(ext: (path as NSString).pathExtension)
+                    .map { .media($0) } ?? .media(.photo)
+                if let rec = recs[path] {
+                    return LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
                                         kind: kind, size: rec.size, modified: rec.mtime)
                 }
-                .sorted { $0.name < $1.name }
+                // Identity-only match (face-scanned, not content-analyzed): stat it.
+                let vals = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                return LibraryEntry(id: path, name: (path as NSString).lastPathComponent, kind: kind,
+                                    size: Int64(vals?.fileSize ?? 0), modified: vals?.contentModificationDate ?? .distantPast)
+            }
+            .sorted { $0.name < $1.name }
             self.searchResults = results
         }
     }
@@ -520,6 +533,63 @@ final class LibraryModel {
             identities = []
             faceUnnamed = 0
         }
+    }
+
+    func detections(for path: String) async -> [Detection] {
+        await faceIndex.detections(for: path)
+    }
+
+    func identityName(_ id: UUID?) -> String? {
+        guard let id else { return nil }
+        return identities.first { $0.id == id }?.name
+    }
+
+    /// Name a detection — reuse an existing identity of the same name+kind (and
+    /// learn this exemplar) or create a new one, then confirm the assignment.
+    func nameDetection(_ det: Detection, in path: String, as rawName: String) async {
+        let name = rawName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let match = await identityIndex.all().first {
+            $0.kind == det.identityKind && $0.embedderID == det.embedderID
+                && $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }
+        let id: UUID
+        if let match {
+            await identityIndex.addExemplar(det.embedding, to: match.id, embedderID: det.embedderID)
+            id = match.id
+        } else {
+            id = await identityIndex.create(name: name, kind: det.identityKind,
+                                            embedderID: det.embedderID, exemplar: det.embedding, coverPath: path).id
+        }
+        await faceIndex.assign(detection: det.id, in: path, to: id)
+        await identityIndex.save(); await faceIndex.save()
+        await refreshFaceState()
+    }
+
+    /// Confirm/assign a detection to an existing identity, learning the exemplar.
+    func assignDetection(_ det: Detection, in path: String, to identityID: UUID) async {
+        await identityIndex.addExemplar(det.embedding, to: identityID, embedderID: det.embedderID)
+        await faceIndex.assign(detection: det.id, in: path, to: identityID)
+        await identityIndex.save(); await faceIndex.save()
+        await refreshFaceState()
+    }
+
+    func confirmSuggestion(_ det: Detection, in path: String) async {
+        guard let sid = det.suggestedID else { return }
+        await assignDetection(det, in: path, to: sid)
+    }
+
+    func rejectSuggestion(_ det: Detection, in path: String) async {
+        guard let sid = det.suggestedID else { return }
+        await faceIndex.reject(detection: det.id, in: path, identity: sid)
+        await faceIndex.save()
+        await refreshFaceState()
+    }
+
+    func unnameDetection(_ det: Detection, in path: String) async {
+        await faceIndex.assign(detection: det.id, in: path, to: nil)
+        await faceIndex.save()
+        await refreshFaceState()
     }
 
     func enter(_ entry: LibraryEntry) {

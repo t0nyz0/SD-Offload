@@ -6,7 +6,7 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Renamed
-- **The app is now "SD Offload"** (was "Offload") — repo `t0nyz0/sd-offload`, bundle id
+- **The app is now "SD Offload"** (was "Offload") — repo `t0nyz0/SD-Offload`, bundle id
   `com.t0nyz0.sdoffload`. Internal Swift module names (OffloadCore/Engine/App) are unchanged.
 
 ### Changed (public-release hardening)
@@ -25,6 +25,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
   no-warranty disclaimer.
 
 ### Added
+- **Named faces & pets (on-device, opt-in).** A "Find Faces" pass detects faces and
+  pets with Apple Vision (on the Neural Engine); the photo viewer's info inspector
+  lets you name them ("Elizabeth", "Hurley"), confirm/reject suggestions, and it
+  learns from each label. Names become searchable alongside content tags. Everything
+  is stored **locally only** — owner-only files, excluded from backups/cloud sync —
+  behind a one-time consent, with a "Delete all face data" control. Honest limit: the
+  v1 grouping is a starting point you confirm (it never auto-labels); a stronger
+  bundled face model is planned for higher accuracy.
 - **Viewer info inspector + delete.** The in-app viewer gained a **Delete** button
   (⌦, NAS only, with confirmation — card originals stay protected) that removes the
   photo and its RAW/sidecars and advances to the next shot. An **Info** toggle (the
