@@ -121,8 +121,13 @@ final class AppState {
             }
 
         case .safeToRemove(let cardName):
+            // Play our chosen chime in-app; keep the banner itself silent so we
+            // don't double up with the notification's own sound.
+            if settings.config.playSounds {
+                Sounds.play(settings.config.completionSoundName)
+            }
             if settings.config.notifyComplete {
-                NotificationManager.shared.notifySafeToRemove(cardName: cardName, sound: settings.config.playSounds)
+                NotificationManager.shared.notifySafeToRemove(cardName: cardName, sound: false)
             }
 
         case .completed(let record):

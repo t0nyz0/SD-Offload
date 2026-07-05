@@ -51,6 +51,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var notifyComplete: Bool = true
     public var notifyProblems: Bool = true
     public var playSounds: Bool = true
+    /// Name of the macOS system sound played on a completed offload. One of the
+    /// built-in ~/System/Library/Sounds names (Glass, Ping, Hero, …).
+    public var completionSoundName: String = "Glass"
     public var launchAtLogin: Bool = false
 
     public init() {}
@@ -81,6 +84,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         notifyComplete = try c.decodeIfPresent(Bool.self, forKey: .notifyComplete) ?? d.notifyComplete
         notifyProblems = try c.decodeIfPresent(Bool.self, forKey: .notifyProblems) ?? d.notifyProblems
         playSounds = try c.decodeIfPresent(Bool.self, forKey: .playSounds) ?? d.playSounds
+        completionSoundName = try c.decodeIfPresent(String.self, forKey: .completionSoundName) ?? d.completionSoundName
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
     }
 

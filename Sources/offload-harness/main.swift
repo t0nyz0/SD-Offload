@@ -107,10 +107,12 @@ let cardInfo = CardInfo(volumeUUID: "\(volName)#test", bsdName: cardDev ?? "disk
                         capacityBytes: 96 << 20, freeBytes: 80 << 20, hasDCIM: true)
 
 // Crash/reopen resume proof — seeds a mid-transfer journal and resumes it.
-if mode == "chaos-crash" {
+// chaos-wrongcard additionally proves a different card (colliding UUID) is not wiped.
+if mode == "chaos-crash" || mode == "chaos-wrongcard" {
     try await runCrashResumeScenario(cardRoot: cardRoot, nasRoot: nasRoot, staging: stagingStore,
                                      journalDir: journalDir, historyDir: historyDir, config: cfg,
-                                     cardInfo: cardInfo, sourceHashes: sourceHashes)
+                                     cardInfo: cardInfo, sourceHashes: sourceHashes,
+                                     tamperMarker: mode == "chaos-wrongcard")
     // exits(0) on success
 }
 

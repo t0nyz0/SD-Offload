@@ -108,12 +108,17 @@ final class LibraryModel {
     }
 
     private func refreshVolumeStats(_ root: URL) {
-        let vals = try? root.resourceValues(forKeys: [
-            .volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey
-        ])
-        freeBytes = Int64(vals?.volumeAvailableCapacityForImportantUsage ?? 0)
-        totalVolumeBytes = Int64(vals?.volumeTotalCapacity ?? 0)
-        mounted = FileManager.default.fileExists(atPath: root.path)
+        // statfs is accurate on SMB; volumeAvailableCapacityForImportantUsage
+        // returns 0 on network shares (it's an APFS purgeable-space concept).
+        if let fs = statfsInfo(path: root.path) {
+            freeBytes = fs.freeBytes
+            totalVolumeBytes = fs.totalBytes
+            mounted = true
+        } else {
+            freeBytes = 0
+            totalVolumeBytes = 0
+            mounted = false
+        }
     }
 
     private func startCount(_ root: URL) {

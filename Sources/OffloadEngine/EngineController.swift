@@ -80,6 +80,18 @@ private actor Coordinator {
         emit(.nasGlance(EngineGlance.quickNASGlance(config: config)))
     }
 
+    // Per-card session marker (hidden file on the card). See Paths.cardSessionMarkerName.
+    private func markerURL(_ mountPath: String) -> URL {
+        URL(fileURLWithPath: mountPath).appendingPathComponent(Paths.cardSessionMarkerName)
+    }
+    private func readCardToken(_ mountPath: String) -> String? {
+        (try? String(contentsOf: markerURL(mountPath), encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private func writeCardToken(_ token: String, to mountPath: String) {
+        try? Data(token.utf8).write(to: markerURL(mountPath))
+    }
+
     // MARK: - Card events
 
     private func handle(_ event: RawCardEvent) async {
@@ -89,6 +101,13 @@ private actor Coordinator {
             // Same card back mid-session → resume, regardless of policy.
             if let runner, runner.card.volumeUUID == volume.info.volumeUUID {
                 await resumeAfterReinsert(volume)
+                return
+            }
+            // Unfinished work for this card resumes even if its policy is now
+            // "ignore"/"ask" — otherwise an interrupted session would be
+            // stranded forever, its card never wiped.
+            if runner == nil, await journal.hasIncompleteSession(cardUUID: volume.info.volumeUUID) {
+                await startSession(volume)
                 return
             }
             switch CardClassifier.classify(volume, config: config) {
@@ -145,7 +164,12 @@ private actor Coordinator {
         let staging = StagingStore(rootPath: config.stagingRootPath)
         let cardRoot = URL(fileURLWithPath: volume.info.mountPath, isDirectory: true)
 
-        if let incomplete = await journal.openIncompleteSession(cardUUID: volume.info.volumeUUID) {
+        if let incomplete = await journal.openIncompleteSession(cardUUID: volume.info.volumeUUID),
+           incomplete.cardSessionToken == nil || incomplete.cardSessionToken == readCardToken(volume.info.mountPath) {
+            // Resume only when the card in the slot really is this session's card
+            // (token match), or the session predates tokens (legacy). A mismatch
+            // means a different physical card collided on a synthesized UUID —
+            // fall through and start a fresh session for it instead.
             emit(.sessionStarted(sessionID: incomplete.id, card: volume.info, resumed: true))
             emit(.phase(.scanning))
             staging.removePartials(incomplete.id)
@@ -178,10 +202,15 @@ private actor Coordinator {
             return
         }
         let plan = await planner.plan(scanned: scanned)
+        // Stamp this physical card with a unique token so a same-size/same-name
+        // card can never be mistaken for it at wipe time.
+        let token = UUID().uuidString
+        writeCardToken(token, to: volume.info.mountPath)
         var record = SessionRecord(id: sessionID,
                                    cardVolumeUUID: volume.info.volumeUUID,
                                    cardVolumeName: volume.info.volumeName,
-                                   cardCapacityBytes: volume.info.capacityBytes)
+                                   cardCapacityBytes: volume.info.capacityBytes,
+                                   cardSessionToken: token)
         record.nasMntFromName = config.nasExpectedMntFromName
         record.files = plan.files
         record.stats.filesPlanned = plan.files.count

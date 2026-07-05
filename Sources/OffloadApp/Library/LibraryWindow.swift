@@ -184,28 +184,30 @@ private struct LibraryTile: View {
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
-                RoundedRectangle(cornerRadius: DS.Radius.m)
-                    .fill(DS.Palette.surfaceRaised)
+                RoundedRectangle(cornerRadius: DS.Radius.m).fill(DS.Palette.surfaceRaised)
                 if entry.isFolder {
                     Image(systemName: "folder.fill")
                         .font(.system(size: 34))
                         .foregroundStyle(DS.safe.opacity(0.85))
                 } else if let thumb {
                     Image(nsImage: thumb)
-                        .resizable().aspectRatio(contentMode: .fill)
-                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
+                        .resizable()
+                        .scaledToFill()
                 } else {
                     Image(systemName: placeholderSymbol)
                         .font(.system(size: 26))
                         .foregroundStyle(.tertiary)
                 }
-                if case .media(.raw) = entry.kind {
-                    badge("RAW")
-                } else if case .media(.video) = entry.kind {
-                    badge("▶")
-                }
             }
+            // Fix the reported size to the box BEFORE clipping, so an aspect-fill
+            // thumbnail can't overflow and shove the next row.
+            .frame(maxWidth: .infinity)
             .frame(height: 120)
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
+            .overlay(alignment: .topTrailing) {
+                if case .media(.raw) = entry.kind { badge("RAW") }
+                else if case .media(.video) = entry.kind { badge("▶") }
+            }
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.m).strokeBorder(DS.Palette.hairline, lineWidth: 1))
 
             Text(entry.name)
@@ -215,11 +217,8 @@ private struct LibraryTile: View {
         }
         .task(id: entry.id) {
             guard !entry.isFolder else { return }
-            if let hit = ThumbnailLoader.shared.cached(entry.url, side: 160) {
-                thumb = hit
-            } else {
-                thumb = await ThumbnailLoader.shared.thumbnail(for: entry.url, side: 160)
-            }
+            thumb = await ThumbnailLoader.shared.thumbnail(url: entry.url, size: entry.size,
+                                                           mtime: entry.modified, side: 160)
         }
     }
 
@@ -232,17 +231,11 @@ private struct LibraryTile: View {
     }
 
     private func badge(_ text: String) -> some View {
-        VStack {
-            HStack {
-                Spacer()
-                Text(text)
-                    .font(.system(size: 8, weight: .bold))
-                    .padding(.horizontal, 4).padding(.vertical, 2)
-                    .background(.black.opacity(0.6), in: Capsule())
-                    .foregroundStyle(.white)
-            }
-            Spacer()
-        }
-        .padding(5)
+        Text(text)
+            .font(.system(size: 8, weight: .bold))
+            .padding(.horizontal, 4).padding(.vertical, 2)
+            .background(.black.opacity(0.6), in: Capsule())
+            .foregroundStyle(.white)
+            .padding(5)
     }
 }

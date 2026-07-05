@@ -10,7 +10,8 @@ import OffloadEngine
 /// already-done re-uploaded, card wiped only after everything verifies.
 func runCrashResumeScenario(cardRoot: URL, nasRoot: URL, staging: StagingStore,
                             journalDir: URL, historyDir: URL, config: AppConfig,
-                            cardInfo: CardInfo, sourceHashes: [String: String]) async throws {
+                            cardInfo: CardInfo, sourceHashes: [String: String],
+                            tamperMarker: Bool = false) async throws {
     let fm = FileManager.default
     let planner = IngestPlanner()
     let scanned = planner.scan(cardRoot: cardRoot, scope: .mediaRootsOnly)
@@ -59,14 +60,23 @@ func runCrashResumeScenario(cardRoot: URL, nasRoot: URL, staging: StagingStore,
             files[i].state = .copying                     // hash unknown yet
             try Data("garbage".utf8).write(to: staging.partialURL(session: sessionID, file: files[i]))
             expectUploadedIndices.append(i)
+        case 9:                                            // transiently failed before crash → must retry
+            files[i].state = .failed(.ioError(errno: EIO, stage: "hop1"))
+            files[i].attempts = 3
+            expectUploadedIndices.append(i)
         default:                                          // never started
             files[i].state = .pending
             expectUploadedIndices.append(i)
         }
     }
 
+    // Stamp the card with this session's token (as the real app does at start).
+    let token = UUID().uuidString
+    try Data(token.utf8).write(to: cardRoot.appendingPathComponent(".offload-session"))
+
     var record = SessionRecord(id: sessionID, cardVolumeUUID: cardInfo.volumeUUID,
-                               cardVolumeName: cardInfo.volumeName, cardCapacityBytes: cardInfo.capacityBytes)
+                               cardVolumeName: cardInfo.volumeName, cardCapacityBytes: cardInfo.capacityBytes,
+                               cardSessionToken: token)
     record.nasMntFromName = config.nasExpectedMntFromName
     record.state = .transferring
     record.files = files
@@ -78,7 +88,14 @@ func runCrashResumeScenario(cardRoot: URL, nasRoot: URL, staging: StagingStore,
     let journal1 = Journal(directory: journalDir, historyDir: historyDir)
     try await journal1.begin(record)
     try await journal1.flushNow(sessionID)
-    log("seeded crash state: 3 nasVerified, 2 uploaded, 2 stagedVerified, 1 uploading, 1 copying, \(files.count - 9) pending")
+    log("seeded crash state: 3 nasVerified, 2 uploaded, 2 stagedVerified, 1 uploading, 1 copying, 1 failed, \(files.count - 10) pending")
+
+    // Wrong-card scenario: overwrite the card marker with a DIFFERENT token, as
+    // if a different physical card (same synthesized UUID) were now inserted.
+    if tamperMarker {
+        try Data("DIFFERENT-CARD-TOKEN".utf8).write(to: cardRoot.appendingPathComponent(".offload-session"))
+        log("tampered marker → simulating a different physical card in the slot")
+    }
 
     // === RELAUNCH: a brand-new Journal instance, as the reopened app would. ===
     let journal2 = Journal(directory: journalDir, historyDir: historyDir)
@@ -106,6 +123,25 @@ func runCrashResumeScenario(cardRoot: URL, nasRoot: URL, staging: StagingStore,
     print("\n▸ Verifying resume")
     guard let finalRecord = await journal2.loadHistory(limit: 1).first else {
         fail("no completed session in history after resume")
+    }
+
+    // Wrong-card: the transfer may run, but the wipe MUST be refused and the
+    // card left 100% intact — proving the token guard defeats a UUID collision.
+    if tamperMarker {
+        guard finalRecord.state == .doneWipeBlocked else {
+            fail("wrong card: expected doneWipeBlocked, got \(finalRecord.state) — a mismatched card was NOT protected")
+        }
+        guard finalRecord.wipeReport?.ran != true else { fail("wrong card: WIPE RAN on a mismatched card — data-loss safety violation!") }
+        var intact = 0
+        for rel in sourceHashes.keys {
+            guard fm.fileExists(atPath: cardRoot.appendingPathComponent(rel).path) else {
+                fail("wrong card: a file was deleted from a mismatched card: \(rel)")
+            }
+            intact += 1
+        }
+        log("wipe correctly blocked (card-token mismatch); all \(intact) files intact on the card")
+        print("\n✅ PASS — a different card on a colliding UUID was NOT wiped. (chaos-wrongcard)")
+        exit(0)
     }
 
     guard finalRecord.state == .done else { fail("resumed session state \(finalRecord.state), expected done") }

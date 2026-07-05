@@ -46,6 +46,7 @@ public struct WipeGate {
         case pathEscapesCard(String)
         case parentNotPlainDirectory(String)
         case journalNotFlushed
+        case cardTokenMismatch
 
         public var description: String {
             switch self {
@@ -61,6 +62,7 @@ public struct WipeGate {
             case .pathEscapesCard(let p): "\(p) escapes the card mount"
             case .parentNotPlainDirectory(let p): "parent folder \(p) is not a plain directory"
             case .journalNotFlushed: "journal not flushed to disk"
+            case .cardTokenMismatch: "the inserted card is not the one this session was copying"
             }
         }
     }
@@ -80,11 +82,20 @@ public struct WipeGate {
                                 cardMount: CardMountSnapshot?,
                                 nasHealth: NASHealth,
                                 statOf: (String) -> LStatResult?,
-                                journalFlushed: Bool) -> Verdict {
+                                journalFlushed: Bool,
+                                cardTokenOnCard: String? = nil) -> Verdict {
         var blockers: [Blocker] = []
 
         // 1. Non-empty manifest.
         if session.files.isEmpty { blockers.append(.emptyManifest) }
+
+        // 1b. Per-card token: if this session stamped the card, the card in the
+        //     slot right now must carry the SAME token. This defeats the
+        //     synthesized-UUID collision where a different physical card of the
+        //     same size/name could otherwise be re-stat-matched and wiped.
+        if let expected = session.cardSessionToken, expected != cardTokenOnCard {
+            blockers.append(.cardTokenMismatch)
+        }
 
         // 2 + 3. Policy satisfied; zero failed; zero non-terminal.
         for file in session.files {

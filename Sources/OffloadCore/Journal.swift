@@ -95,6 +95,13 @@ public actor Journal {
             .filter(\.isIncomplete)
     }
 
+    /// Is there unfinished work for this card (active or on disk)? Used so the
+    /// engine resumes an interrupted card even if its policy is now "ignore".
+    public func hasIncompleteSession(cardUUID: String) -> Bool {
+        if active.values.contains(where: { $0.cardVolumeUUID == cardUUID && $0.isIncomplete }) { return true }
+        return loadIncompleteSessions().contains { $0.cardVolumeUUID == cardUUID }
+    }
+
     // MARK: - Mutation
 
     public func transition(file fileID: UUID, to newState: FileState, in sessionID: UUID) {

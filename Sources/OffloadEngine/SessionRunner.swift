@@ -673,13 +673,17 @@ public actor SessionRunner {
                                               isReadOnly: fs.isReadOnly)
         }()
         let nasHealth = await nas.validateNow(force: true)
+        let markerURL = URL(fileURLWithPath: card.mountPath).appendingPathComponent(Paths.cardSessionMarkerName)
+        let cardTokenOnCard = (try? String(contentsOf: markerURL, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let verdict = WipeGate.evaluate(session: record,
                                         policy: config.wipePolicy,
                                         cardMount: cardSnapshot,
                                         nasHealth: nasHealth,
                                         statOf: WipeGate.liveStat,
-                                        journalFlushed: true)
+                                        journalFlushed: true,
+                                        cardTokenOnCard: cardTokenOnCard)
 
         guard verdict.allowed else {
             let blockers = verdict.blockers.map(\.description)
@@ -713,6 +717,7 @@ public actor SessionRunner {
         }
 
         Wiper.pruneEmptyDirectories(deletions: verdict.deletions, cardRoot: card.mountPath)
+        try? FileManager.default.removeItem(at: markerURL)   // clean our session marker off the emptied card
         await journal.setWipeReport(WipeReport(ran: true, filesDeleted: result.filesDeleted,
                                                blockers: [], finishedAt: Date()), in: sessionID)
         await markPhaseEnd("wipe")

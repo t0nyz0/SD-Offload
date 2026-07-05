@@ -70,6 +70,17 @@ public enum FileState: Codable, Equatable, Sendable {
         }
     }
 
+    /// The file's content is already safely off the card (on the NAS or a
+    /// verified staging copy). Used on resume: such a file must never be marked
+    /// failed just because its card slot changed or vanished — its data is safe,
+    /// and failing it would block the wipe forever.
+    public var isDataSafe: Bool {
+        switch self {
+        case .stagedVerified, .uploaded, .nasVerified, .skippedDuplicate, .wiped: return true
+        default: return false
+        }
+    }
+
     /// Applied when reopening a journal after a crash/relaunch: in-flight work
     /// rolls back to its last safe checkpoint; verification states re-verify.
     public static func crashRemap(_ state: FileState) -> FileState {
@@ -211,6 +222,11 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
     public let cardCapacityBytes: Int64
     /// statfs f_mntfromname recorded at session start; re-checked by the wipe gate.
     public var nasMntFromName: String?
+    /// Random token written to `<card>/.offload-session` at session start and
+    /// re-checked before wipe. Uniquely ties this session to THIS physical card,
+    /// even when the volume UUID had to be synthesized from name+size (FAT32
+    /// cards with no UUID can otherwise collide). nil = legacy session.
+    public var cardSessionToken: String?
     public var state: SessionState
     public var files: [FileRecord]
     public var stats: SessionStats
@@ -219,6 +235,7 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
 
     public init(id: UUID = UUID(), startedAt: Date = Date(), cardVolumeUUID: String,
                 cardVolumeName: String, cardCapacityBytes: Int64, nasMntFromName: String? = nil,
+                cardSessionToken: String? = nil,
                 state: SessionState = .scanning, files: [FileRecord] = [],
                 stats: SessionStats = SessionStats(), wipeReport: WipeReport? = nil,
                 endedAt: Date? = nil) {
@@ -228,6 +245,7 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
         self.cardVolumeName = cardVolumeName
         self.cardCapacityBytes = cardCapacityBytes
         self.nasMntFromName = nasMntFromName
+        self.cardSessionToken = cardSessionToken
         self.state = state
         self.files = files
         self.stats = stats

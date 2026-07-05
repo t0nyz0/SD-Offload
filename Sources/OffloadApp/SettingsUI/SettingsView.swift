@@ -81,7 +81,15 @@ struct SettingsView: View {
 
             Section("General") {
                 LoginItemToggle()
-                Toggle("Completion sound", isOn: $settings.config.playSounds)
+                Toggle("Play a sound when an offload finishes", isOn: $settings.config.playSounds)
+                if settings.config.playSounds {
+                    Picker("Completion sound", selection: $settings.config.completionSoundName) {
+                        ForEach(Sounds.all, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: settings.config.completionSoundName) { _, name in
+                        Sounds.play(name)   // preview on select
+                    }
+                }
                 LabeledContent("Version", value: AppInfo.versionString)
             }
         }

@@ -155,9 +155,16 @@ public struct IngestPlanner: Sendable {
                 let sameIdentity = match.size == record.size &&
                     abs(match.mtime.timeIntervalSince(record.mtime)) <= 2
                 if sameIdentity {
+                    // Retry a file that failed transiently before the crash — a
+                    // frozen .failed would otherwise block the wipe forever.
+                    if case .failed = record.state {
+                        record.state = .pending
+                        record.attempts = 0
+                    }
                     merged.append(record)
-                } else if record.state.isWipeEligible {
-                    // Data already safe; the changed card file is a NEW file.
+                } else if record.state.isDataSafe {
+                    // Data already safe off the card; the changed card slot is a
+                    // NEW file. Keep the safe record (do NOT fail it).
                     merged.append(record)
                     byRelPath[match.relPath] = match
                 } else {
@@ -167,7 +174,7 @@ public struct IngestPlanner: Sendable {
                 }
             } else {
                 // In manifest, missing from card.
-                if record.state.isWipeEligible {
+                if record.state.isDataSafe {
                     merged.append(record)   // data safe; nothing to wipe — gate tolerates ENOENT here
                 } else {
                     record.state = .failed(.sourceMissing)
