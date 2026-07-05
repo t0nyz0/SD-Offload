@@ -6,6 +6,8 @@ enum Sounds {
                       "Morse", "Ping", "Pop", "Purr", "Sosumi", "Submarine", "Tink"]
 
     static func play(_ name: String) {
-        NSSound(named: NSSound.Name(name))?.play()
+        guard let sound = NSSound(named: NSSound.Name(name)) else { return }
+        if sound.isPlaying { sound.stop() }   // restart on rapid re-taps (named sounds are cached)
+        sound.play()
     }
 }

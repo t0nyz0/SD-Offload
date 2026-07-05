@@ -101,11 +101,18 @@ struct SettingsView: View {
                 LoginItemToggle()
                 Toggle("Play a sound when an offload finishes", isOn: $settings.config.playSounds)
                 if settings.config.playSounds {
-                    Picker("Completion sound", selection: $settings.config.completionSoundName) {
-                        ForEach(Sounds.all, id: \.self) { Text($0).tag($0) }
-                    }
-                    .onChange(of: settings.config.completionSoundName) { _, name in
-                        Sounds.play(name)   // preview on select
+                    HStack {
+                        Picker("Completion sound", selection: $settings.config.completionSoundName) {
+                            ForEach(Sounds.all, id: \.self) { Text($0).tag($0) }
+                        }
+                        .onChange(of: settings.config.completionSoundName) { _, name in
+                            Sounds.play(name)   // preview on select
+                        }
+                        Button { Sounds.play(settings.config.completionSoundName) } label: {
+                            Image(systemName: "play.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview this sound")
                     }
                 }
                 LabeledContent("Version", value: AppInfo.versionString)
