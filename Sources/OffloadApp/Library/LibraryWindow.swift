@@ -84,6 +84,13 @@ private struct LibraryHeader: View {
                     Text(model.source == .nas ? "NAS · Photos" : "SD Card")
                         .font(.system(size: 17, weight: .bold))
                     countLine
+                    if let geo = model.geoSummary {
+                        HStack(spacing: 4) {
+                            Image(systemName: "location.fill").font(.system(size: 9))
+                            Text(geo).font(.system(size: 10.5)).monospacedDigit()
+                        }
+                        .foregroundStyle(.tertiary)
+                    }
                 }
                 Spacer()
                 if model.totalVolumeBytes > 0 {

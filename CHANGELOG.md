@@ -6,6 +6,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **Photo GPS (phase 1 of location)**: Analyze now reads each photo's EXIF GPS
+  coordinate (fully on-device, header-only — no network, no place lookup yet) and
+  stores it in the index. Photos analyzed before this are back-filled cheaply on
+  the next Analyze without re-running Vision. The Library header shows coverage —
+  "N of M photos have GPS" — so we can see how much of the library is geotagged
+  before deciding whether reverse-geocoding to city names (e.g. "Fairhope,
+  Alabama") is worth adding. (Heads-up: dedicated cameras like Fuji usually don't
+  record GPS unless geotagged via the phone app, so coverage may be low.)
 - **Folder cards with photo previews**: date folders in the Library now render as
   large cards showing a 2×4 collage of photos sampled from inside (cached), so you
   can see what a day holds at a glance instead of a bland folder glyph. Folders get

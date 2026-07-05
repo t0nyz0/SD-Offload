@@ -7,6 +7,15 @@ public struct PhotoLabel: Codable, Sendable, Hashable {
     public init(name: String, confidence: Double) { self.name = name; self.confidence = confidence }
 }
 
+/// A photo's capture coordinate, read from EXIF GPS (nil when the camera didn't
+/// record one — common for dedicated cameras). Place names come later, from an
+/// opt-in reverse-geocode; this is just the raw point.
+public struct GeoPoint: Codable, Sendable, Hashable {
+    public let lat: Double
+    public let lon: Double
+    public init(lat: Double, lon: Double) { self.lat = lat; self.lon = lon }
+}
+
 /// What we know about one photo's contents — the row in the searchable database.
 public struct PhotoRecord: Codable, Sendable {
     public let path: String
@@ -15,11 +24,18 @@ public struct PhotoRecord: Codable, Sendable {
     public var labels: [PhotoLabel]    // scene/object classifications
     public var animals: [String]       // "Dog", "Cat" from animal recognition
     public var analyzedAt: Date
+    // Optional (both decode as nil on records written before GPS support, so old
+    // index files still load). `gpsChecked == true` means we've already looked
+    // for a coordinate, so a re-scan doesn't re-read every no-GPS photo's header.
+    public var location: GeoPoint?
+    public var gpsChecked: Bool?
 
     public init(path: String, size: Int64, mtime: Date, labels: [PhotoLabel],
-                animals: [String], analyzedAt: Date = Date()) {
+                animals: [String], analyzedAt: Date = Date(),
+                location: GeoPoint? = nil, gpsChecked: Bool? = nil) {
         self.path = path; self.size = size; self.mtime = mtime
         self.labels = labels; self.animals = animals; self.analyzedAt = analyzedAt
+        self.location = location; self.gpsChecked = gpsChecked
     }
 
     /// De-duplicated tag list (animals first, then labels), lowercased.
@@ -62,6 +78,16 @@ public actor PhotoIndex {
         dirty = true
     }
 
+    /// Set (or clear) a photo's coordinate and mark it GPS-checked, leaving its
+    /// content labels intact. Used by the cheap GPS backfill.
+    public func setGPS(path: String, location: GeoPoint?) {
+        guard var r = records[path] else { return }
+        r.location = location
+        r.gpsChecked = true
+        records[path] = r
+        dirty = true
+    }
+
     public func remove(paths: [String]) {
         for p in paths where records[p] != nil { records.removeValue(forKey: p); dirty = true }
     }
@@ -99,6 +125,26 @@ public actor PhotoIndex {
 
     public func analyzedCount(underPrefix prefix: String) -> Int {
         records.keys.filter { Self.isUnder($0, prefix) }.count
+    }
+
+    /// GPS coverage under a root: how many analyzed photos we've checked, and how
+    /// many of those actually carried a coordinate. Answers "how much of my
+    /// library even has GPS" before we invest in place-name lookups.
+    public func geoStats(underPrefix prefix: String) -> (withGPS: Int, checked: Int) {
+        var withGPS = 0, checked = 0
+        for (path, rec) in records where Self.isUnder(path, prefix) {
+            if rec.gpsChecked == true { checked += 1 }
+            if rec.location != nil { withGPS += 1 }
+        }
+        return (withGPS, checked)
+    }
+
+    /// True if this analyzed record hasn't yet been examined for a GPS tag — used
+    /// to cheaply backfill coordinates on photos analyzed before GPS support,
+    /// without re-running Vision on them.
+    public func needsGPSCheck(path: String) -> Bool {
+        guard let r = records[path] else { return false }   // not analyzed yet → full analyze covers it
+        return r.gpsChecked != true
     }
 
     /// Paths whose contents match ALL space-separated query terms.

@@ -89,6 +89,46 @@ final class PhotoIndexTests: XCTestCase {
         XCTAssertNotNil(c)
     }
 
+    func testGPSBackfillAndStats() async {
+        let index = PhotoIndex(file: file)
+        await index.put(rec("/nas/a.jpg", labels: ["dog"]))   // gpsChecked == nil (old-style)
+        await index.put(rec("/nas/b.jpg", labels: ["cat"]))
+        // Before any check, both need a GPS pass and coverage is zero.
+        let needsBefore = await index.needsGPSCheck(path: "/nas/a.jpg")
+        XCTAssertTrue(needsBefore)
+        var stats = await index.geoStats(underPrefix: "/nas")
+        XCTAssertEqual(stats.checked, 0)
+        // a.jpg has a coordinate; b.jpg was checked but has none.
+        await index.setGPS(path: "/nas/a.jpg", location: GeoPoint(lat: 30.52, lon: -87.9))
+        await index.setGPS(path: "/nas/b.jpg", location: nil)
+        let needsA = await index.needsGPSCheck(path: "/nas/a.jpg")
+        let needsB = await index.needsGPSCheck(path: "/nas/b.jpg")
+        XCTAssertFalse(needsA)
+        XCTAssertFalse(needsB)
+        stats = await index.geoStats(underPrefix: "/nas")
+        XCTAssertEqual(stats.checked, 2)
+        XCTAssertEqual(stats.withGPS, 1)
+        // Labels are untouched by a GPS update.
+        let labelled = await index.search("dog")
+        XCTAssertEqual(labelled, ["/nas/a.jpg"])
+    }
+
+    func testOldRecordsDecodeWithoutGPSFields() async {
+        // A pre-GPS index JSON (no location / gpsChecked keys) must still load.
+        let legacy = """
+        [{"path":"/nas/a.jpg","size":1000,"mtime":"2026-01-01T00:00:00Z",\
+        "labels":[],"animals":["Dog"],"analyzedAt":"2026-01-01T00:00:00Z"}]
+        """
+        try? legacy.data(using: .utf8)!.write(to: file)
+        let index = PhotoIndex(file: file)
+        let found = await index.search("dog")
+        XCTAssertEqual(found, ["/nas/a.jpg"])
+        let needs = await index.needsGPSCheck(path: "/nas/a.jpg")
+        XCTAssertTrue(needs)   // nil gpsChecked ⇒ needs a pass
+        let stats = await index.geoStats(underPrefix: "/nas")
+        XCTAssertEqual(stats.checked, 0)
+    }
+
     func testPersistenceRoundtrip() async {
         let a = PhotoIndex(file: file)
         await a.put(rec("/nas/a.jpg", labels: ["dog", "grass"], animals: ["Dog"]))

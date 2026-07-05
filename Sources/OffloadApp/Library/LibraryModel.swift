@@ -51,6 +51,15 @@ final class LibraryModel {
     private(set) var suggestions: [(tag: String, count: Int)] = []
     private(set) var tagsByPath: [String: [String]] = [:]   // for tile overlays
 
+    // GPS coverage for the current root (populated after Analyze). Answers
+    // "how many of my photos even have location" before we build place-names.
+    private(set) var geoWithGPS = 0
+    private(set) var geoChecked = 0
+    var geoSummary: String? {
+        guard geoChecked > 0 else { return nil }
+        return "\(geoWithGPS.formatted()) of \(geoChecked.formatted()) photos have GPS"
+    }
+
     private let browser = LibraryBrowser()
     private let analyzer = PhotoAnalyzer()
     let photoIndex = PhotoIndex()
@@ -277,8 +286,11 @@ final class LibraryModel {
         let index = photoIndex
         Task { [weak self] in
             let tags = await index.topTags(underPrefix: prefix)
+            let stats = await index.geoStats(underPrefix: prefix)
             guard let self else { return }
             self.suggestions = tags
+            self.geoWithGPS = stats.withGPS
+            self.geoChecked = stats.checked
         }
     }
 
@@ -327,7 +339,8 @@ final class LibraryModel {
                             // so an unlabelable photo isn't re-analyzed every run.
                             let result = analyzer.analyze(url: e.url)
                             let rec = PhotoRecord(path: e.id, size: e.size, mtime: e.modified,
-                                                  labels: result?.labels ?? [], animals: result?.animals ?? [])
+                                                  labels: result?.labels ?? [], animals: result?.animals ?? [],
+                                                  location: result?.location, gpsChecked: true)
                             return (e.id, rec)
                         }
                     }
@@ -342,12 +355,38 @@ final class LibraryModel {
                 }
                 i += width
             }
+
+            // Cheap GPS backfill (header-only, no Vision) for photos analyzed
+            // before GPS support, so coverage reflects the whole library.
+            let todoIDs = Set(todo.map(\.id))
+            var gpsTodo: [LibraryEntry] = []
+            for e in primaries where !todoIDs.contains(e.id) {
+                if await index.needsGPSCheck(path: e.id) { gpsTodo.append(e) }
+            }
+            await MainActor.run { [weak self] in self?.analyzeTotal += gpsTodo.count }
+            var g = 0
+            while g < gpsTodo.count {
+                if Task.isCancelled { break }
+                let batch = Array(gpsTodo[g..<min(g + width, gpsTodo.count)])
+                await withTaskGroup(of: (String, GeoPoint?).self) { group in
+                    for e in batch { group.addTask { (e.id, analyzer.gpsOnly(url: e.url)) } }
+                    for await (path, geo) in group {
+                        await index.setGPS(path: path, location: geo)
+                        await MainActor.run { [weak self] in self?.analyzeDone += 1 }
+                    }
+                }
+                g += width
+            }
+
             await index.save()
+            let stats = await index.geoStats(underPrefix: root.path)
             guard let self else { return }
             await MainActor.run {
                 // Ignore a stale task that a newer Analyze run superseded.
                 guard self.analyzeEpoch == epoch else { return }
                 self.analyzing = false
+                self.geoWithGPS = stats.withGPS
+                self.geoChecked = stats.checked
                 self.refreshSuggestions()
                 if self.isSearching { self.runSearch() }
             }
