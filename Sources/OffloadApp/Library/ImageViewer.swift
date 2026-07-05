@@ -6,6 +6,7 @@ import SwiftUI
 struct ImageViewer: View {
     let items: [DisplayItem]
     @Binding var index: Int?
+    @State private var exif: ExifInfo?
 
     private var current: DisplayItem? {
         guard let i = index, items.indices.contains(i) else { return nil }
@@ -37,6 +38,9 @@ struct ImageViewer: View {
             }
             .background(shortcuts)
             .transition(.opacity)
+            .task(id: item.id) {
+                exif = await ExifCache.shared.info(url: item.primary.url, mtime: item.primary.modified)
+            }
         }
     }
 
@@ -49,6 +53,13 @@ struct ImageViewer: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer()
+            if let exif, exif.hasAny {
+                Text(exif.caption)
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.trailing, DS.Space.s)
+            }
             if let raw = item.raw?.url {
                 Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
             }
