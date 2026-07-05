@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-on--device-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-73%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-79%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -195,7 +195,7 @@ Everything is in **Settings** (from the popover's gear menu):
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision on the Neural Engine (content + faces) |
 | App | SwiftUI `MenuBarExtra`, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 73 unit tests + a full wipe-path integration harness |
+| Tests | 79 unit tests + a full wipe-path integration harness |
 
 ## Status
 
