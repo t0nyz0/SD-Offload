@@ -47,6 +47,7 @@ public struct WipeGate {
         case parentNotPlainDirectory(String)
         case journalNotFlushed
         case cardTokenMismatch
+        case secondaryMissing(String)
 
         public var description: String {
             switch self {
@@ -63,6 +64,7 @@ public struct WipeGate {
             case .parentNotPlainDirectory(let p): "parent folder \(p) is not a plain directory"
             case .journalNotFlushed: "journal not flushed to disk"
             case .cardTokenMismatch: "the inserted card is not the one this session was copying"
+            case .secondaryMissing(let p): "\(p) is not yet verified on the second drive"
             }
         }
     }
@@ -83,7 +85,9 @@ public struct WipeGate {
                                 nasHealth: NASHealth,
                                 statOf: (String) -> LStatResult?,
                                 journalFlushed: Bool,
-                                cardTokenOnCard: String? = nil) -> Verdict {
+                                cardTokenOnCard: String? = nil,
+                                secondaryDestRoot: String? = nil,
+                                secondaryStatOf: (String) -> LStatResult? = liveStat) -> Verdict {
         var blockers: [Blocker] = []
 
         // 1. Non-empty manifest.
@@ -179,6 +183,22 @@ public struct WipeGate {
             if abs(st.mtime.timeIntervalSince(file.mtime)) > 2 {
                 blockers.append(.statMismatch(rel, "modified since planning"))
                 continue
+            }
+            // Second verified destination: a card file may only be deleted once its
+            // copy is present there too — so a wipe never leaves a single copy
+            // standing, even across a resume where the second drive was enabled
+            // after the file was NAS-verified. (In-run, copyToSecondary makes and
+            // verifies this copy before the file reaches a wipe-eligible state; on
+            // resume, reconcileSecondaries backfills it. This is the durable check
+            // that guarantees the invariant regardless of how we got here.)
+            if let secRoot = secondaryDestRoot, !secRoot.isEmpty {
+                let secBase = secRoot.hasSuffix("/") ? String(secRoot.dropLast()) : secRoot
+                let secPath = secBase + "/" + file.destRelPath
+                guard let sst = secondaryStatOf(secPath), sst.isRegularFile, !sst.isSymlink,
+                      sst.size == file.size else {
+                    blockers.append(.secondaryMissing(file.destRelPath))
+                    continue
+                }
             }
             deletions.append(PlannedDeletion(fileID: file.id, absolutePath: absolute))
         }

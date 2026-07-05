@@ -45,6 +45,61 @@ final class WipeGateTests: XCTestCase {
         XCTAssertEqual(v.deletions.count, 2)
     }
 
+    // Second verified destination: when configured, a card file may only be deleted
+    // once its copy is present there too — the durable guarantee behind the
+    // "confirmed on BOTH drives" promise, enforced independently of file state.
+    private func secondaryStat(_ session: SessionRecord, root: String,
+                               size: (FileRecord) -> Int64) -> (String) -> WipeGate.LStatResult? {
+        var map: [String: WipeGate.LStatResult] = [:]
+        for file in session.files {
+            map[root + "/" + file.destRelPath] = WipeGate.LStatResult(
+                isRegularFile: true, isSymlink: false, isDirectory: false,
+                size: size(file), mtime: file.mtime)
+        }
+        return { map[$0] }
+    }
+
+    func testSecondaryPresentPasses() {
+        let s = baselineSession()
+        let secRoot = "/Volumes/SECOND"
+        let v = WipeGate.evaluate(session: s, policy: .afterNASVerify, cardMount: card(),
+                                  nasHealth: .healthy, statOf: goodStat(s), journalFlushed: true,
+                                  secondaryDestRoot: secRoot,
+                                  secondaryStatOf: secondaryStat(s, root: secRoot, size: { $0.size }))
+        XCTAssertTrue(v.allowed, "\(v.blockers)")
+        XCTAssertEqual(v.deletions.count, 2)
+    }
+
+    func testSecondaryMissingBlocks() {
+        let s = baselineSession()
+        let v = WipeGate.evaluate(session: s, policy: .afterNASVerify, cardMount: card(),
+                                  nasHealth: .healthy, statOf: goodStat(s), journalFlushed: true,
+                                  secondaryDestRoot: "/Volumes/SECOND",
+                                  secondaryStatOf: { _ in nil })   // no second copy on disk
+        XCTAssertFalse(v.allowed)
+        XCTAssertTrue(v.blockers.contains { if case .secondaryMissing = $0 { return true }; return false })
+        XCTAssertTrue(v.deletions.isEmpty)
+    }
+
+    func testSecondarySizeMismatchBlocks() {
+        let s = baselineSession()
+        let secRoot = "/Volumes/SECOND"
+        let v = WipeGate.evaluate(session: s, policy: .afterNASVerify, cardMount: card(),
+                                  nasHealth: .healthy, statOf: goodStat(s), journalFlushed: true,
+                                  secondaryDestRoot: secRoot,
+                                  secondaryStatOf: secondaryStat(s, root: secRoot, size: { $0.size - 1 }))
+        XCTAssertFalse(v.allowed)
+        XCTAssertTrue(v.blockers.contains { if case .secondaryMissing = $0 { return true }; return false })
+    }
+
+    func testNoSecondaryConfiguredStillPasses() {
+        // The default (nil secondaryDestRoot) must not require any second copy.
+        let s = baselineSession()
+        let v = WipeGate.evaluate(session: s, policy: .afterNASVerify, cardMount: card(),
+                                  nasHealth: .healthy, statOf: goodStat(s), journalFlushed: true)
+        XCTAssertTrue(v.allowed, "\(v.blockers)")
+    }
+
     func testEmptyManifestBlocks() {
         let s = baselineSession(states: [])
         let v = WipeGate.evaluate(session: s, policy: .afterNASVerify, cardMount: card(),

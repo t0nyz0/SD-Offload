@@ -126,6 +126,16 @@ if mode == "chaos-crash" || mode == "chaos-wrongcard" {
     // exits(0) on success
 }
 
+// Second-copy resume proof: files NAS-verified with no second copy, then the
+// second drive is enabled and the session resumes — the card must not be wiped
+// until each file is backfilled and verified on the second drive.
+if mode == "secondary-resume" {
+    try await runSecondaryResumeScenario(cardRoot: cardRoot, nasRoot: nasRoot, secondary: secondary,
+                                         staging: stagingStore, journalDir: journalDir, historyDir: historyDir,
+                                         config: cfg, cardInfo: cardInfo, sourceHashes: sourceHashes)
+    // exits(0) on success
+}
+
 // Plan the manifest exactly as the real coordinator would.
 let planner = IngestPlanner()
 let scanned = planner.scan(cardRoot: cardRoot, scope: .mediaRootsOnly)

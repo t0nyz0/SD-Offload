@@ -105,6 +105,13 @@ public actor SessionRunner {
             }
         }
 
+        // Resume safety: if a second destination is configured now, backfill it for
+        // every already-verified file BEFORE the wipe gate can run — closes the gap
+        // where the second drive was enabled after files were NAS-verified in a
+        // prior (interrupted) run. No-op on a fresh session (nothing is verified yet)
+        // and cheap for files already mirrored (an uncached read-back only).
+        await reconcileSecondaries(record: record)
+
         startSampler()
         if settledFiles < totalFiles {
             spawnHop1Workers()
@@ -361,7 +368,7 @@ public actor SessionRunner {
                     if existingHash == sourceHash {
                         // Already on the NAS — still mirror to the second drive
                         // before the file counts as safe.
-                        do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash) }
+                        do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash, destRelPath: destRelPath) }
                         catch { await handleSecondaryFailure(file, error); return }
                         await journal.transition(file: file.id, to: .skippedDuplicate, in: sessionID)
                         await finishFile(file)
@@ -431,7 +438,7 @@ public actor SessionRunner {
             meter.fileCompleted(stage: .nasVerify, wall: Date().timeIntervalSince(verifyStarted), size: file.size)
             // Mirror to the second drive and read it back BEFORE the file becomes
             // wipe-eligible — so the card is never the last copy standing.
-            do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash) }
+            do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash, destRelPath: destRelPath) }
             catch { await handleSecondaryFailure(file, error); return }
             await journal.transition(file: file.id, to: .nasVerified, in: sessionID)
             await finishFile(file)
@@ -465,15 +472,23 @@ public actor SessionRunner {
         settle()
     }
 
-    /// Mirror a NAS-verified file to the optional second destination (a local /
+    /// Mirror a verified file to the optional second destination (a local /
     /// external drive), then read it back UNCACHED. Throws on any failure so the
     /// caller doesn't mark the file safe. No-op when no second drive is configured.
     /// Idempotent: an already-present, hash-matching copy is accepted.
-    private nonisolated func copyToSecondary(_ file: FileRecord, from stagedURL: URL, sourceHash: String) async throws {
+    ///
+    /// `sourceURL` is the copy source — the staged file during a live run, or the
+    /// NAS copy when backfilling on resume (staging may have been purged). Either
+    /// way the *result* is verified uncached against `sourceHash` (the SD-read
+    /// hash), so integrity is end-to-end regardless of source. `destRelPath` is the
+    /// resolved NAS-relative path (post-collision-suffix), so the second drive
+    /// mirrors the NAS layout exactly — and matches what the WipeGate checks.
+    private nonisolated func copyToSecondary(_ file: FileRecord, from sourceURL: URL,
+                                             sourceHash: String, destRelPath: String) async throws {
         guard let root = config.secondaryDestPath, !root.isEmpty else { return }
         let fm = FileManager.default
         let meter = self.meter
-        let destURL = URL(fileURLWithPath: root).appendingPathComponent(file.destRelPath)
+        let destURL = URL(fileURLWithPath: root).appendingPathComponent(destRelPath)
         try fm.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         // Already mirrored (resume / re-run)? Verify uncached and accept.
@@ -489,7 +504,7 @@ public actor SessionRunner {
             .appendingPathComponent(".offload-\(file.id.uuidString).2.partial")
         var options = ChunkedIO.CopyOptions()
         options.preallocate = false
-        let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: partial, options: options,
+        let result = try await ChunkedIO.copyAndHash(from: sourceURL, to: partial, options: options,
                                                      gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
         guard result.sha256Hex == sourceHash else {
             try? fm.removeItem(at: partial)
@@ -509,6 +524,22 @@ public actor SessionRunner {
         guard back == sourceHash else {
             try? fm.removeItem(at: destURL)
             throw OffloadError(.hashMismatch(stage: "second-copy verification"))
+        }
+    }
+
+    /// On resume, ensure every already-verified file also exists on the second
+    /// drive. Sources from the NAS copy (the staged copy is typically purged after
+    /// verify) and re-verifies uncached against the SD-read hash. Best-effort: a
+    /// file that can't be mirrored is left as-is and the WipeGate blocks the wipe
+    /// with `.secondaryMissing`, so the card is never reduced to a single copy.
+    private func reconcileSecondaries(record: SessionRecord) async {
+        guard let root = config.secondaryDestPath, !root.isEmpty else { return }
+        let nasRoot = URL(fileURLWithPath: config.nasRootPath, isDirectory: true)
+        for file in record.files where file.state == .nasVerified || file.state == .skippedDuplicate {
+            guard let hash = file.sourceHashHex else { continue }
+            let nasURL = nasRoot.appendingPathComponent(file.destRelPath)
+            do { try await copyToSecondary(file, from: nasURL, sourceHash: hash, destRelPath: file.destRelPath) }
+            catch { /* leave it; the wipe gate blocks on .secondaryMissing */ }
         }
     }
 
@@ -696,7 +727,9 @@ public actor SessionRunner {
                 cardFreeRaw = nil
             }
         case .afterNASVerify, .askEachTime:
-            cardFreeRaw = allSafeRaw.map { $0 + wipeTime }
+            // Re-apply the sanity filter after adding the wipe tail so the card-free
+            // ETA can't exceed the 72h clamp (symmetric with .afterStagingVerify).
+            cardFreeRaw = ETAMath.clampETA(allSafeRaw.map { $0 + wipeTime })
         }
         let (cardFree, allSafe) = meter.smoothedETAs(cardFree: cardFreeRaw, allSafe: allSafeRaw, dt: 0.1)
         snapshot.etaCardFree = cardFree
@@ -788,7 +821,8 @@ public actor SessionRunner {
                                         nasHealth: nasHealth,
                                         statOf: WipeGate.liveStat,
                                         journalFlushed: true,
-                                        cardTokenOnCard: cardTokenOnCard)
+                                        cardTokenOnCard: cardTokenOnCard,
+                                        secondaryDestRoot: config.secondaryDestPath)
 
         guard verdict.allowed else {
             let blockers = verdict.blockers.map(\.description)
