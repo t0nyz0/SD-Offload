@@ -51,6 +51,37 @@ public struct LibraryBrowser: Sendable {
         return out
     }
 
+    /// Up to `limit` representative media files under `folder`, for a folder
+    /// preview collage. Walks lazily and stops after finding `scanCap` files,
+    /// prefers JPEG/HEIC over RAW, dedupes RAW+JPEG pairs by basename, then
+    /// samples evenly across what it found. Cheap over SMB (enumerator is lazy).
+    public func sampleMedia(under folder: URL, limit: Int = 4, scanCap: Int = 32) -> [LibraryEntry] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        guard let e = fm.enumerator(at: folder, includingPropertiesForKeys: keys,
+                                    options: [.skipsHiddenFiles]) else { return [] }
+        var found: [LibraryEntry] = []
+        for case let url as URL in e {
+            guard let kind = MediaKind.classify(ext: url.pathExtension) else { continue }
+            let v = try? url.resourceValues(forKeys: Set(keys))
+            guard v?.isRegularFile == true else { continue }
+            found.append(LibraryEntry(id: url.path, name: url.lastPathComponent, kind: .media(kind),
+                                      size: Int64(v?.fileSize ?? 0), modified: v?.contentModificationDate ?? .distantPast))
+            if found.count >= scanCap { break }
+        }
+        func isRaw(_ e: LibraryEntry) -> Bool { if case .media(.raw) = e.kind { return true }; return false }
+        let ordered = found.sorted { (isRaw($0) ? 1 : 0) < (isRaw($1) ? 1 : 0) }   // JPEGs first
+        var seen = Set<String>()
+        var uniq: [LibraryEntry] = []
+        for entry in ordered {
+            let base = (entry.name as NSString).deletingPathExtension.lowercased()
+            if seen.insert(base).inserted { uniq.append(entry) }
+        }
+        guard uniq.count > limit else { return uniq }
+        let step = Double(uniq.count) / Double(limit)
+        return (0..<limit).map { uniq[min(uniq.count - 1, Int(Double($0) * step))] }
+    }
+
     /// Count media under a root, reporting partial progress as it walks. Cheap
     /// per-file (no hashing); one callback per ~250 files keeps the UI live.
     public func countMedia(root: URL, isCancelled: @Sendable () -> Bool = { false },

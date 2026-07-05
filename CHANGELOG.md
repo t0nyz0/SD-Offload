@@ -6,6 +6,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **Folder cards with photo previews**: date folders in the Library now render as
+  large cards showing a 2×4 collage of photos sampled from inside (cached), so you
+  can see what a day holds at a glance instead of a bland folder glyph. Folders get
+  their own larger grid, separate from the photo thumbnails.
+- **Human-readable dates**: a `YYYY/MM/DD` folder is labelled by what it means —
+  the open folder shows "Saturday, July 4th, 2026" next to the breadcrumb, and each
+  day/month/year card is captioned ("Jul 4 · Saturday", "July · 2026", "2026")
+  instead of a bare number.
 - **Adjustable thumbnail size**: a slider in the Library toolbar scales the grid
   tiles up or down (remembered across launches).
 - **Per-photo info line** under each thumbnail: format (JPG+RAW / RAW / VIDEO)

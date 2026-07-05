@@ -91,6 +91,16 @@ private struct LibraryHeader: View {
                 }
             }
             Breadcrumb(model: model)
+            if let label = model.currentDateLabel {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(DS.safe)
+                    Text(label)
+                        .font(.system(size: 15, weight: .semibold))
+                        .monospacedDigit()
+                }
+            }
         }
         .padding(DS.Space.l)
     }
@@ -244,6 +254,10 @@ private struct LibraryGrid: View {
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: tileSize, maximum: tileSize + 60), spacing: 12)]
     }
+    // Folders get their own, larger tiles so a date hierarchy is easy to scan.
+    private var folderColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 14)]
+    }
 
     private var canDelete: Bool { model.source == .nas }
 
@@ -311,24 +325,40 @@ private struct LibraryGrid: View {
     private var grid: some View {
         ScrollView {
             let items = model.displayedItems
+            let folders = items.filter { $0.isFolder }
+            let photos = items.filter { !$0.isFolder }
             if items.isEmpty {
                 ContentUnavailableView(emptyTitle,
                                        systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
                                        description: Text(emptyDetail))
                     .padding(.top, 60)
             } else {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(items) { item in
-                        LibraryTile(item: item, tags: model.tags(for: item.primary),
-                                    selected: model.selection.contains(item.id))
-                            .onTapGesture(count: 2) { open(item) }
-                            .onTapGesture {
-                                let flags = NSEvent.modifierFlags
-                                model.handleTap(item,
-                                                command: flags.contains(.command),
-                                                shift: flags.contains(.shift))
+                VStack(alignment: .leading, spacing: DS.Space.l) {
+                    if !folders.isEmpty {
+                        LazyVGrid(columns: folderColumns, spacing: 14) {
+                            ForEach(folders) { item in
+                                FolderTile(item: item, rootPath: model.rootURL?.path)
+                                    .onTapGesture(count: 2) { model.enter(item.primary) }
+                                    .onTapGesture { model.clearSelection() }
+                                    .contextMenu { menu(for: item) }
                             }
-                            .contextMenu { menu(for: item) }
+                        }
+                    }
+                    if !photos.isEmpty {
+                        LazyVGrid(columns: columns, spacing: 12) {
+                            ForEach(photos) { item in
+                                LibraryTile(item: item, tags: model.tags(for: item.primary),
+                                            selected: model.selection.contains(item.id))
+                                    .onTapGesture(count: 2) { open(item) }
+                                    .onTapGesture {
+                                        let flags = NSEvent.modifierFlags
+                                        model.handleTap(item,
+                                                        command: flags.contains(.command),
+                                                        shift: flags.contains(.shift))
+                                    }
+                                    .contextMenu { menu(for: item) }
+                            }
+                        }
                     }
                 }
                 .padding(DS.Space.l)
@@ -509,5 +539,115 @@ private struct LibraryTile: View {
             .background(.black.opacity(0.6), in: Capsule())
             .foregroundStyle(.white)
             .padding(5)
+    }
+}
+
+/// A large folder card: a 2×2 collage of photos sampled from inside, with a
+/// humanized date caption ("Jul 4" · "Saturday") over a bottom scrim.
+private struct FolderTile: View {
+    let item: DisplayItem
+    let rootPath: String?
+    @State private var thumbs: [NSImage] = []
+    @State private var loaded = false
+
+    private var entry: LibraryEntry { item.primary }
+    private var caption: DateFolders.Caption {
+        DateFolders.caption(folderPath: entry.id, rootPath: rootPath ?? "", rawName: entry.name)
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: DS.Radius.m)
+            .fill(DS.Palette.surfaceRaised)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay { collage }
+            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
+            .overlay(alignment: .bottomLeading) { captionOverlay }
+            .overlay(alignment: .topTrailing) { folderChip }
+            .overlay(RoundedRectangle(cornerRadius: DS.Radius.m)
+                .strokeBorder(DS.Palette.hairline, lineWidth: 1))
+            .task(id: entry.id) {
+                thumbs = await FolderPreviewLoader.shared.preview(folder: entry.url, mtime: entry.modified)
+                loaded = true
+            }
+    }
+
+    @ViewBuilder private var collage: some View {
+        if thumbs.isEmpty {
+            ZStack {
+                if loaded {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 42))
+                        .foregroundStyle(DS.safe.opacity(0.85))
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+        } else {
+            CollageGrid(images: thumbs)
+        }
+    }
+
+    private var captionOverlay: some View {
+        let c = caption
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(c.title).font(.system(size: 16, weight: .bold))
+            if let sub = c.subtitle {
+                Text(sub).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.8))
+            }
+        }
+        .padding(.horizontal, 11).padding(.top, 18).padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            LinearGradient(colors: [.black.opacity(0), .black.opacity(0.6)],
+                           startPoint: .top, endPoint: .bottom)
+        )
+        .foregroundStyle(.white)
+    }
+
+    private var folderChip: some View {
+        Image(systemName: "folder.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .padding(6)
+            .background(.black.opacity(0.35), in: Circle())
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(7)
+    }
+}
+
+/// Lays 1–4 thumbnails into a folder card: full-bleed for one, split for two,
+/// big-plus-stack for three, a 2×2 grid for four. Each cell fills and clips.
+private struct CollageGrid: View {
+    let images: [NSImage]
+    private let gap: CGFloat = 2
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            let halfW = (w - gap) / 2, halfH = (h - gap) / 2
+            switch min(images.count, 4) {
+            case 1:
+                cell(images[0], w, h)
+            case 2:
+                HStack(spacing: gap) { cell(images[0], halfW, h); cell(images[1], halfW, h) }
+            case 3:
+                HStack(spacing: gap) {
+                    cell(images[0], halfW, h)
+                    VStack(spacing: gap) { cell(images[1], halfW, halfH); cell(images[2], halfW, halfH) }
+                }
+            default:
+                VStack(spacing: gap) {
+                    HStack(spacing: gap) { cell(images[0], halfW, halfH); cell(images[1], halfW, halfH) }
+                    HStack(spacing: gap) { cell(images[2], halfW, halfH); cell(images[3], halfW, halfH) }
+                }
+            }
+        }
+    }
+
+    private func cell(_ img: NSImage, _ w: CGFloat, _ h: CGFloat) -> some View {
+        Image(nsImage: img)
+            .resizable()
+            .scaledToFill()
+            .frame(width: max(0, w), height: max(0, h))
+            .clipped()
     }
 }

@@ -77,6 +77,14 @@ final class LibraryModel {
         }
     }
 
+    /// A human-readable label for the currently-open date folder, e.g.
+    /// "Saturday, July 4th, 2026" for 2026/07/04, "July 2026" for a month,
+    /// "2026" for a year — nil at the root or in a non-date folder (e.g. a card).
+    var currentDateLabel: String? {
+        guard source == .nas, let root = rootURL, let dir = currentDir, dir.path != root.path else { return nil }
+        return DateFolders.headerLabel(folderPath: dir.path, rootPath: root.path)
+    }
+
     func update(nasRootPath: String, cardRootPath: String?) {
         let cardChanged = self.cardRootPath != cardRootPath
         self.nasRootPath = nasRootPath
