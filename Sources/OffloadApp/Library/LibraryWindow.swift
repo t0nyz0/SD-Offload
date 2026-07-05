@@ -6,6 +6,7 @@ import OffloadCore
 struct LibraryWindow: View {
     @Environment(AppState.self) private var app
     @State private var model: LibraryModel?
+    @State private var viewerIndex: Int?
 
     var body: some View {
         Group {
@@ -55,10 +56,18 @@ struct LibraryWindow: View {
                     SuggestionChips(model: model)
                 }
                 Divider()
-                LibraryGrid(model: model)
+                LibraryGrid(model: model, openViewer: { openInViewer($0, model) })
             }
             .background(DS.Palette.ink)
         }
+        .overlay {
+            ImageViewer(items: model.displayedItems.filter { !$0.isFolder }, index: $viewerIndex)
+        }
+    }
+
+    private func openInViewer(_ item: DisplayItem, _ model: LibraryModel) {
+        let photos = model.displayedItems.filter { !$0.isFolder }
+        viewerIndex = photos.firstIndex { $0.id == item.id }
     }
 }
 
@@ -217,6 +226,7 @@ private struct SuggestionChips: View {
 
 private struct LibraryGrid: View {
     let model: LibraryModel
+    let openViewer: (DisplayItem) -> Void
     @State private var pendingDelete: DisplayItem?
     @State private var bulkConfirm = false
     private let columns = [GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 12)]
@@ -326,7 +336,8 @@ private struct LibraryGrid: View {
             Button("Open") { model.enter(item.primary) }
             Button("Reveal in Finder") { reveal(item.primary.url) }
         } else {
-            Button("Open") { NSWorkspace.shared.open(item.primary.url) }
+            Button("Open") { openViewer(item) }
+            Button("Open in Preview") { NSWorkspace.shared.open(item.primary.url) }
             if let rawURL = item.raw?.url {
                 Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
             }
@@ -356,7 +367,7 @@ private struct LibraryGrid: View {
 
     private func open(_ item: DisplayItem) {
         if item.isFolder { model.enter(item.primary) }
-        else { NSWorkspace.shared.open(item.primary.url) }
+        else { openViewer(item) }
     }
 }
 

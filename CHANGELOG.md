@@ -6,6 +6,11 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **In-app image viewer**: double-click a photo (or right-click → Open) to view
+  it instantly in a built-in viewer showing the JPEG — no more launching
+  Preview. Arrow keys move between photos, Escape/Space closes, scroll/pinch
+  zooms, double-click toggles zoom. "Open RAW" and "Open in Preview" remain in
+  the right-click menu for the external app.
 - **Multi-select in the Library**: click to select, ⌘-click to toggle, ⇧-click to
   select a range, ⌘A to select all. A selection bar shows the count with Delete /
   Clear, and ⌦ or right-click → "Delete N Photos" removes them all at once (each
