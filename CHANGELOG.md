@@ -6,6 +6,9 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [Unreleased]
 
 ### Added
+- **Per-photo info line** under each thumbnail: format (JPG+RAW / RAW / VIDEO)
+  plus basic EXIF — ISO, aperture, shutter, focal length — read cheaply from the
+  file header (no full decode) and cached.
 - **In-app image viewer**: double-click a photo (or right-click → Open) to view
   it instantly in a built-in viewer showing the JPEG — no more launching
   Preview. Arrow keys move between photos, Escape/Space closes, scroll/pinch

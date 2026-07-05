@@ -376,6 +376,7 @@ private struct LibraryTile: View {
     var tags: [String] = []
     var selected: Bool = false
     @State private var thumb: NSImage?
+    @State private var exif: ExifInfo?
 
     private var entry: LibraryEntry { item.primary }
     private var isVideo: Bool { if case .media(.video) = entry.kind { return true }; return false }
@@ -421,16 +422,37 @@ private struct LibraryTile: View {
                     .strokeBorder(selected ? Color.accentColor : DS.Palette.hairline,
                                   lineWidth: selected ? 3 : 1))
 
-            Text(titleText)
-                .font(.system(size: 11))
-                .lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(.secondary)
+            VStack(spacing: 1) {
+                Text(titleText)
+                    .font(.system(size: 11))
+                    .lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                if let info = infoLine {
+                    Text(info)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .monospacedDigit()
+                }
+            }
         }
         .task(id: entry.id) {
             guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(url: entry.url, size: entry.size,
                                                            mtime: entry.modified, side: 220)
         }
+        .task(id: entry.id) {
+            guard !item.isFolder, !isVideo else { return }
+            exif = await ExifCache.shared.info(url: entry.url, mtime: entry.modified)
+        }
+    }
+
+    /// The tiny line under the name: format + basic EXIF ("JPG+RAW · ISO 400 · ƒ2.8").
+    private var infoLine: String? {
+        guard !item.isFolder else { return nil }
+        let format: String = isVideo ? "VIDEO" : (item.raw != nil ? "JPG+RAW" : (isRawOnly ? "RAW" : "JPG"))
+        if let exif, exif.hasAny { return "\(format) · \(exif.caption)" }
+        return format
     }
 
     // When a RAW is attached, title the card by its base name (no extension) so
@@ -439,10 +461,10 @@ private struct LibraryTile: View {
         item.raw != nil ? (entry.name as NSString).deletingPathExtension : entry.name
     }
 
+    // Format now lives in the info line under the tile; only flag video on the
+    // image itself (a play marker reads faster than text there).
     @ViewBuilder private var formatBadge: some View {
-        if isVideo { badge("VIDEO") }
-        else if item.raw != nil { badge("JPG+RAW") }
-        else if isRawOnly { badge("RAW") }
+        if isVideo { badge("▶") }
     }
 
     @ViewBuilder private var tagBadge: some View {
