@@ -258,7 +258,12 @@ final class LibraryModel {
             return urls
         }.value
         await Task.detached(priority: .userInitiated) {
-            for url in targets { try? FileManager.default.removeItem(at: url) }
+            // Move to the Trash rather than hard-unlink, so a mistaken delete is
+            // recoverable. (Falls back to a hard delete if the volume has no Trash.)
+            for url in targets {
+                do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
+                catch { try? FileManager.default.removeItem(at: url) }
+            }
         }.value
         await photoIndex.remove(paths: targets.map(\.path))
         await photoIndex.save()

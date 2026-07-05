@@ -104,7 +104,7 @@ let watcher = CardWatcher()   // not started; autoEject off so eject is never ca
 
 let cardInfo = CardInfo(volumeUUID: "\(volName)#test", bsdName: cardDev ?? "disk-test",
                         mountPath: cardMountPath, volumeName: volName,
-                        capacityBytes: 96 << 20, freeBytes: 80 << 20, hasDCIM: true)
+                        capacityBytes: 96 << 20, freeBytes: 80 << 20, hasMediaRoot: true)
 
 // Crash/reopen resume proof — seeds a mid-transfer journal and resumes it.
 // chaos-wrongcard additionally proves a different card (colliding UUID) is not wiped.

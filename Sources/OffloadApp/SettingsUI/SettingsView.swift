@@ -39,9 +39,9 @@ struct SettingsView: View {
 
             Section("Card wipe") {
                 Picker("Erase the card", selection: $settings.config.wipePolicy) {
-                    Text("After NAS verification (recommended)").tag(WipePolicy.afterNASVerify)
-                    Text("After local staging verification").tag(WipePolicy.afterStagingVerify)
-                    Text("Ask every time").tag(WipePolicy.askEachTime)
+                    Text("Ask every time (recommended)").tag(WipePolicy.askEachTime)
+                    Text("Automatically, after NAS verification").tag(WipePolicy.afterNASVerify)
+                    Text("Automatically, after local staging verification").tag(WipePolicy.afterStagingVerify)
                 }
                 .pickerStyle(.radioGroup)
                 Toggle("Eject card automatically when done", isOn: $settings.config.autoEject)

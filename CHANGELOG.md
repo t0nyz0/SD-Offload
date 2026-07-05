@@ -5,6 +5,21 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+### Changed (public-release hardening)
+- **Card wipe now defaults to "Ask every time."** A new user opts in to unattended
+  wipes rather than discovering them; existing configs keep their setting. The
+  Settings copy no longer labels an automatic-erase option as "recommended."
+- **Library delete goes to the Trash** (recoverable) instead of a hard unlink.
+- **Broader card detection.** A volume is recognized as a camera card if it carries
+  *any* known media root (DCIM, PRIVATE, AVCHD, CLIP, MP_ROOT), not just DCIM.
+- **NAS credentials are stored device-only** (`ThisDeviceOnly` Keychain) so they
+  never sync to iCloud Keychain or restore onto another device.
+- **Accessibility labels** added to the destructive controls (wipe countdown +
+  Cancel, pause/cancel) so the irreversible path is unambiguous under VoiceOver.
+- Repo: added `LICENSE` (MIT), `SECURITY.md`, `CONTRIBUTING.md`, and a CI workflow
+  (`swift build` + `swift test`); scrubbed personal identifiers; added an as-is /
+  no-warranty disclaimer.
+
 ### Added
 - **Viewer info inspector + delete.** The in-app viewer gained a **Delete** button
   (⌦, NAS only, with confirmation — card originals stay protected) that removes the

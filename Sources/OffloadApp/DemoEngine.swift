@@ -27,7 +27,7 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
 
     private func runScript() async {
         let card = CardInfo(volumeUUID: "DEMO-UUID", bsdName: "disk9s1", mountPath: "/Volumes/DEMO-A7IV",
-                            volumeName: "A7IV-1", capacityBytes: 128 << 30, freeBytes: 84 << 30, hasDCIM: true)
+                            volumeName: "A7IV-1", capacityBytes: 128 << 30, freeBytes: 84 << 30, hasMediaRoot: true)
         emit(.nasGlance(NASGlance(mounted: true, healthy: true,
                                   freeBytes: 2_100_000_000_000, totalBytes: 8_000_000_000_000,
                                   photoCount: 38_412, photoBytes: 1_320_000_000_000)))

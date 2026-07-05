@@ -16,7 +16,7 @@ struct ConsentView: View {
             VStack(spacing: 3) {
                 Text("Offload \(card.volumeName)?")
                     .font(.system(size: 15, weight: .semibold))
-                Text("\(Fmt.bytes(card.usedBytes)) used of \(Fmt.bytes(card.capacityBytes))\(card.hasDCIM ? " · camera card" : "")")
+                Text("\(Fmt.bytes(card.usedBytes)) used of \(Fmt.bytes(card.capacityBytes))\(card.hasMediaRoot ? " · camera card" : "")")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()

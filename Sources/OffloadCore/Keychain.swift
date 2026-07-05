@@ -13,11 +13,18 @@ public enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let attributes: [String: Any] = [kSecValueData as String: data]
+        // ThisDeviceOnly: these NAS credentials never leave this Mac (no iCloud
+        // Keychain sync, not included in encrypted backups restored to another device).
+        let accessible = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: accessible,
+        ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var add = query
             add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = accessible
             SecItemAdd(add as CFDictionary, nil)
         }
     }

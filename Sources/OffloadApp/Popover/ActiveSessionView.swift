@@ -91,6 +91,7 @@ struct ActiveSessionView: View {
                 }
                 .buttonStyle(.borderless)
                 .help(isPaused ? "Resume" : "Pause")
+                .accessibilityLabel(isPaused ? "Resume offload" : "Pause offload")
                 Button {
                     app.cancelTapped()
                 } label: {
@@ -98,6 +99,7 @@ struct ActiveSessionView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Cancel — nothing is deleted")
+                .accessibilityLabel("Cancel offload — nothing is deleted")
             }
         }
         .padding(.horizontal, 16)

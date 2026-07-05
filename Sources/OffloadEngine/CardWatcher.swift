@@ -118,14 +118,18 @@ public final class CardWatcher: @unchecked Sendable {
         let continuation = self.continuation!
         Task.detached(priority: .utility) {
             let mountPath = pathURL.path
-            var isDir: ObjCBool = false
-            let hasDCIM = FileManager.default.fileExists(atPath: mountPath + "/DCIM", isDirectory: &isDir) && isDir.boolValue
+            // A camera card if it carries ANY known media root (not just DCIM —
+            // some bodies use PRIVATE/AVCHD/CLIP/MP_ROOT).
+            let hasMediaRoot = IngestPlanner.mediaRoots.contains { root in
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: mountPath + "/" + root, isDirectory: &isDir) && isDir.boolValue
+            }
             let fs = statfsInfo(path: mountPath)
             let info = CardInfo(volumeUUID: uuid, bsdName: bsdName, mountPath: mountPath,
                                 volumeName: name,
                                 capacityBytes: fs?.totalBytes ?? mediaSize,
                                 freeBytes: fs?.freeBytes ?? 0,
-                                hasDCIM: hasDCIM)
+                                hasMediaRoot: hasMediaRoot)
             continuation.yield(.volumeMounted(CandidateVolume(
                 info: info, isRemovable: removable, isEjectable: ejectable,
                 isInternal: internalDevice, isNetwork: network)))

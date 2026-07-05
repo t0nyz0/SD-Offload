@@ -16,6 +16,7 @@ struct WipePromptView: View {
                         .foregroundStyle(.orange)
                 }
                 .font(.system(size: 17, weight: .semibold))
+                .accessibilityLabel("Wiping card in \(seconds) seconds")
 
                 subtitle
 
@@ -27,6 +28,7 @@ struct WipePromptView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.cancelAction)
                 .padding(.horizontal, 40)
+                .accessibilityLabel("Cancel wipe — keep the card's contents")
             } else {
                 Text("Wipe card now?")
                     .font(.system(size: 17, weight: .semibold))

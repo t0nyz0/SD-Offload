@@ -22,7 +22,7 @@ public enum CardClassifier {
 
         // Physically card-like: removable OR ejectable OR an external device.
         let cardLike = volume.isRemovable || volume.isEjectable || !volume.isInternal
-        guard allowlisted || (cardLike && volume.info.hasDCIM) else { return .ignore }
+        guard allowlisted || (cardLike && volume.info.hasMediaRoot) else { return .ignore }
 
         switch config.cardPolicies[volume.info.volumeUUID] {
         case .alwaysIngest: return .ingest

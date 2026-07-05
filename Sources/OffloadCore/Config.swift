@@ -11,8 +11,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// smb:// URL for NetFS remount, learned from the live mount.
     public var nasSMBURL: String?
 
-    // Wipe
-    public var wipePolicy: WipePolicy = .afterNASVerify
+    // Wipe. Default to asking before erasing a card — a new user should opt in to
+    // unattended wipes, not discover them. (Existing configs keep their setting.)
+    public var wipePolicy: WipePolicy = .askEachTime
     public var autoEject: Bool = true
     public var wipeCountdownSeconds: Int = 10
 

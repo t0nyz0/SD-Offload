@@ -26,17 +26,19 @@ public struct CardInfo: Codable, Sendable, Equatable {
     public let volumeName: String
     public let capacityBytes: Int64
     public let freeBytes: Int64
-    public let hasDCIM: Bool
+    /// True if the volume carries any known camera media root (DCIM, PRIVATE,
+    /// AVCHD, CLIP, MP_ROOT) — not just DCIM.
+    public let hasMediaRoot: Bool
 
     public init(volumeUUID: String, bsdName: String, mountPath: String, volumeName: String,
-                capacityBytes: Int64, freeBytes: Int64, hasDCIM: Bool) {
+                capacityBytes: Int64, freeBytes: Int64, hasMediaRoot: Bool) {
         self.volumeUUID = volumeUUID
         self.bsdName = bsdName
         self.mountPath = mountPath
         self.volumeName = volumeName
         self.capacityBytes = capacityBytes
         self.freeBytes = freeBytes
-        self.hasDCIM = hasDCIM
+        self.hasMediaRoot = hasMediaRoot
     }
 
     public var usedBytes: Int64 { max(0, capacityBytes - freeBytes) }
