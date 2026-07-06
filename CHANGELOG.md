@@ -5,6 +5,26 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-07-06
+
+### Added
+- **Dock icon while a window is open.** The Library/History windows now get a Dock
+  icon and app-switcher (⌘-Tab) entry so you can flip back to them; the app returns
+  to menu-bar-only once the last window closes.
+- **Histogram in the photo viewer** — an additive RGB histogram at the bottom of the
+  Info panel, computed off-main from a small embedded-preview decode (cheap over SMB).
+- **Exposure read** under the histogram: a plain-English verdict (Well exposed /
+  Underexposed / Overexposed / Low contrast) from the luminance distribution, with
+  average brightness and shadow/highlight clipping. A guide, not a score.
+
+### Fixed
+- **Stop re-checking an idle card.** A card left in the reader with auto-eject off
+  was re-scanned repeatedly, caused by an exFAT/FSKit volume-path "flap" that looked
+  like unmount→remount. The watcher now debounces a path loss (a real removal via
+  DiskDisappeared still fires instantly), and the engine ignores duplicate mount
+  signals for a card it already handled this insertion — while still resuming an
+  interrupted session and re-checking a genuinely re-inserted card.
+
 ## [1.0.3] — 2026-07-06
 
 ### Added
