@@ -9,26 +9,31 @@ struct HistoryWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            List(sessions, selection: $selection) { record in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 5) {
-                        Image(systemName: record.state == .done ? "checkmark.circle.fill" : "exclamationmark.circle")
-                            .foregroundStyle(record.state == .done ? Theme.safe : .orange)
+            ScrollViewReader { proxy in
+                List(sessions, selection: $selection) { record in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            Image(systemName: record.state == .done ? "checkmark.circle.fill" : "exclamationmark.circle")
+                                .foregroundStyle(record.state == .done ? Theme.safe : .orange)
+                                .font(.system(size: 10))
+                            Text(record.cardVolumeName)
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        Text("\(record.fileCount) file\(record.fileCount == 1 ? "" : "s") · \(Fmt.bytes(record.stats.bytesPlanned))")
                             .font(.system(size: 10))
-                        Text(record.cardVolumeName)
-                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
                     }
-                    Text(record.startedAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                    Text("\(record.fileCount) file\(record.fileCount == 1 ? "" : "s") · \(Fmt.bytes(record.stats.bytesPlanned))")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
+                    .tag(record.id)
                 }
-                .tag(record.id)
+                .navigationSplitViewColumnWidth(min: 170, ideal: 190)
+                .onChange(of: selection) { _, sel in
+                    if let sel { withAnimation { proxy.scrollTo(sel, anchor: .center) } }
+                }
             }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190)
         } detail: {
             if let record = sessions.first(where: { $0.id == selection }) {
                 SessionDetailView(record: record)
@@ -39,7 +44,12 @@ struct HistoryWindow: View {
         }
         .task {
             sessions = await app.journal.loadHistory(limit: 100)
-            if selection == nil { selection = sessions.first?.id }
+            selection = app.pendingHistorySelection ?? selection ?? sessions.first?.id
+            app.pendingHistorySelection = nil
+        }
+        // Clicking a recent session in the popover while this window is already open.
+        .onChange(of: app.pendingHistorySelection) { _, new in
+            if let new { selection = new; app.pendingHistorySelection = nil }
         }
     }
 }

@@ -14,7 +14,8 @@ struct FooterView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.tertiary)
                 ForEach(app.recent.prefix(3)) { record in
-                    sessionRow(record)
+                    Button { openHistory(selecting: record.id) } label: { sessionRow(record) }
+                        .buttonStyle(.plain)
                 }
             }
             HStack(spacing: 8) {
@@ -62,6 +63,11 @@ struct FooterView: View {
         dismiss()
         Activate.front()
         openWindow(id: id)
+    }
+
+    private func openHistory(selecting id: UUID) {
+        app.pendingHistorySelection = id   // History window picks this up and scrolls to it
+        openAux(WindowID.history)
     }
 
     private func sessionRow(_ record: SessionRecord) -> some View {

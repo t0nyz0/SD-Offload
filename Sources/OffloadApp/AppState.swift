@@ -12,6 +12,9 @@ final class AppState {
     private(set) var recent: [SessionRecord] = []
     private(set) var nasGlance = NASGlance()
     private(set) var pendingConsent: CardInfo?
+    /// Set when the user clicks a recent session in the popover: the History window
+    /// selects and scrolls to it, then clears this.
+    var pendingHistorySelection: UUID?
     /// Mount path of a currently-inserted card (for the Library window). Set on
     /// detect/consent/session start, cleared when the card leaves or is ejected.
     private(set) var cardMountPath: String?
