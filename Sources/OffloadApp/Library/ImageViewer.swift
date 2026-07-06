@@ -346,7 +346,8 @@ private struct InfoPanel: View {
                         }
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: DS.Space.s)
+                HistogramView(url: item.primary.url)
             }
             .padding(DS.Space.l)
             .frame(width: 260, alignment: .leading)
