@@ -20,14 +20,18 @@ struct FooterView: View {
             HStack(spacing: 8) {
                 Button { openAux(WindowID.library) } label: {
                     Label("Library", systemImage: "photo.stack")
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.vertical, 2)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
                 Button { openAux(WindowID.history) } label: {
                     Label("History", systemImage: "clock.arrow.circlepath")
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.vertical, 2)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
 
                 Spacer()
 

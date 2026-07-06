@@ -5,6 +5,46 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-07-05
+
+A Library-focused release: sharper thumbnails, a much smoother/steadier grid over
+the NAS, a packed photo inspector, and clearer navigation.
+
+### Added
+- **Thumbnail quality setting** (Settings → Library): Fast / Balanced / High /
+  Maximum. Higher decodes the full photo for crisper thumbnails; default is High.
+- **Per-file delete choices** for a JPEG+RAW pair — delete both, just the RAW, or
+  just the JPEG — in the viewer and the grid context menu.
+- **Much richer photo inspector**: per-file JPEG vs RAW sizes; 35 mm-equivalent
+  focal length, exposure compensation, shooting mode, exposure mode, metering,
+  white balance, scene type, flash, colour profile, camera software/firmware,
+  camera & lens serials; GPS altitude and heading; and the photo's folder path.
+  The inspector now stays open (persisted) and sits **beside** the image instead of
+  over it, so the whole photo is visible.
+- **Primary Library and History buttons** in the popover footer (previously hidden
+  behind the gear menu, which now holds Settings and Quit).
+- `Scripts/install-app.sh` — build and replace the /Applications copy in one step.
+
+### Changed
+- **Folder tiles now read as folders** — a tab, a framed photo-collage preview, and
+  a label bar with the date and an open chevron, instead of a bare collage.
+- **Larger, clearer breadcrumb** for the current folder path.
+
+### Performance
+- **Bounded thumbnail memory.** Caches now have a byte budget (not just a count),
+  so browsing can't accumulate 1+ GB of decoded bitmaps.
+- **Cheap thumbnails over SMB.** NAS thumbnails use the file's embedded preview
+  instead of downloading the whole RAW/JPEG per tile; local card browsing still
+  full-decodes. Same on-screen sharpness, far less wire traffic.
+- **Cancellable, off-main decoding.** Scrolled-away tiles stop decoding and free
+  their slot; cached tiles decode off the main thread so scroll-back doesn't hitch.
+- Cached the grid's item grouping (was recomputed on every tap/render) and flattened
+  the folder-tile shadow to avoid an offscreen render per card.
+
+### Fixed
+- RAW-only photos are no longer mislabeled "JPEG + RAW" in the inspector and grid.
+- A failed delete now surfaces an alert instead of the file silently reappearing.
+
 ## [1.0.1] — 2026-07-05
 
 Post-release QA hardening — a full adversarial review of the 1.0.0 code turned up
