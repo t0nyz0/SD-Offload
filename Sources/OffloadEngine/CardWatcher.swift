@@ -32,6 +32,16 @@ public final class CardWatcher: @unchecked Sendable {
     /// Guarded by daQueue.
     private var knownVolumes: [String: String] = [:]
 
+    /// Debounce for the DescriptionChanged path-nil branch. An exFAT/FSKit volume
+    /// can momentarily drop kDADiskDescriptionVolumePathKey and get it back (a
+    /// "flap"), which otherwise looks like unmount→remount and makes the app
+    /// re-scan a card that never actually left. We defer treating a path loss as an
+    /// unmount; if the path returns first (handlePossibleMount) or the device is
+    /// really removed (diskDisappeared), the pending timer is cancelled. Guarded by
+    /// daQueue. The work item does NO filesystem access — it must not block daQueue.
+    private var pendingUnmounts: [String: DispatchWorkItem] = [:]
+    private let pathFlapGrace: DispatchTimeInterval = .milliseconds(750)
+
     public init() {
         var cont: AsyncStream<RawCardEvent>.Continuation!
         events = AsyncStream(bufferingPolicy: .unbounded) { cont = $0 }
@@ -77,6 +87,7 @@ public final class CardWatcher: @unchecked Sendable {
 
     private func diskDisappeared(_ disk: DADisk) {
         guard let bsdName = DADiskGetBSDName(disk).map({ String(cString: $0) }) else { return }
+        pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // real removal supersedes a pending flap
         if let uuid = knownVolumes.removeValue(forKey: bsdName) {
             continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
         }
@@ -87,10 +98,22 @@ public final class CardWatcher: @unchecked Sendable {
         guard let bsdName = DADiskGetBSDName(disk).map({ String(cString: $0) }) else { return }
 
         guard let pathURL = desc[kDADiskDescriptionVolumePathKey] as? URL else {
-            // Path went away without a disappear (unmount but device present).
-            if let uuid = knownVolumes.removeValue(forKey: bsdName) {
-                continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
+            // Path went away without a DiskDisappeared. On exFAT/FSKit this is
+            // often a transient flap, not a real unmount — confirm after a short
+            // grace period. A real removal arrives via diskDisappeared (which
+            // cancels this); if the path returns first, the follow-up
+            // handlePossibleMount cancels this timer. (knownVolumes is cleared only
+            // inside the work item, so a returning path still hits the alreadyKnown
+            // dedup below and no phantom remount is emitted.)
+            guard knownVolumes[bsdName] != nil, pendingUnmounts[bsdName] == nil else { return }
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingUnmounts.removeValue(forKey: bsdName)
+                guard let uuid = self.knownVolumes.removeValue(forKey: bsdName) else { return }
+                self.continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
             }
+            pendingUnmounts[bsdName] = item
+            daQueue.asyncAfter(deadline: .now() + pathFlapGrace, execute: item)
             return
         }
 
@@ -110,6 +133,7 @@ public final class CardWatcher: @unchecked Sendable {
             uuid = "\(name)#\(mediaSize)"
         }
 
+        pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // path is back — cancel any pending flap unmount
         let alreadyKnown = knownVolumes[bsdName] == uuid
         knownVolumes[bsdName] = uuid
         guard !alreadyKnown else { return }   // duplicate signal for the same mount

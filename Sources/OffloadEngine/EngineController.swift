@@ -56,6 +56,13 @@ private actor Coordinator {
     // can stack several readers and walk away.
     private var queue: [CandidateVolume] = []
     private var lastVolume: CandidateVolume?
+    // volumeUUIDs already acted on during their CURRENT insertion (session run to a
+    // terminal state, set awaiting-consent, or found empty). A repeat volumeMounted
+    // for one of these — with no incomplete session and no live runner — is a
+    // duplicate DiskArbitration signal, not a real re-insert, so we ignore it
+    // instead of re-scanning a card just sitting in the reader. Cleared on a REAL
+    // volumeUnmounted so genuine re-insertion re-checks.
+    private var handledThisInsertion: Set<String> = []
     private var eventsTask: Task<Void, Never>?
 
     init(configProvider: @escaping ConfigProvider,
@@ -118,6 +125,13 @@ private actor Coordinator {
                 await startSession(volume)
                 return
             }
+            // Already handled this insertion and nothing to resume → ignore the
+            // duplicate mount instead of re-ingesting. (Sits after the runner-match
+            // and the incomplete-session check, so it never blocks a resume; a real
+            // unmount clears the marker so a genuine re-insert re-checks.)
+            if runner == nil, !startingSession, handledThisInsertion.contains(volume.info.volumeUUID) {
+                return
+            }
             switch CardClassifier.classify(volume, config: config) {
             case .ignore:
                 break
@@ -127,11 +141,13 @@ private actor Coordinator {
                     $0.cardNames[uuid] = name
                 }
                 emit(.cardAwaitingConsent(volume.info))
+                handledThisInsertion.insert(volume.info.volumeUUID)   // don't re-prompt on a flap
             case .ingest:
                 await startSession(volume)
             }
 
         case .volumeUnmounted(let uuid, _):
+            handledThisInsertion.remove(uuid)   // real removal → next insert re-checks
             pendingCandidates.removeValue(forKey: uuid)
             queue.removeAll { $0.info.volumeUUID == uuid }   // a queued card pulled before its turn
             if let runner, runner.card.volumeUUID == uuid {
@@ -227,6 +243,7 @@ private actor Coordinator {
             emit(.attention(AttentionItem(severity: .info,
                                           title: "Nothing to offload",
                                           detail: "\(volume.info.volumeName) has no photos or videos in its camera folders.")))
+            handledThisInsertion.insert(volume.info.volumeUUID)   // don't re-scan an empty card on a flap
             emit(.phase(.idle))
             return
         }
@@ -269,6 +286,7 @@ private actor Coordinator {
 
     private func runnerFinished(_ finished: SessionRunner) async {
         if runner === finished { runner = nil }
+        handledThisInsertion.insert(finished.card.volumeUUID)   // done → don't re-ingest while it sits in the reader
         await emitGlance()
         // Auto-start the next queued card that is STILL physically present. A card
         // pulled while waiting in the queue is dropped, not started against a ghost
