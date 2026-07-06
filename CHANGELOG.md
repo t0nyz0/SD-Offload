@@ -5,6 +5,19 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-07-06
+
+### Added
+- **Refresh in the Library** — a Refresh button (⌘R) that re-scans the current
+  folder and recounts the library, plus an automatic re-scan of the current folder
+  when the app regains focus. Files changed on disk externally (e.g. deleted in
+  Finder) now show up without relaunching.
+- **Faces review queue + filtering.** The header's "N to review" is now a button
+  that filters to photos still holding an unnamed face/pet to label. The Faces menu
+  gains a People and a Pets submenu — pick any name (or "All people" / "All pets")
+  to filter the grid to matching photos. An active filter shows a chip with the
+  match count and a clear (✕) button. All on-device.
+
 ## [1.0.2] — 2026-07-05
 
 A Library-focused release: sharper thumbnails, a much smoother/steadier grid over
