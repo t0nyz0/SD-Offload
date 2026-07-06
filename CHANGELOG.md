@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-07-06
+
+### Added
+- **Favorites.** Heart a photo — in the viewer (heart button or the **F** key) or a
+  grid tile's context menu — and it appears in a new **Favorites** source. Favorited
+  tiles show a heart badge, and favorites persist locally.
+- **Favorites timeline.** The Favorites source shows an Apple-Photos-style
+  chronological view: month sections (oldest → newest) with sticky headers and a
+  year strip to jump around; tap a photo to open it. Files removed on disk are
+  pruned from favorites automatically.
+
 ## [1.0.4] — 2026-07-06
 
 ### Added
