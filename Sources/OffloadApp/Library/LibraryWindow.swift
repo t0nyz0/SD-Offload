@@ -44,7 +44,7 @@ struct LibraryWindow: View {
                 get: { model.source },
                 set: { model.select($0) }
             )) {
-                Section("Sources") {
+                Section("Library") {
                     Label("Photos on NAS", systemImage: "externaldrive.fill")
                         .tag(LibraryModel.Source.nas)
                     if model.hasCard {
@@ -53,6 +53,21 @@ struct LibraryWindow: View {
                     }
                     Label("Favorites", systemImage: "heart.fill")
                         .tag(LibraryModel.Source.favorites)
+                    Label("Faces", systemImage: "person.2.fill")
+                        .tag(LibraryModel.Source.faces)
+                }
+                if !model.pinnedFolders.isEmpty {
+                    Section("Pinned") {
+                        ForEach(model.pinnedFolders, id: \.self) { path in
+                            Button { model.openPinned(path) } label: {
+                                Label(model.pinLabel(path), systemImage: "folder.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Remove from Sidebar") { model.unpin(path) }
+                            }
+                        }
+                    }
                 }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
@@ -62,6 +77,9 @@ struct LibraryWindow: View {
                 if model.source == .favorites {
                     Divider()
                     FavoritesTimeline(model: model, openViewer: { openInViewer($0, model) })
+                } else if model.source == .faces {
+                    Divider()
+                    FacesGallery(model: model)
                 } else {
                     SearchBar(model: model)
                     if let label = model.faceFilterLabel {
@@ -110,8 +128,7 @@ private struct LibraryHeader: View {
             HStack(spacing: DS.Space.m) {
                 Image(systemName: headerIcon)
                     .font(.system(size: 26))
-                    .foregroundStyle(model.source == .favorites ? Color.pink
-                                     : (model.mounted ? DS.safe : DS.Palette.textTertiary))
+                    .foregroundStyle(headerTint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.sourceTitle)
                         .font(.system(size: 17, weight: .bold))
@@ -137,11 +154,11 @@ private struct LibraryHeader: View {
                     }
                 }
                 Spacer()
-                if model.source != .favorites, model.totalVolumeBytes > 0 {
+                if (model.source == .nas || model.source == .card), model.totalVolumeBytes > 0 {
                     storageGauge
                 }
             }
-            if model.source != .favorites {
+            if model.source == .nas || model.source == .card {
                 Breadcrumb(model: model)
             }
             if let label = model.currentDateLabel {
@@ -163,6 +180,15 @@ private struct LibraryHeader: View {
         case .nas: "externaldrive.fill.badge.checkmark"
         case .card: "sdcard.fill"
         case .favorites: "heart.fill"
+        case .faces: "person.2.fill"
+        }
+    }
+
+    private var headerTint: Color {
+        switch model.source {
+        case .favorites: return .pink
+        case .faces: return .blue
+        default: return model.mounted ? DS.safe : DS.Palette.textTertiary
         }
     }
 
@@ -573,6 +599,9 @@ private struct LibraryGrid: View {
     private func menu(for item: DisplayItem) -> some View {
         if item.isFolder {
             Button("Open") { model.enter(item.primary) }
+            Button(model.isPinned(item.primary.id) ? "Remove from Sidebar" : "Pin to Sidebar") {
+                model.togglePin(item)
+            }
             Button("Reveal in Finder") { reveal(item.primary.url) }
         } else {
             Button("Open") { openViewer(item) }

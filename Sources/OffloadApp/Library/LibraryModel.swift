@@ -45,7 +45,7 @@ struct DisplayItem: Identifiable, Sendable {
 /// path within it, the entries to show, and the progressive media count.
 @MainActor @Observable
 final class LibraryModel {
-    enum Source: Equatable { case nas, card, favorites }
+    enum Source: Equatable { case nas, card, favorites, faces }
 
     var source: Source = .nas
     private(set) var pathStack: [URL] = []       // root … current
@@ -62,6 +62,10 @@ final class LibraryModel {
     // date-sorted photos shown in the Favorites timeline.
     private(set) var favoritePaths: Set<String> = []
     private(set) var favoriteItems: [DisplayItem] = []
+    // Pinned folders (absolute paths, ordered) shown in the sidebar for quick access.
+    private(set) var pinnedFolders: [String] = []
+    // Per-identity photo counts for the Faces gallery.
+    private(set) var identityCounts: [UUID: Int] = [:]
 
     // Overview counts for the current source root.
     private(set) var totalMedia: Int?
@@ -129,6 +133,7 @@ final class LibraryModel {
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
         favoritePaths = Set(JSONIO.loadGuarded([String].self, from: Paths.favoritesFile) ?? [])
+        pinnedFolders = JSONIO.loadGuarded([String].self, from: Paths.pinnedFoldersFile) ?? []
     }
 
     var hasCard: Bool { cardRootPath != nil }
@@ -140,6 +145,7 @@ final class LibraryModel {
     var sourceTitle: String {
         switch source {
         case .favorites: return "Favorites"
+        case .faces: return "Faces"
         case .card: return "SD Card"
         case .nas:
             guard let root = rootURL else { return "Photos" }
@@ -189,6 +195,8 @@ final class LibraryModel {
             openRoot(root)
         case .favorites:
             loadFavorites()
+        case .faces:
+            loadFaces()
         }
     }
 
@@ -245,6 +253,97 @@ final class LibraryModel {
                 self.saveFavorites()
             }
         }
+    }
+
+    // MARK: - Faces gallery
+
+    /// Show the Faces source: a gallery of every named person/pet. Loads the
+    /// identities and their photo counts.
+    func loadFaces() {
+        source = .faces
+        pathStack = []
+        searchText = ""
+        searchResults = nil
+        faceFilterLabel = nil
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshFaceState()
+            var counts: [UUID: Int] = [:]
+            for idn in self.identities {
+                counts[idn.id] = await self.faceIndex.photos(withIdentity: idn.id).count
+            }
+            self.identityCounts = counts
+        }
+    }
+
+    /// Open a named person/pet: jump to the NAS source with that identity's filter
+    /// applied — reuses the grid, viewer, and filter chip.
+    func showIdentity(_ id: UUID) {
+        if source != .nas { select(.nas) }
+        filterByIdentity(id)
+    }
+
+    // MARK: - Pinned folders
+
+    func isPinned(_ path: String) -> Bool { pinnedFolders.contains(path) }
+
+    func togglePin(_ folder: DisplayItem) {
+        let path = folder.primary.id
+        if let i = pinnedFolders.firstIndex(of: path) { pinnedFolders.remove(at: i) }
+        else { pinnedFolders.append(path) }
+        savePinned()
+    }
+
+    func unpin(_ path: String) {
+        pinnedFolders.removeAll { $0 == path }
+        savePinned()
+    }
+
+    private func savePinned() {
+        let arr = pinnedFolders
+        Task.detached(priority: .utility) { try? JSONIO.save(arr, to: Paths.pinnedFoldersFile) }
+    }
+
+    /// Short sidebar label for a pinned folder — a friendly date for a date folder,
+    /// else the folder's own name.
+    func pinLabel(_ path: String) -> String {
+        let comps = DateFolders.relComponents(path, root: nasRootPath)
+        if let d = DateFolders.date(from: comps) {
+            let f = DateFormatter(); f.locale = .current
+            switch comps.count {
+            case 1: return comps[0]                                          // "2026"
+            case 2: f.setLocalizedDateFormatFromTemplate("LLLyyyy")          // "Jul 2026"
+            default: f.setLocalizedDateFormatFromTemplate("MMMdyyyy")        // "Jul 4, 2026"
+            }
+            return f.string(from: d)
+        }
+        return (path as NSString).lastPathComponent
+    }
+
+    /// Navigate straight to a pinned folder (NAS source, full breadcrumb path).
+    func openPinned(_ path: String) {
+        let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
+        source = .nas
+        searchText = ""
+        searchResults = nil
+        faceFilterLabel = nil
+        pathStack = Self.pathStack(from: root, to: URL(fileURLWithPath: path, isDirectory: true))
+        refreshVolumeStats(root)
+        loadEntries()
+        startCount(root)
+        refreshSuggestions()
+        Task { await refreshFaceState() }
+    }
+
+    private static func pathStack(from root: URL, to target: URL) -> [URL] {
+        let rootC = root.pathComponents, tgtC = target.pathComponents
+        guard tgtC.count >= rootC.count, Array(tgtC.prefix(rootC.count)) == rootC else { return [root] }
+        var stack = [root]; var cur = root
+        for comp in tgtC[rootC.count...] {
+            cur = cur.appendingPathComponent(comp, isDirectory: true)
+            stack.append(cur)
+        }
+        return stack
     }
 
     private func openRoot(_ root: URL) {

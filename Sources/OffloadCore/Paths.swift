@@ -19,6 +19,8 @@ public enum Paths {
     public static var identityIndexFile: URL { appSupport.appendingPathComponent("identity-index.json") }
     /// Favorited photo paths (absolute), for the Favorites timeline.
     public static var favoritesFile: URL { appSupport.appendingPathComponent("favorites.json") }
+    /// Pinned folder paths (absolute), shown in the Library sidebar for quick access.
+    public static var pinnedFoldersFile: URL { appSupport.appendingPathComponent("pinned-folders.json") }
 
     /// Hidden marker file written to a card to tie it to a session (per-card
     /// identity that survives synthesized-UUID collisions). Hidden, so the
