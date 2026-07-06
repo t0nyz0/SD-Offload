@@ -58,7 +58,9 @@ struct LibraryWindow: View {
             VStack(spacing: 0) {
                 LibraryHeader(model: model)
                 SearchBar(model: model)
-                if !model.isSearching && !model.suggestions.isEmpty {
+                if let label = model.faceFilterLabel {
+                    FilterChip(label: label, count: model.photoItems.count) { model.clearFaceFilter() }
+                } else if !model.isSearching && !model.suggestions.isEmpty {
                     SuggestionChips(model: model)
                 }
                 Divider()
@@ -107,11 +109,16 @@ private struct LibraryHeader: View {
                         .foregroundStyle(.tertiary)
                     }
                     if let faces = model.facesSummary {
-                        HStack(spacing: 4) {
-                            Image(systemName: "person.2.fill").font(.system(size: 9))
-                            Text(faces).font(.system(size: 10.5)).monospacedDigit()
+                        Button { if model.faceUnnamed > 0 { model.reviewUnnamedFaces() } } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "person.2.fill").font(.system(size: 9))
+                                Text(faces).font(.system(size: 10.5)).monospacedDigit()
+                            }
                         }
-                        .foregroundStyle(.tertiary)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(model.faceUnnamed > 0 ? AnyShapeStyle(DS.safe) : AnyShapeStyle(HierarchicalShapeStyle.tertiary))
+                        .disabled(model.faceUnnamed == 0)
+                        .help(model.faceUnnamed > 0 ? "Review the \(model.faceUnnamed) unnamed" : "")
                     }
                 }
                 Spacer()
@@ -263,6 +270,28 @@ private struct SearchBar: View {
             } else {
                 Menu {
                     Button { startFindFaces() } label: { Label("Find faces & pets", systemImage: "person.crop.rectangle") }
+                    let people = model.identities.filter { $0.kind == .person }
+                    let pets = model.identities.filter { $0.kind == .pet }
+                    if model.faceUnnamed > 0 || !people.isEmpty || !pets.isEmpty {
+                        Divider()
+                        if model.faceUnnamed > 0 {
+                            Button { model.reviewUnnamedFaces() } label: {
+                                Label("Review \(model.faceUnnamed) unnamed", systemImage: "questionmark.circle")
+                            }
+                        }
+                        if !people.isEmpty {
+                            Menu("People") {
+                                if people.count > 1 { Button("All people") { model.filterByKind(.person) }; Divider() }
+                                ForEach(people) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
+                            }
+                        }
+                        if !pets.isEmpty {
+                            Menu("Pets") {
+                                if pets.count > 1 { Button("All pets") { model.filterByKind(.pet) }; Divider() }
+                                ForEach(pets) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
+                            }
+                        }
+                    }
                     if !model.identities.isEmpty || model.faceUnnamed > 0 {
                         Divider()
                         Button(role: .destructive) { model.deleteAllFaceData() } label: {
@@ -276,7 +305,7 @@ private struct SearchBar: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Detect faces & pets on-device so you can name and search them — stored locally only.")
+                .help("Detect, name, and filter people & pets on-device — stored locally only.")
             }
         }
         .padding(.horizontal, DS.Space.l)
@@ -320,6 +349,30 @@ private struct FacesConsentSheet: View {
         }
         .padding(DS.Space.l)
         .frame(width: 380)
+    }
+}
+
+/// Shows the active people/pets filter with a count and a clear button.
+private struct FilterChip: View {
+    let label: String
+    let count: Int
+    let onClear: () -> Void
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .font(.system(size: 12)).foregroundStyle(DS.safe)
+            Text(label).font(.system(size: 12, weight: .semibold))
+            Text("· \(count) photo\(count == 1 ? "" : "s")")
+                .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+            Button(action: onClear) {
+                Label("Clear", systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.plain).foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
     }
 }
 
@@ -525,8 +578,11 @@ private struct LibraryGrid: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    private var emptyTitle: String { model.isSearching ? "No matches" : "Nothing here" }
+    private var emptyTitle: String {
+        (model.isSearching || model.faceFilterLabel != nil) ? "No matches" : "Nothing here"
+    }
     private var emptyDetail: String {
+        if let f = model.faceFilterLabel { return "No photos for “\(f)”." }
         if model.isSearching { return "No analyzed photos match “\(model.searchText)”. Try Analyze first, or a different word." }
         return model.loading ? "Loading…" : "This folder has no photos or subfolders."
     }

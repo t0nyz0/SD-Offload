@@ -94,6 +94,9 @@ final class LibraryModel {
     private(set) var facesTotal = 0
     private(set) var identities: [Identity] = []
     private(set) var faceUnnamed = 0
+    // Active people/pets filter label (nil = not filtering). Drives the filter chip;
+    // reuses searchResults to show the matching photos in the grid.
+    private(set) var faceFilterLabel: String?
     var facesSummary: String? {
         guard !identities.isEmpty || faceUnnamed > 0 else { return nil }
         var parts: [String] = []
@@ -358,7 +361,8 @@ final class LibraryModel {
     private func runSearch() {
         searchTask?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { searchResults = nil; return }
+        guard !query.isEmpty else { searchResults = nil; faceFilterLabel = nil; return }
+        faceFilterLabel = nil          // a content search replaces any active face filter
         guard let prefix = rootURL?.path else { return }
         let index = photoIndex
         let faces = faceIndex
@@ -373,22 +377,72 @@ final class LibraryModel {
             guard !Task.isCancelled else { return }
             var paths = await index.search(query, underPrefix: prefix)
             for id in namedMatches { paths.formUnion(await faces.photos(withIdentity: id, underPrefix: prefix)) }
-            let recs = await index.records(forPaths: Array(paths))
             guard let self, !Task.isCancelled else { return }
-            let results: [LibraryEntry] = paths.map { path in
-                let kind: LibraryEntry.Kind = MediaKind.classify(ext: (path as NSString).pathExtension)
-                    .map { .media($0) } ?? .media(.photo)
-                if let rec = recs[path] {
-                    return LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
-                                        kind: kind, size: rec.size, modified: rec.mtime)
-                }
-                // Identity-only match (face-scanned, not content-analyzed): stat it.
-                let vals = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                return LibraryEntry(id: path, name: (path as NSString).lastPathComponent, kind: kind,
-                                    size: Int64(vals?.fileSize ?? 0), modified: vals?.contentModificationDate ?? .distantPast)
+            self.searchResults = await self.entries(forPaths: Array(paths))
+        }
+    }
+
+    /// Build display entries for a set of paths (a content search or a face filter):
+    /// use the content index where available, stat the rest.
+    private func entries(forPaths paths: [String]) async -> [LibraryEntry] {
+        let recs = await photoIndex.records(forPaths: paths)
+        return paths.map { path in
+            let kind: LibraryEntry.Kind = MediaKind.classify(ext: (path as NSString).pathExtension)
+                .map { .media($0) } ?? .media(.photo)
+            if let rec = recs[path] {
+                return LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
+                                    kind: kind, size: rec.size, modified: rec.mtime)
             }
-            .sorted { $0.name < $1.name }
-            self.searchResults = results
+            let vals = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return LibraryEntry(id: path, name: (path as NSString).lastPathComponent, kind: kind,
+                                size: Int64(vals?.fileSize ?? 0), modified: vals?.contentModificationDate ?? .distantPast)
+        }
+        .sorted { $0.name < $1.name }
+    }
+
+    // MARK: - Faces filter (reuses searchResults to show matching photos)
+
+    /// Show the photos that still have an unnamed face/pet to label.
+    func reviewUnnamedFaces() {
+        applyFaceFilter(label: "Faces to review") { faces, prefix in
+            Set((await faces.unassigned(underPrefix: prefix)).map(\.path))
+        }
+    }
+
+    /// Show every photo containing a specific named person/pet.
+    func filterByIdentity(_ id: UUID) {
+        let label = identities.first { $0.id == id }?.name ?? "Person"
+        applyFaceFilter(label: label) { faces, prefix in
+            await faces.photos(withIdentity: id, underPrefix: prefix)
+        }
+    }
+
+    /// Show every photo containing any named identity of a kind (all people / all pets).
+    func filterByKind(_ kind: Identity.Kind) {
+        let ids = identities.filter { $0.kind == kind }.map(\.id)
+        applyFaceFilter(label: kind == .pet ? "All pets" : "All people") { faces, prefix in
+            var paths = Set<String>()
+            for id in ids { paths.formUnion(await faces.photos(withIdentity: id, underPrefix: prefix)) }
+            return paths
+        }
+    }
+
+    func clearFaceFilter() {
+        faceFilterLabel = nil
+        searchResults = nil
+    }
+
+    private func applyFaceFilter(label: String,
+                                 _ gather: @escaping @Sendable (FaceIndex, String?) async -> Set<String>) {
+        searchTask?.cancel()
+        searchText = ""            // face filter and text search are mutually exclusive
+        faceFilterLabel = label    // set AFTER clearing searchText (its didSet nils this)
+        let prefix = rootURL?.path
+        let faces = faceIndex
+        searchTask = Task { [weak self] in
+            let paths = await gather(faces, prefix)
+            guard let self, !Task.isCancelled else { return }
+            self.searchResults = await self.entries(forPaths: Array(paths))
         }
     }
 
