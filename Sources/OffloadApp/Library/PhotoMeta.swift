@@ -24,6 +24,11 @@ struct PhotoMeta: Sendable {
     var colorProfile: String?
     var software: String?          // camera firmware / editing software
     var altitude: Double?          // meters, signed (negative = below sea level)
+    var exposureMode: Int?         // 0 auto, 1 manual, 2 auto-bracket
+    var sceneType: Int?            // 0 standard, 1 landscape, 2 portrait, 3 night
+    var bodySerial: String?
+    var lensSerial: String?
+    var gpsHeading: Double?        // degrees, direction the camera was facing
 
     var dimensions: String? {
         guard let w = pixelWidth, let h = pixelHeight, w > 0, h > 0 else { return nil }
@@ -95,6 +100,22 @@ struct PhotoMeta: Sendable {
         if p.localizedCaseInsensitiveContains("sRGB") { return "sRGB" }
         if p.localizedCaseInsensitiveContains("Adobe RGB") { return "Adobe RGB" }
         return p
+    }
+    var exposureModeText: String? {
+        switch exposureMode { case 0: "Auto"; case 1: "Manual"; case 2: "Auto bracket"; default: nil }
+    }
+    var sceneTypeText: String? {
+        switch sceneType { case 1: "Landscape"; case 2: "Portrait"; case 3: "Night"; default: nil }
+    }
+    var serialText: String? {
+        let parts = [bodySerial.map { "Body \($0)" }, lensSerial.map { "Lens \($0)" }].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+    var headingText: String? {
+        guard let d = gpsHeading, d.isFinite else { return nil }
+        let dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        let idx = ((Int((d / 45).rounded()) % 8) + 8) % 8
+        return String(format: "%.0f° %@", d, dirs[idx])
     }
     var mapsURL: URL? {
         guard let g = gps else { return nil }
@@ -172,6 +193,10 @@ final class PhotoMetaCache: @unchecked Sendable {
             if let wb = exif[kCGImagePropertyExifWhiteBalance] as? Int { m.whiteBalanceAuto = (wb == 0) }
             if let mm = exif[kCGImagePropertyExifMeteringMode] as? Int, mm != 0 { m.meteringMode = mm }
             if let ep = exif[kCGImagePropertyExifExposureProgram] as? Int, ep != 0 { m.exposureProgram = ep }
+            m.exposureMode = exif[kCGImagePropertyExifExposureMode] as? Int
+            m.sceneType = exif[kCGImagePropertyExifSceneCaptureType] as? Int
+            m.bodySerial = (exif[kCGImagePropertyExifBodySerialNumber] as? String)?.trimmed
+            m.lensSerial = (exif[kCGImagePropertyExifLensSerialNumber] as? String)?.trimmed
         }
         if let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any],
            var lat = gps[kCGImagePropertyGPSLatitude] as? Double,
@@ -185,6 +210,7 @@ final class PhotoMetaCache: @unchecked Sendable {
                     let below = (gps[kCGImagePropertyGPSAltitudeRef] as? Int) == 1
                     m.altitude = below ? -alt : alt
                 }
+                if let dir = gps[kCGImagePropertyGPSImgDirection] as? Double, dir.isFinite { m.gpsHeading = dir }
             }
         }
         return m

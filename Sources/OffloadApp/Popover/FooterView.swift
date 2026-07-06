@@ -17,32 +17,38 @@ struct FooterView: View {
                     sessionRow(record)
                 }
             }
-            HStack {
+            HStack(spacing: 8) {
+                Button { openAux(WindowID.library) } label: {
+                    Label("Library", systemImage: "photo.stack")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button { openAux(WindowID.history) } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Spacer()
+
                 Menu {
                     Button("Settings…") {
                         dismiss()
                         Activate.front()
                         openSettings()
                     }
-                    Button("Library…") { openAux(WindowID.library) }
-                    Button("History…") { openAux(WindowID.history) }
                     Divider()
                     Button("Quit SD Offload") { NSApp.terminate(nil) }
                         .keyboardShortcut("q")
                 } label: {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-
-                Spacer()
-
-                Button("History…") { openAux(WindowID.history) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                .help("Settings & Quit")
             }
+            .padding(.top, 2)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

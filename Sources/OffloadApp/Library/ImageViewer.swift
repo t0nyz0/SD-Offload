@@ -23,38 +23,33 @@ struct ImageViewer: View {
 
     var body: some View {
         if let i = index, let item = current {
-            ZStack {
+            ZStack(alignment: .top) {
                 Color.black.opacity(0.985).ignoresSafeArea()
                     .onTapGesture { index = nil }
 
-                ZoomableImage(url: item.primary.url)
-                    .id(item.id)
-                    .padding(.top, 44)
-
-                VStack {
-                    topBar(item: item, position: i)
-                    Spacer()
-                }
-
-                // Prev / next chevrons (hidden while the inspector is open so it
-                // doesn't sit under the panel — arrow keys still navigate).
-                if !showInfo {
-                    HStack {
-                        navButton("chevron.left", enabled: i > 0) { step(-1) }
-                        Spacer()
-                        navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
+                // Image and inspector sit SIDE BY SIDE, so the panel never covers
+                // the photo — the image fits into the width left of the panel.
+                HStack(spacing: 0) {
+                    ZStack {
+                        ZoomableImage(url: item.primary.url)
+                            .id(item.id)
+                        HStack {
+                            navButton("chevron.left", enabled: i > 0) { step(-1) }
+                            Spacer()
+                            navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
+                        }
+                        .padding(.horizontal, 12)
                     }
-                    .padding(.horizontal, 12)
-                }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if showInfo {
-                    HStack(spacing: 0) {
-                        Spacer()
+                    if showInfo {
                         InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary), model: model)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
-                    .padding(.top, 44)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
+                .padding(.top, 44)   // clear the top bar
+
+                topBar(item: item, position: i)
             }
             .background(shortcuts)
             .transition(.opacity)
@@ -81,7 +76,7 @@ struct ImageViewer: View {
         await model.delete(items[i], scope: scope)
         // The model updates its entries synchronously, so re-anchor against the
         // fresh list: stay at the same slot (now the next photo) or clamp/close.
-        let remaining = model.displayedItems.filter { !$0.isFolder }
+        let remaining = model.photoItems
         index = remaining.isEmpty ? nil : min(i, remaining.count - 1)
     }
 
@@ -295,12 +290,15 @@ private struct InfoPanel: View {
                 if let f = meta?.focalLen35Text { row("35 mm equiv", f) }
                 if let ev = meta?.exposureBiasText { row("Exposure comp", ev) }
                 if let mode = meta?.exposureProgramText { row("Shooting mode", mode) }
+                if let em = meta?.exposureModeText { row("Exposure mode", em) }
                 if let mt = meta?.meteringText { row("Metering", mt) }
                 if let wb = meta?.whiteBalanceText { row("White balance", wb) }
+                if let sc = meta?.sceneTypeText { row("Scene", sc) }
                 if let fl = meta?.flashText { row("Flash", fl) }
                 if let s = sizeLine { row("Dimensions", s) }
                 if let cp = meta?.colorProfileText { row("Color", cp) }
                 if let sw = meta?.software { row("Software", sw) }
+                if let sn = meta?.serialText { row("Serial", sn) }
                 if let g = meta?.gpsText {
                     VStack(alignment: .leading, spacing: 3) {
                         label("Location")
@@ -308,6 +306,11 @@ private struct InfoPanel: View {
                             .foregroundStyle(.white.opacity(0.9)).textSelection(.enabled)
                         if let alt = meta?.altitudeText {
                             Text("Altitude \(alt)")
+                                .font(.system(size: 11)).monospacedDigit()
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                        if let heading = meta?.headingText {
+                            Text("Facing \(heading)")
                                 .font(.system(size: 11)).monospacedDigit()
                                 .foregroundStyle(.white.opacity(0.55))
                         }
