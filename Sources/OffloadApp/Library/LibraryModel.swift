@@ -45,7 +45,7 @@ struct DisplayItem: Identifiable, Sendable {
 /// path within it, the entries to show, and the progressive media count.
 @MainActor @Observable
 final class LibraryModel {
-    enum Source: Equatable { case nas, card }
+    enum Source: Equatable { case nas, card, favorites }
 
     var source: Source = .nas
     private(set) var pathStack: [URL] = []       // root … current
@@ -57,6 +57,11 @@ final class LibraryModel {
     private(set) var displayedItems: [DisplayItem] = []
     private(set) var photoItems: [DisplayItem] = []
     private(set) var folderItems: [DisplayItem] = []
+
+    // Favorites: a set of absolute photo paths (persisted), and the grouped,
+    // date-sorted photos shown in the Favorites timeline.
+    private(set) var favoritePaths: Set<String> = []
+    private(set) var favoriteItems: [DisplayItem] = []
 
     // Overview counts for the current source root.
     private(set) var totalMedia: Int?
@@ -123,6 +128,7 @@ final class LibraryModel {
     init(nasRootPath: String, cardRootPath: String?) {
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
+        favoritePaths = Set(JSONIO.loadGuarded([String].self, from: Paths.favoritesFile) ?? [])
     }
 
     var hasCard: Bool { cardRootPath != nil }
@@ -133,6 +139,7 @@ final class LibraryModel {
     /// reads correctly on anyone's machine, not a hard-coded NAS name), or "SD Card".
     var sourceTitle: String {
         switch source {
+        case .favorites: return "Favorites"
         case .card: return "SD Card"
         case .nas:
             guard let root = rootURL else { return "Photos" }
@@ -180,6 +187,63 @@ final class LibraryModel {
             let root = FileManager.default.fileExists(atPath: dcim.path) ? dcim
                 : URL(fileURLWithPath: card, isDirectory: true)
             openRoot(root)
+        case .favorites:
+            loadFavorites()
+        }
+    }
+
+    // MARK: - Favorites
+
+    func isFavorite(_ path: String) -> Bool { favoritePaths.contains(path) }
+
+    /// Toggle a photo's favorite state (keyed by the shown photo's path), persist,
+    /// and refresh the timeline if it's on screen.
+    func toggleFavorite(_ item: DisplayItem) {
+        let path = item.primary.id
+        if favoritePaths.contains(path) { favoritePaths.remove(path) } else { favoritePaths.insert(path) }
+        saveFavorites()
+        if source == .favorites { loadFavorites() }
+    }
+
+    private func saveFavorites() {
+        let arr = Array(favoritePaths)
+        Task.detached(priority: .utility) { try? JSONIO.save(arr, to: Paths.favoritesFile) }
+    }
+
+    /// Capture date for timeline grouping — parsed from the YYYY/MM/DD folder path,
+    /// falling back to the file's modified date.
+    func timelineDate(_ item: DisplayItem) -> Date {
+        let comps = (item.primary.id as NSString).deletingLastPathComponent
+            .split(separator: "/").suffix(3).map(String.init)
+        return DateFolders.date(from: comps) ?? item.primary.modified
+    }
+
+    /// Build the Favorites timeline: resolve favorite paths to entries (dropping any
+    /// whose file has gone), group RAW+JPEG, and sort oldest → newest by capture date.
+    func loadFavorites() {
+        source = .favorites
+        pathStack = []
+        searchText = ""
+        searchResults = nil
+        loading = true
+        favoriteItems = []
+        let paths = Array(favoritePaths)
+        Task { [weak self] in
+            guard let self else { return }
+            let existing = await Task.detached(priority: .userInitiated) {
+                paths.filter { FileManager.default.fileExists(atPath: $0) }
+            }.value
+            let built = await self.entries(forPaths: existing)
+            let photos = Self.groupPhotos(built).sorted { self.timelineDate($0) < self.timelineDate($1) }
+            self.favoriteItems = photos
+            self.totalMedia = photos.count
+            self.totalBytes = photos.reduce(0) { acc, it in acc + it.all.reduce(0) { $0 + $1.size } }
+            self.countComplete = true
+            self.loading = false
+            if existing.count < paths.count {          // prune favorites pointing at deleted files
+                self.favoritePaths = Set(existing)
+                self.saveFavorites()
+            }
         }
     }
 
@@ -202,18 +266,27 @@ final class LibraryModel {
     /// Grid items with RAW+JPEG pairs collapsed. Folders first, then photos.
     private func rebuildDisplayed() {
         var folders: [DisplayItem] = []
-        var byKey: [String: [LibraryEntry]] = [:]
-        var order: [String] = []
+        var media: [LibraryEntry] = []
         for e in displayedEntries {
-            if e.isFolder { folders.append(DisplayItem(folder: e)); continue }
-            let key = Self.groupKey(e.id)
-            if byKey[key] == nil { order.append(key) }
-            byKey[key, default: []].append(e)
+            if e.isFolder { folders.append(DisplayItem(folder: e)) } else { media.append(e) }
         }
-        let photos = order.map { DisplayItem(group: byKey[$0]!) }
+        let photos = Self.groupPhotos(media)
         folderItems = folders
         photoItems = photos
         displayedItems = folders + photos
+    }
+
+    /// Group a flat media list into photo DisplayItems (RAW+JPEG paired), preserving
+    /// input order. Folders excluded. Shared by the grid, search, and favorites.
+    nonisolated static func groupPhotos(_ media: [LibraryEntry]) -> [DisplayItem] {
+        var byKey: [String: [LibraryEntry]] = [:]
+        var order: [String] = []
+        for e in media where !e.isFolder {
+            let key = groupKey(e.id)
+            if byKey[key] == nil { order.append(key) }
+            byKey[key, default: []].append(e)
+        }
+        return order.map { DisplayItem(group: byKey[$0]!) }
     }
 
     func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
@@ -347,12 +420,16 @@ final class LibraryModel {
         // reload below reconciles the rest).
         entries.removeAll { removed.contains($0.url) }
         searchResults?.removeAll { removed.contains($0.url) }
+        // Drop any deleted photos from favorites.
+        let removedFav = favoritePaths.intersection(Set(removed.map(\.path)))
+        if !removedFav.isEmpty { favoritePaths.subtract(removedFav); saveFavorites() }
         clearSelection()
         if !failed.isEmpty {
             let n = failed.count
             deleteError = "Couldn't delete \(n) item\(n == 1 ? "" : "s"). The volume may be read-only, or the file\(n == 1 ? " may be" : "s may be") locked or in use."
         }
-        if isSearching { runSearch() } else { loadEntries() }
+        if source == .favorites { loadFavorites() }
+        else if isSearching { runSearch() } else { loadEntries() }
         if let root = rootURL { startCount(root); refreshVolumeStats(root) }
     }
 

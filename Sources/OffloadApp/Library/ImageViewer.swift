@@ -106,6 +106,11 @@ struct ImageViewer: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .padding(.trailing, DS.Space.s)
             }
+            Button { model.toggleFavorite(item) } label: {
+                Label("Favorite", systemImage: model.isFavorite(item.primary.id) ? "heart.fill" : "heart")
+            }
+            .tint(model.isFavorite(item.primary.id) ? .pink : nil)
+            .help("Favorite (F)")
             Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
                 Label("Info", systemImage: "info.circle")
             }
@@ -156,6 +161,8 @@ struct ImageViewer: View {
                 .keyboardShortcut("i", modifiers: [])
             Button("") { if canDelete { confirmingDelete = true } }
                 .keyboardShortcut(.delete, modifiers: [])
+            Button("") { if let c = current { model.toggleFavorite(c) } }
+                .keyboardShortcut("f", modifiers: [])
         }
         .opacity(0)
     }

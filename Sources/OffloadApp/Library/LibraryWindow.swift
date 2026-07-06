@@ -51,26 +51,33 @@ struct LibraryWindow: View {
                         Label("SD Card", systemImage: "sdcard.fill")
                             .tag(LibraryModel.Source.card)
                     }
+                    Label("Favorites", systemImage: "heart.fill")
+                        .tag(LibraryModel.Source.favorites)
                 }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             VStack(spacing: 0) {
                 LibraryHeader(model: model)
-                SearchBar(model: model)
-                if let label = model.faceFilterLabel {
-                    FilterChip(label: label, count: model.photoItems.count) { model.clearFaceFilter() }
-                } else if !model.isSearching && !model.suggestions.isEmpty {
-                    SuggestionChips(model: model)
+                if model.source == .favorites {
+                    Divider()
+                    FavoritesTimeline(model: model, openViewer: { openInViewer($0, model) })
+                } else {
+                    SearchBar(model: model)
+                    if let label = model.faceFilterLabel {
+                        FilterChip(label: label, count: model.photoItems.count) { model.clearFaceFilter() }
+                    } else if !model.isSearching && !model.suggestions.isEmpty {
+                        SuggestionChips(model: model)
+                    }
+                    Divider()
+                    LibraryGrid(model: model, openViewer: { openInViewer($0, model) })
                 }
-                Divider()
-                LibraryGrid(model: model, openViewer: { openInViewer($0, model) })
             }
             .background(DS.Palette.ink)
         }
         .overlay {
             if viewerIndex != nil {
-                ImageViewer(items: model.photoItems, index: $viewerIndex, model: model)
+                ImageViewer(items: viewerPhotos(model), index: $viewerIndex, model: model)
             }
         }
         .alert("Delete failed", isPresented: Binding(
@@ -83,8 +90,11 @@ struct LibraryWindow: View {
         }
     }
 
+    private func viewerPhotos(_ model: LibraryModel) -> [DisplayItem] {
+        model.source == .favorites ? model.favoriteItems : model.photoItems
+    }
     private func openInViewer(_ item: DisplayItem, _ model: LibraryModel) {
-        viewerIndex = model.photoItems.firstIndex { $0.id == item.id }
+        viewerIndex = viewerPhotos(model).firstIndex { $0.id == item.id }
     }
 }
 
@@ -94,21 +104,22 @@ private struct LibraryHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
             HStack(spacing: DS.Space.m) {
-                Image(systemName: model.source == .nas ? "externaldrive.fill.badge.checkmark" : "sdcard.fill")
+                Image(systemName: headerIcon)
                     .font(.system(size: 26))
-                    .foregroundStyle(model.mounted ? DS.safe : DS.Palette.textTertiary)
+                    .foregroundStyle(model.source == .favorites ? Color.pink
+                                     : (model.mounted ? DS.safe : DS.Palette.textTertiary))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.sourceTitle)
                         .font(.system(size: 17, weight: .bold))
                     countLine
-                    if let geo = model.geoSummary {
+                    if model.source == .nas, let geo = model.geoSummary {
                         HStack(spacing: 4) {
                             Image(systemName: "location.fill").font(.system(size: 9))
                             Text(geo).font(.system(size: 10.5)).monospacedDigit()
                         }
                         .foregroundStyle(.tertiary)
                     }
-                    if let faces = model.facesSummary {
+                    if model.source == .nas, let faces = model.facesSummary {
                         Button { if model.faceUnnamed > 0 { model.reviewUnnamedFaces() } } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "person.2.fill").font(.system(size: 9))
@@ -122,11 +133,13 @@ private struct LibraryHeader: View {
                     }
                 }
                 Spacer()
-                if model.totalVolumeBytes > 0 {
+                if model.source != .favorites, model.totalVolumeBytes > 0 {
                     storageGauge
                 }
             }
-            Breadcrumb(model: model)
+            if model.source != .favorites {
+                Breadcrumb(model: model)
+            }
             if let label = model.currentDateLabel {
                 HStack(spacing: 6) {
                     Image(systemName: "calendar")
@@ -139,6 +152,14 @@ private struct LibraryHeader: View {
             }
         }
         .padding(DS.Space.l)
+    }
+
+    private var headerIcon: String {
+        switch model.source {
+        case .nas: "externaldrive.fill.badge.checkmark"
+        case .card: "sdcard.fill"
+        case .favorites: "heart.fill"
+        }
     }
 
     private var countLine: some View {
@@ -508,7 +529,8 @@ private struct LibraryGrid: View {
                             ForEach(photos) { item in
                                 LibraryTile(item: item, tags: model.tags(for: item.primary),
                                             selected: model.selection.contains(item.id),
-                                            isLocal: model.source == .card)
+                                            isLocal: model.source == .card,
+                                            isFavorite: model.isFavorite(item.primary.id))
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
                                         let flags = NSEvent.modifierFlags
@@ -555,6 +577,9 @@ private struct LibraryGrid: View {
                 Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
             }
             Button("Reveal in Finder") { reveal(item.primary.url) }
+            Button(model.isFavorite(item.primary.id) ? "Remove from Favorites" : "Add to Favorites") {
+                model.toggleFavorite(item)
+            }
             // Delete manages the NAS archive only — never the card (its originals
             // are protected until the verified offload wipes them).
             if model.source == .nas {
@@ -593,11 +618,12 @@ private struct LibraryGrid: View {
     }
 }
 
-private struct LibraryTile: View {
+struct LibraryTile: View {
     let item: DisplayItem
     var tags: [String] = []
     var selected: Bool = false
     var isLocal: Bool = false
+    var isFavorite: Bool = false
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
@@ -634,6 +660,7 @@ private struct LibraryTile: View {
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
                 .overlay(alignment: .topTrailing) { formatBadge }
                 .overlay(alignment: .bottomLeading) { tagBadge }
+                .overlay(alignment: .bottomTrailing) { favoriteBadge }
                 .overlay(alignment: .topLeading) {
                     if selected {
                         Image(systemName: "checkmark.circle.fill")
@@ -692,6 +719,16 @@ private struct LibraryTile: View {
     // image itself (a play marker reads faster than text there).
     @ViewBuilder private var formatBadge: some View {
         if isVideo { badge("▶") }
+    }
+
+    @ViewBuilder private var favoriteBadge: some View {
+        if isFavorite {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.pink)
+                .shadow(color: .black.opacity(0.5), radius: 1)
+                .padding(5)
+        }
     }
 
     @ViewBuilder private var tagBadge: some View {

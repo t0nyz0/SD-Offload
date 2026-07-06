@@ -24,7 +24,7 @@ public enum DateFolders {
 
     /// Parse a `[YYYY]`, `[YYYY,MM]`, or `[YYYY,MM,DD]` component list into a Date
     /// (nil if it doesn't look like a date folder).
-    static func date(from comps: [String]) -> Date? {
+    public static func date(from comps: [String]) -> Date? {
         guard (1...3).contains(comps.count),
               comps[0].count == 4, let y = Int(comps[0]), (1900...3000).contains(y) else { return nil }
         var dc = DateComponents()
