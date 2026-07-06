@@ -660,8 +660,18 @@ final class LibraryModel {
         loadEntries()
     }
 
+    /// Full refresh: re-scan the current folder, re-check free space, and recount
+    /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
         if let root = rootURL { refreshVolumeStats(root); startCount(root) }
+        loadEntries()
+    }
+
+    /// Cheap re-scan of just the current folder — used to auto-pick-up external
+    /// changes (e.g. files deleted in Finder) when the window regains focus,
+    /// without paying for a full library recount.
+    func reloadCurrentFolder() {
+        guard currentDir != nil else { return }
         loadEntries()
     }
 

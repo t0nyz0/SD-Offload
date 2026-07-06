@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import OffloadCore
 
 /// Browse the NAS (and an inserted card) at a glance: storage gauge, live photo
@@ -28,6 +29,11 @@ struct LibraryWindow: View {
         }
         .onChange(of: app.cardMountPath) { _, newValue in
             model?.update(nasRootPath: app.settings.config.nasRootPath, cardRootPath: newValue)
+        }
+        // Coming back to the app (e.g. after deleting files in Finder) re-scans the
+        // current folder so external changes show up without a manual refresh.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model?.reloadCurrentFolder()
         }
     }
 
@@ -224,6 +230,12 @@ private struct SearchBar: View {
                 Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(.tertiary)
             }
             .help("Thumbnail size")
+
+            Button { model.refresh() } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .help("Refresh — re-scan this folder and recount the library (⌘R)")
 
             if model.analyzing {
                 HStack(spacing: 6) {
