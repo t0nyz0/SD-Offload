@@ -74,12 +74,16 @@ struct LibraryWindow: View {
                 }
             }
             .background(DS.Palette.ink)
-        }
-        .overlay {
-            if viewerIndex != nil {
-                ImageViewer(items: viewerPhotos(model), index: $viewerIndex, model: model)
+            // Overlay the viewer on the DETAIL pane only, so the sidebar stays
+            // visible and its toggle works (collapse for a near-full view, expand
+            // to switch sources) instead of the viewer covering the whole window.
+            .overlay {
+                if viewerIndex != nil {
+                    ImageViewer(items: viewerPhotos(model), index: $viewerIndex, model: model)
+                }
             }
         }
+        .onChange(of: model.source) { viewerIndex = nil }   // switching source closes the viewer
         .alert("Delete failed", isPresented: Binding(
             get: { model.deleteError != nil },
             set: { if !$0 { model.deleteError = nil } }
