@@ -15,6 +15,24 @@ enum Activate {
     }
 }
 
+/// A menu-bar (accessory) app has no Dock icon and can't be reached via ⌘-Tab —
+/// which makes the Library/History windows hard to switch back to. While one of
+/// them is open we switch to a regular app (Dock icon + app-switcher entry), then
+/// back to accessory once the last window closes. The counter keeps it correct when
+/// both windows are open at once.
+@MainActor
+enum DockPresence {
+    private static var openCount = 0
+    static func windowOpened() { openCount += 1; reconcile() }
+    static func windowClosed() { openCount = max(0, openCount - 1); reconcile() }
+    private static func reconcile() {
+        let policy: NSApplication.ActivationPolicy = openCount > 0 ? .regular : .accessory
+        guard NSApp.activationPolicy() != policy else { return }
+        NSApp.setActivationPolicy(policy)
+        if policy == .regular { NSApp.activate(ignoringOtherApps: true) }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Makes bare `swift run` behave like the LSUIElement bundle: no Dock icon.
@@ -48,12 +66,16 @@ struct OffloadMenuBarApp: App {
         Window("SD Offload History", id: WindowID.history) {
             HistoryWindow()
                 .environment(app)
+                .onAppear { DockPresence.windowOpened() }
+                .onDisappear { DockPresence.windowClosed() }
         }
         .defaultSize(width: 760, height: 500)
 
         Window("Library", id: WindowID.library) {
             LibraryWindow()
                 .environment(app)
+                .onAppear { DockPresence.windowOpened() }
+                .onDisappear { DockPresence.windowClosed() }
         }
         .defaultSize(width: 920, height: 620)
     }
