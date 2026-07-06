@@ -4,7 +4,31 @@ public enum MediaKind: String, Codable, Sendable {
     case photo, raw, video
 
     public static let photoExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tiff", "tif", "bmp"]
-    public static let rawExts: Set<String> = ["arw", "cr2", "cr3", "nef", "raf", "dng", "orf", "rw2", "pef", "srw", "raw", "3fr"]
+    /// Still-photo RAW formats across brands. NOTE: the *offload* is format-agnostic
+    /// — the ingest scan copies EVERY file under the camera folders regardless of
+    /// extension, so a RAW is never skipped. This list only drives Library
+    /// recognition (RAW+JPEG pairing, the "RAW" label, showing it as a photo tile).
+    public static let rawExts: Set<String> = [
+        "arw", "sr2", "srf",          // Sony
+        "cr2", "cr3", "crw",          // Canon
+        "nef", "nrw",                 // Nikon
+        "raf",                        // Fujifilm
+        "rw2", "raw",                 // Panasonic / generic
+        "orf",                        // Olympus / OM System
+        "pef",                        // Pentax / Ricoh
+        "srw",                        // Samsung
+        "dng",                        // Adobe DNG (Leica, DJI, phones, Pentax…)
+        "3fr", "fff",                 // Hasselblad
+        "rwl",                        // Leica
+        "x3f",                        // Sigma (Foveon)
+        "iiq", "cap",                 // Phase One
+        "mos",                        // Leaf
+        "mef",                        // Mamiya
+        "mrw",                        // Minolta / Konica Minolta
+        "dcr", "kdc", "k25",          // Kodak
+        "erf",                        // Epson
+        "gpr",                        // GoPro
+    ]
     public static let videoExts: Set<String> = ["mov", "mp4", "m4v", "avi", "mts", "m2ts", "mxf", "braw"]
     /// Non-media companion files that belong to a photo (edit/metadata sidecars).
     public static let sidecarExts: Set<String> = ["xmp", "thm", "aae", "dop", "pp3", "on1", "cos", "lrv"]
