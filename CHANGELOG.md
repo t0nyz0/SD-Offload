@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.7] — 2026-07-06
+
+### Changed
+- **Recognize many more RAW formats in the Library** — broadened from the mainstream
+  brands to ~25 formats (Canon `crw`, Nikon `nrw`, Sony `sr2`/`srf`, Leica `rwl`,
+  Sigma `x3f`, Phase One `iiq`/`cap`, Hasselblad `fff`, Mamiya `mef`, Minolta `mrw`,
+  Kodak `dcr`/`kdc`/`k25`, Epson `erf`, GoPro `gpr`, and more). This affects Library
+  recognition only (RAW+JPEG pairing, the RAW label, showing/counting tiles); the
+  offload itself was already format-agnostic — every file under the camera folders is
+  copied and verified regardless of extension, so no RAW is ever skipped.
+
 ## [1.0.6] — 2026-07-06
 
 ### Added
