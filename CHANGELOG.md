@@ -5,6 +5,18 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.6] — 2026-07-06
+
+### Added
+- **Jump to a session from the popover.** Clicking a recent session in the menu-bar
+  popover opens the History window and selects + scrolls to that session.
+
+### Fixed
+- **Sidebar stays usable while viewing a photo.** The image viewer covered the whole
+  window, so the sidebar toggle appeared to do nothing. The viewer now fills only the
+  detail pane — the sidebar stays put and its toggle works (collapse for a near-full
+  view, expand to switch sources). Switching source also closes the viewer.
+
 ## [1.0.5] — 2026-07-06
 
 ### Added
