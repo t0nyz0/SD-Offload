@@ -61,8 +61,9 @@ struct LibraryWindow: View {
             .background(DS.Palette.ink)
         }
         .overlay {
-            ImageViewer(items: model.displayedItems.filter { !$0.isFolder },
-                        index: $viewerIndex, model: model)
+            if viewerIndex != nil {
+                ImageViewer(items: model.photoItems, index: $viewerIndex, model: model)
+            }
         }
         .alert("Delete failed", isPresented: Binding(
             get: { model.deleteError != nil },
@@ -75,8 +76,7 @@ struct LibraryWindow: View {
     }
 
     private func openInViewer(_ item: DisplayItem, _ model: LibraryModel) {
-        let photos = model.displayedItems.filter { !$0.isFolder }
-        viewerIndex = photos.firstIndex { $0.id == item.id }
+        viewerIndex = model.photoItems.firstIndex { $0.id == item.id }
     }
 }
 
@@ -419,10 +419,9 @@ private struct LibraryGrid: View {
 
     private var grid: some View {
         ScrollView {
-            let items = model.displayedItems
-            let folders = items.filter { $0.isFolder }
-            let photos = items.filter { !$0.isFolder }
-            if items.isEmpty {
+            let folders = model.folderItems
+            let photos = model.photoItems
+            if folders.isEmpty && photos.isEmpty {
                 ContentUnavailableView(emptyTitle,
                                        systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
                                        description: Text(emptyDetail))
@@ -443,7 +442,8 @@ private struct LibraryGrid: View {
                         LazyVGrid(columns: columns, spacing: 12) {
                             ForEach(photos) { item in
                                 LibraryTile(item: item, tags: model.tags(for: item.primary),
-                                            selected: model.selection.contains(item.id))
+                                            selected: model.selection.contains(item.id),
+                                            isLocal: model.source == .card)
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
                                         let flags = NSEvent.modifierFlags
@@ -529,6 +529,7 @@ private struct LibraryTile: View {
     let item: DisplayItem
     var tags: [String] = []
     var selected: Bool = false
+    var isLocal: Bool = false
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
@@ -597,7 +598,7 @@ private struct LibraryTile: View {
             guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(
                 url: entry.url, size: entry.size, mtime: entry.modified, side: 220,
-                quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .defaultQuality)
+                quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .defaultQuality, isLocal: isLocal)
         }
         .task(id: entry.id) {
             guard !item.isFolder, !isVideo else { return }
@@ -694,11 +695,16 @@ private struct FolderTile: View {
                     .padding(5)
                 labelBar
             }
-            .background(DS.Palette.surfaceRaised, in: bodyShape)
+            // Shadow comes from a flat opaque silhouette behind the card, so the
+            // compositor samples a rounded-rect alpha instead of rasterizing the
+            // whole photo-collage subtree offscreen for the shadow.
+            .background {
+                bodyShape.fill(DS.Palette.surfaceRaised)
+                    .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
+            }
             .overlay(bodyShape.strokeBorder(DS.Palette.hairline, lineWidth: 1))
             .clipShape(bodyShape)
         }
-        .shadow(color: .black.opacity(0.22), radius: 5, y: 2)
         .contentShape(Rectangle())
         .task(id: entry.id) {
             thumbs = await FolderPreviewLoader.shared.preview(folder: entry.url, mtime: entry.modified)

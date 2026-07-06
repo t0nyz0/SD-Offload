@@ -13,7 +13,10 @@ final class FolderPreviewLoader: @unchecked Sendable {
     static let shared = FolderPreviewLoader()
 
     private let mem: NSCache<NSString, ImagesBox> = {
-        let c = NSCache<NSString, ImagesBox>(); c.countLimit = 500; return c
+        let c = NSCache<NSString, ImagesBox>()
+        c.countLimit = 150
+        c.totalCostLimit = 128 << 20   // byte budget: each box holds up to 4 decoded previews
+        return c
     }()
     private let browser = LibraryBrowser()
     private let limiter = ThumbLimiter(limit: 3)   // each fans out to up to 4 thumbs
@@ -38,7 +41,12 @@ final class FolderPreviewLoader: @unchecked Sendable {
                 images.append(img)
             }
         }
-        mem.setObject(ImagesBox(images), forKey: key)
+        let cost = images.reduce(0) { acc, img in
+            let px = (img.representations.first as? NSBitmapImageRep).map { $0.pixelsWide * $0.pixelsHigh }
+                     ?? Int(img.size.width * img.size.height)
+            return acc + px * 4
+        }
+        mem.setObject(ImagesBox(images), forKey: key, cost: cost)
         return images
     }
 }

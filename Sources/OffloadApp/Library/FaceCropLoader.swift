@@ -12,7 +12,10 @@ final class FaceCropLoader: @unchecked Sendable {
     static let shared = FaceCropLoader()
 
     private let mem: NSCache<NSString, CropBox> = {
-        let c = NSCache<NSString, CropBox>(); c.countLimit = 1000; return c
+        let c = NSCache<NSString, CropBox>()
+        c.countLimit = 500
+        c.totalCostLimit = 64 << 20   // byte budget so face crops can't pile up unbounded
+        return c
     }()
     private let limiter = ThumbLimiter(limit: 4)
 
@@ -22,7 +25,8 @@ final class FaceCropLoader: @unchecked Sendable {
         await limiter.acquire()
         defer { Task { await limiter.release() } }
         let img = await Task.detached(priority: .userInitiated) { Self.render(url, bbox) }.value
-        mem.setObject(CropBox(img), forKey: key)
+        let cost = img.map { Int($0.size.width * $0.size.height) * 4 } ?? 0
+        mem.setObject(CropBox(img), forKey: key, cost: cost)
         return img
     }
 

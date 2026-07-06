@@ -2,6 +2,7 @@ import SwiftUI
 import ImageIO
 import CryptoKit
 import QuickLookThumbnailing
+import UniformTypeIdentifiers
 import OffloadCore
 
 /// User-tunable thumbnail fidelity (Settings → Library). Higher = sharper but
@@ -24,7 +25,9 @@ enum ThumbnailQuality: Int, CaseIterable, Sendable {
         switch self { case .fast: 1.5; case .balanced: 2.2; case .high: 3.2; case .maximum: 4.0 }
     }
     /// Decode the full image for a crisp thumbnail rather than the file's small
-    /// embedded preview. Off for Fast (embedded preview is quick over SMB).
+    /// embedded preview. Off for Fast (embedded preview is quick over SMB). Note:
+    /// even when true, full decode is only used for LOCAL sources — over SMB the
+    /// embedded preview is used regardless, to avoid pulling whole RAWs per tile.
     var fullDecode: Bool { self != .fast }
     /// JPEG quality of the on-disk thumbnail cache.
     var jpegCompression: CGFloat {
@@ -59,19 +62,24 @@ actor ThumbLimiter {
 
 /// Fast, persistent thumbnails for the Library.
 ///
-/// Three wins over the naive approach:
-/// 1. **Embedded previews.** `CGImageSourceCreateThumbnailAtIndex` with
-///    `…FromImageIfAbsent` pulls the JPEG/RAW file's *embedded* thumbnail —
-///    kilobytes over SMB instead of downloading a 50 MB RAW to decode it.
-/// 2. **Two-tier cache.** In-memory NSCache + an on-disk JPEG cache under
-///    Application Support, keyed by path+size+mtime, so revisits (and relaunches)
-///    are instant and re-fetch nothing from the NAS.
-/// 3. **Bounded concurrency.** At most a handful of NAS reads at once.
+/// Wins over the naive approach:
+/// 1. **Embedded previews over SMB.** Local sources full-decode (sharpest); NAS
+///    sources pull the file's embedded preview (~1600px+, KBs) instead of the
+///    whole RAW/JPEG — same on-screen sharpness at a ~220px tile, far less wire.
+/// 2. **Two-tier cache with a BYTE budget.** In-memory NSCache (bounded by bytes,
+///    not just count, so High/Maximum can't pile up 1 GB of decoded bitmaps) +
+///    an on-disk JPEG cache, keyed by path+size+mtime+quality+source.
+/// 3. **Bounded, cancellable decodes.** ≤6 concurrent NAS reads; a tile scrolled
+///    off-screen cancels its decode and frees its slot. Cached tiles decode
+///    eagerly OFF the main thread so scroll-back never hitches on a draw-time JPEG.
 final class ThumbnailLoader: @unchecked Sendable {
     static let shared = ThumbnailLoader()
 
     private let mem: NSCache<NSString, NSImage> = {
-        let c = NSCache<NSString, NSImage>(); c.countLimit = 800; return c
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 400
+        c.totalCostLimit = 256 << 20   // 256 MB of decoded bitmaps — caps RAM at any quality
+        return c
     }()
     private let limiter = ThumbLimiter(limit: 6)
     private let cacheDir: URL
@@ -103,57 +111,106 @@ final class ThumbnailLoader: @unchecked Sendable {
         }
     }
 
-    private func key(path: String, size: Int64, mtime: Date, side: CGFloat, quality: ThumbnailQuality) -> String {
-        let s = "\(path)|\(size)|\(Int(mtime.timeIntervalSince1970))|\(Int(side))|q\(quality.rawValue)"
+    /// Approximate resident bytes of a decoded image (pixels × 4 RGBA), so the
+    /// NSCache byte budget reflects real memory rather than an object count.
+    private static func cost(_ image: NSImage) -> Int {
+        if let rep = image.representations.max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }),
+           rep.pixelsWide > 0, rep.pixelsHigh > 0 {
+            return rep.pixelsWide * rep.pixelsHigh * 4
+        }
+        return max(1, Int(image.size.width * image.size.height) * 4)
+    }
+
+    private func key(path: String, size: Int64, mtime: Date, side: CGFloat,
+                     quality: ThumbnailQuality, isLocal: Bool) -> String {
+        let s = "\(path)|\(size)|\(Int(mtime.timeIntervalSince1970))|\(Int(side))|q\(quality.rawValue)|l\(isLocal ? 1 : 0)"
         let hash = SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
         return String(hash.prefix(40))
     }
 
     func thumbnail(url: URL, size: Int64, mtime: Date, side: CGFloat,
-                   quality: ThumbnailQuality = .current) async -> NSImage? {
-        let k = key(path: url.path, size: size, mtime: mtime, side: side, quality: quality)
+                   quality: ThumbnailQuality = .current, isLocal: Bool = false) async -> NSImage? {
+        let k = key(path: url.path, size: size, mtime: mtime, side: side, quality: quality, isLocal: isLocal)
         if let hit = mem.object(forKey: k as NSString) { return hit }
+        if Task.isCancelled { return nil }
 
+        // Warm disk cache: decode eagerly OFF the main thread so the tile paints
+        // without a draw-time JPEG decode. It's a local read, so it doesn't need
+        // the NAS limiter.
         let diskURL = cacheDir.appendingPathComponent(k + ".jpg")
-        if let img = NSImage(contentsOf: diskURL) {
-            mem.setObject(img, forKey: k as NSString)
-            return img
+        if FileManager.default.fileExists(atPath: diskURL.path) {
+            if let img = await Task.detached(priority: .utility, operation: { Self.decodeEager(diskURL) }).value {
+                mem.setObject(img, forKey: k as NSString, cost: Self.cost(img))
+                return img
+            }
+            // Unreadable cache file → fall through and regenerate.
         }
 
         await limiter.acquire()
         defer { Task { await limiter.release() } }
         if Task.isCancelled { return nil }
 
-        // ImageIO off the main actor; QuickLook fallback is its own async bridge —
-        // never a blocking wait on a cooperative thread.
-        var img = await Task.detached(priority: .utility) { Self.cgThumbnail(url: url, side: side, quality: quality) }.value
-        if img == nil { img = await Self.qlThumbnail(url: url, side: side) }
-        if let img {
-            mem.setObject(img, forKey: k as NSString)
-            Self.writeJPEG(img, to: diskURL, compression: quality.jpegCompression)
+        // Cold generate. Bridge cancellation into the detached decode so a tile
+        // scrolled off-screen stops (at the next boundary) and frees its slot for
+        // a visible tile, instead of running a full SMB decode nobody will see.
+        let decode = Task.detached(priority: .utility) {
+            Self.cgThumbnailCG(url: url, side: side, quality: quality, isLocal: isLocal)
         }
-        return img
+        let cg = await withTaskCancellationHandler {
+            await decode.value
+        } onCancel: {
+            decode.cancel()
+        }
+        if Task.isCancelled { return nil }
+
+        if let cg {
+            let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            mem.setObject(img, forKey: k as NSString, cost: Self.cost(img))
+            let comp = quality.jpegCompression
+            Task.detached(priority: .background) { Self.writeJPEG(cg, to: diskURL, compression: comp) }   // don't block first paint
+            return img
+        }
+        // ImageIO couldn't thumbnail (some RAW/video) → QuickLook fallback.
+        if Task.isCancelled { return nil }
+        if let img = await Self.qlThumbnail(url: url, side: side) {
+            mem.setObject(img, forKey: k as NSString, cost: Self.cost(img))
+            if let cg2 = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                let comp = quality.jpegCompression
+                Task.detached(priority: .background) { Self.writeJPEG(cg2, to: diskURL, compression: comp) }
+            }
+            return img
+        }
+        return nil
     }
 
     // MARK: - Generation
 
-    private static func cgThumbnail(url: URL, side: CGFloat, quality: ThumbnailQuality) -> NSImage? {
-        let opts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            // Higher qualities decode the full image for a sharp thumbnail; Fast
-            // prefers the file's (small) embedded preview — quick, but softer.
-            kCGImageSourceCreateThumbnailFromImageAlways: quality.fullDecode,
-            kCGImageSourceThumbnailMaxPixelSize: Int(side * quality.pixelScale),
-            kCGImageSourceCreateThumbnailWithTransform: true,      // honor EXIF orientation
-        ]
+    /// Eagerly decode a cached JPEG to a bitmap-backed image (off-main), so the
+    /// UI draw is a plain composite instead of a deferred main-thread decode.
+    private static func decodeEager(_ url: URL) -> NSImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+              let cg = CGImageSourceCreateImageAtIndex(src, 0,
+                        [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return nil }
         return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
+    private static func cgThumbnailCG(url: URL, side: CGFloat, quality: ThumbnailQuality, isLocal: Bool) -> CGImage? {
+        if Task.isCancelled { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            // Full-decode (sharpest) only for LOCAL sources. Over SMB, use the
+            // file's embedded preview — typically ~1600px+, far more than a ~220px
+            // tile needs — instead of pulling the whole RAW/JPEG across the wire.
+            kCGImageSourceCreateThumbnailFromImageAlways: isLocal && quality.fullDecode,
+            kCGImageSourceThumbnailMaxPixelSize: Int(side * quality.pixelScale),
+            kCGImageSourceCreateThumbnailWithTransform: true,      // honor EXIF orientation
+        ]
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        if Task.isCancelled { return nil }                         // bail before the expensive decode
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+
     /// QuickLook fallback for anything ImageIO can't thumbnail (some video/RAW).
-    /// Bridged via a continuation — QuickLook runs on its own queue, so we never
-    /// block a Swift-concurrency cooperative thread.
     private static func qlThumbnail(url: URL, side: CGFloat) async -> NSImage? {
         await withCheckedContinuation { (cont: CheckedContinuation<NSImage?, Never>) in
             let request = QLThumbnailGenerator.Request(
@@ -165,10 +222,11 @@ final class ThumbnailLoader: @unchecked Sendable {
         }
     }
 
-    private static func writeJPEG(_ image: NSImage, to url: URL, compression: CGFloat) {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let data = rep.representation(using: .jpeg, properties: [.compressionFactor: compression]) else { return }
-        try? data.write(to: url)
+    /// Encode a CGImage straight to a JPEG on disk (no TIFF round-trip), at the
+    /// tier's compression. Same pixels, cheaper.
+    private static func writeJPEG(_ cg: CGImage, to url: URL, compression: CGFloat) {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: compression] as CFDictionary)
+        CGImageDestinationFinalize(dest)
     }
 }

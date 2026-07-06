@@ -49,8 +49,14 @@ final class LibraryModel {
 
     var source: Source = .nas
     private(set) var pathStack: [URL] = []       // root … current
-    private(set) var entries: [LibraryEntry] = []
+    private(set) var entries: [LibraryEntry] = [] { didSet { rebuildDisplayed() } }
     private(set) var loading = false
+    // Cached grouping of displayedEntries, rebuilt ONLY when entries/searchResults
+    // change — so selection taps, tag updates during Analyze, and grid re-renders
+    // read O(1) instead of re-running the O(n) dictionary grouping every time.
+    private(set) var displayedItems: [DisplayItem] = []
+    private(set) var photoItems: [DisplayItem] = []
+    private(set) var folderItems: [DisplayItem] = []
 
     // Overview counts for the current source root.
     private(set) var totalMedia: Int?
@@ -66,7 +72,7 @@ final class LibraryModel {
 
     // Content search / AI analysis.
     var searchText = "" { didSet { if searchText != oldValue { runSearch() } } }
-    private(set) var searchResults: [LibraryEntry]?      // nil = not searching
+    private(set) var searchResults: [LibraryEntry]? { didSet { rebuildDisplayed() } }      // nil = not searching
     private(set) var analyzing = false
     private(set) var analyzeDone = 0
     private(set) var analyzeTotal = 0
@@ -191,7 +197,7 @@ final class LibraryModel {
     var isSearching: Bool { searchResults != nil }
 
     /// Grid items with RAW+JPEG pairs collapsed. Folders first, then photos.
-    var displayedItems: [DisplayItem] {
+    private func rebuildDisplayed() {
         var folders: [DisplayItem] = []
         var byKey: [String: [LibraryEntry]] = [:]
         var order: [String] = []
@@ -201,7 +207,10 @@ final class LibraryModel {
             if byKey[key] == nil { order.append(key) }
             byKey[key, default: []].append(e)
         }
-        return folders + order.map { DisplayItem(group: byKey[$0]!) }
+        let photos = order.map { DisplayItem(group: byKey[$0]!) }
+        folderItems = folders
+        photoItems = photos
+        displayedItems = folders + photos
     }
 
     func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
@@ -279,7 +288,7 @@ final class LibraryModel {
     /// Folders never select (they navigate).
     func handleTap(_ item: DisplayItem, command: Bool, shift: Bool) {
         guard !item.isFolder else { clearSelection(); return }
-        let ids = displayedItems.filter { !$0.isFolder }.map(\.id)
+        let ids = photoItems.map(\.id)
         if shift, let anchor = anchorID,
            let a = ids.firstIndex(of: anchor), let b = ids.firstIndex(of: item.id) {
             selection = Set(ids[min(a, b)...max(a, b)])
@@ -295,12 +304,12 @@ final class LibraryModel {
     func clearSelection() { selection.removeAll(); anchorID = nil }
 
     func selectAllPhotos() {
-        selection = Set(displayedItems.filter { !$0.isFolder }.map(\.id))
+        selection = Set(photoItems.map(\.id))
         anchorID = selection.first
     }
 
     func deleteSelection() async {
-        let items = displayedItems.filter { selection.contains($0.id) && !$0.isFolder }
+        let items = photoItems.filter { selection.contains($0.id) }
         guard !items.isEmpty else { return }
         let targets = await Task.detached(priority: .userInitiated) {
             var urls = Set<URL>()
