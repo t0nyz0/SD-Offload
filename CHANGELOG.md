@@ -5,6 +5,20 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.8] — 2026-07-06
+
+### Added
+- **Faces source.** A new **Faces** entry in the sidebar shows a gallery of every
+  named person/pet (cover, name, photo count). Tap one to see all of their photos.
+- **Pin folders to the sidebar.** Right-click any folder → **Pin to Sidebar** for
+  quick access to your favorite or most-active folders; pinned folders open straight
+  to that folder with a full breadcrumb. Unpin from the row's context menu. Pins
+  persist locally.
+
+### Changed
+- Renamed the sidebar's "Sources" header to "Library"; the header hides folder/
+  storage chrome for the Favorites and Faces sources.
+
 ## [1.0.7] — 2026-07-06
 
 ### Changed
