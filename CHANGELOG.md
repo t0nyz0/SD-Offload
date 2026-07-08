@@ -5,6 +5,19 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-07-06
+
+### Added
+- **Watch progress without opening the menu.** When a card is inserted, the Library
+  window opens with a live offload banner at the top (card, %, card→Mac / Mac→NAS
+  bars, ETA, pause/resume). Toggle in Settings → General → "Show the Library window
+  during and after offload" (default on).
+- **Reveal the uploaded batch.** When an offload finishes, the Library jumps to the
+  folder that received the batch (the busiest YYYY/MM/DD day), with a full breadcrumb.
+- **Opt-in NAS pre-warm** (Settings → Performance, default off): on card insert, a
+  read-only check wakes the NAS connection and spins up the drives so the first
+  upload doesn't stall for a few seconds. Never writes; independent of the wipe gate.
+
 ## [1.0.8] — 2026-07-06
 
 ### Added
