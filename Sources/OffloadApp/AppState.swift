@@ -15,6 +15,15 @@ final class AppState {
     /// Set when the user clicks a recent session in the popover: the History window
     /// selects and scrolls to it, then clears this.
     var pendingHistorySelection: UUID?
+    /// Bumped to ask the always-alive MenuBarExtra label to open/focus the Library
+    /// window (the popover can't be opened programmatically on macOS 14). A fresh
+    /// UUID each time so the label's .onChange fires even on a repeat; the initial
+    /// value is ignored (.onChange never fires on first render), so nothing opens at
+    /// launch.
+    private(set) var libraryOpenToken = UUID()
+    /// Absolute NAS folder the Library should jump to once on screen. nil = just
+    /// show live progress. Consumed (reset to nil) by LibraryWindow.
+    var pendingLibraryFolder: String?
     /// Mount path of a currently-inserted card (for the Library window). Set on
     /// detect/consent/session start, cleared when the card leaves or is ejected.
     private(set) var cardMountPath: String?
@@ -104,6 +113,7 @@ final class AppState {
             session = SessionViewModel(sessionID: id, card: card, resumed: resumed)
             startTick()
             recomputeMenuBar()
+            if settings.config.autoShowLibrary { requestLibraryOpen() }   // #1: watch progress in a window
 
         case .planned(let files, let bytes):
             session?.plannedFiles = files
@@ -146,6 +156,10 @@ final class AppState {
         case .completed(let record):
             session?.completed = record
             refreshRecent()
+            if settings.config.autoShowLibrary,
+               let folder = Self.uploadedFolder(from: record, nasRoot: settings.config.nasRootPath) {
+                requestLibraryOpen(folder: folder)   // #3: reveal the just-uploaded batch
+            }
 
         case .sessionFailed(let record, let item):
             session?.completed = record
@@ -265,4 +279,25 @@ final class AppState {
     func confirmWipeTapped() { engine.confirmWipe() }
     func cancelWipeTapped() { engine.cancelWipe() }
     func ejectTapped() { engine.eject() }
+
+    /// Ask the Library window to open/focus, optionally navigating to `folder`.
+    private func requestLibraryOpen(folder: String? = nil) {
+        if let folder { pendingLibraryFolder = folder }
+        libraryOpenToken = UUID()
+    }
+
+    /// The NAS day-folder (YYYY/MM/DD, absolute) that received the most files this
+    /// session — a batch spanning several capture days reveals the busiest day.
+    /// Counts only files that actually landed on the NAS (nasVerified / skipped /
+    /// wiped), so it resolves for auto-wiped batches too.
+    static func uploadedFolder(from record: SessionRecord, nasRoot: String) -> String? {
+        var counts: [String: Int] = [:]
+        for file in record.files where file.state.isWipeEligible {
+            let comps = file.destRelPath.split(separator: "/")
+            guard comps.count >= 4 else { continue }        // YYYY/MM/DD/name
+            counts[comps.prefix(3).joined(separator: "/"), default: 0] += 1
+        }
+        guard let best = counts.max(by: { $0.value < $1.value })?.key else { return nil }
+        return URL(fileURLWithPath: nasRoot, isDirectory: true).appendingPathComponent(best).path
+    }
 }

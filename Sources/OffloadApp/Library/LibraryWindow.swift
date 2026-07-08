@@ -10,25 +10,47 @@ struct LibraryWindow: View {
     @State private var viewerIndex: Int?
 
     var body: some View {
-        Group {
-            if let model {
-                content(model)
-            } else {
-                Color(nsColor: .windowBackgroundColor)
+        VStack(spacing: 0) {
+            if let vm = app.session {           // live offload progress, right in this window
+                LibraryProgressBanner(vm: vm)
+                Divider()
+            }
+            Group {
+                if let model {
+                    content(model)
+                } else {
+                    Color(nsColor: .windowBackgroundColor)
+                }
             }
         }
         .onAppear {
+            Activate.front()
             if model == nil {
                 let m = LibraryModel(nasRootPath: app.settings.config.nasRootPath,
                                      cardRootPath: app.cardMountPath)
-                m.select(.nas)
+                if let folder = app.pendingLibraryFolder {
+                    m.openPinned(folder)                // land on the just-uploaded batch
+                    app.pendingLibraryFolder = nil
+                } else {
+                    m.select(.nas)
+                }
                 model = m
             } else {
                 model?.update(nasRootPath: app.settings.config.nasRootPath, cardRootPath: app.cardMountPath)
+                if let folder = app.pendingLibraryFolder {
+                    model?.openPinned(folder)
+                    app.pendingLibraryFolder = nil
+                }
             }
         }
         .onChange(of: app.cardMountPath) { _, newValue in
             model?.update(nasRootPath: app.settings.config.nasRootPath, cardRootPath: newValue)
+        }
+        // Window already open when a later offload finishes → jump to its folder.
+        .onChange(of: app.pendingLibraryFolder) { _, newValue in
+            guard let folder = newValue else { return }
+            model?.openPinned(folder)
+            app.pendingLibraryFolder = nil
         }
         // Coming back to the app (e.g. after deleting files in Finder) re-scans the
         // current folder so external changes show up without a manual refresh.
@@ -117,6 +139,84 @@ struct LibraryWindow: View {
     }
     private func openInViewer(_ item: DisplayItem, _ model: LibraryModel) {
         viewerIndex = viewerPhotos(model).firstIndex { $0.id == item.id }
+    }
+}
+
+/// A slim live-offload strip pinned to the top of the Library while a session runs —
+/// a miniature of the popover's progress view, so you can watch progress in the same
+/// window you'll browse the results in. Driven by AppState.session; vanishes ~6s
+/// after the offload finishes (when AppState nils the session).
+private struct LibraryProgressBanner: View {
+    @Environment(AppState.self) private var app
+    var vm: SessionViewModel
+
+    var body: some View {
+        HStack(spacing: DS.Space.m) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 20)).foregroundStyle(DS.safe)
+                .symbolEffect(.pulse, isActive: vm.phase == .transferring)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(vm.cardTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text(statusWord).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    if let eta = vm.etaAllSafeText {
+                        Text("all safe in \(eta)").font(.system(size: 11))
+                            .foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Text("\(vm.percentInt)%").font(.system(size: 12, weight: .bold)).monospacedDigit()
+                }
+                HStack(spacing: 10) {
+                    MiniBar(label: "CARD", fraction: vm.hop1Fraction, tint: Theme.accent)
+                    MiniBar(label: "NAS", fraction: vm.hop2Fraction, tint: Theme.safe)
+                }
+            }
+            if vm.phase == .transferring || vm.phase == .pausedByUser {
+                Button { vm.phase == .pausedByUser ? app.resumeTapped() : app.pauseTapped() } label: {
+                    Image(systemName: vm.phase == .pausedByUser ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.borderless)
+                .help(vm.phase == .pausedByUser ? "Resume" : "Pause")
+            }
+        }
+        .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.s)
+        .background(DS.Palette.surfaceRaised.opacity(0.5))
+    }
+
+    private var statusWord: String {
+        switch vm.phase {
+        case .scanning: return "scanning card"
+        case .waitingForNAS: return "waiting for NAS"
+        case .pausedByUser: return "paused"
+        case .pausedCardGone: return "card removed"
+        case .wiping: return "wiping card"
+        case .ejecting: return "ejecting"
+        case .done: return "done"
+        default:
+            if vm.hop1Fraction < 1 { return "copying from card" }
+            else if vm.hop2Fraction < 1 { return "uploading to NAS" }
+            else { return "verifying on NAS" }
+        }
+    }
+}
+
+private struct MiniBar: View {
+    let label: String
+    let fraction: Double
+    let tint: Color
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label).font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary).frame(height: 4)
+                    Capsule().fill(tint)
+                        .frame(width: geo.size.width * min(1, max(0, fraction)), height: 4)
+                }
+            }
+            .frame(height: 4)
+        }
     }
 }
 

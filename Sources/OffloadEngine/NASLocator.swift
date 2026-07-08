@@ -75,6 +75,24 @@ public actor NASLocator {
     /// reporting "healthy" for a mount that just disappeared.
     public func invalidate() { cached = nil }
 
+    /// Opt-in pre-warm, kicked off when a card is inserted. READ-ONLY: wakes the SMB
+    /// session (and spins up the NAS disks) early so the first hop-2 upload doesn't
+    /// pay the cold-connection cost. Never writes → can't violate the ghost-mount
+    /// guard. Best-effort and non-throwing. (Even if the ≤5 s health cache lapses
+    /// before uploads start, the SMB session + spun-up disks stay warm — the real win.)
+    public func prewarm() async {
+        var health = await validateNow(force: true)          // forced statfs classifies + wakes the session
+        if health == .notMounted {
+            _ = await attemptRemount()
+            health = await validateNow(force: true)
+        }
+        guard health == .healthy else { return }             // never probe a ghost/wrong/read-only share
+        let root = (await configProvider()).nasRootPath
+        await Task.detached(priority: .utility) {            // off-actor: don't hold NASLocator during the read
+            _ = try? FileManager.default.contentsOfDirectory(atPath: root)   // cheap read-only round-trip
+        }.value
+    }
+
     /// Blocks until the share is healthy. Attempts a NetFS remount, then
     /// backoff-retries (5 s → 60 s). Ghost folders are NEVER retried past —
     /// the caller surfaces them loudly and waits for the user.

@@ -43,6 +43,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     // Performance
     public var hop1Workers: Int = 1
     public var hop2Workers: Int = 4
+    /// Opt-in: on card insert, start validating/establishing the NAS connection
+    /// (read-only) so the first upload doesn't pay the ~4–5 s cold-SMB + disk
+    /// spin-up cost. Never writes. Off by default.
+    public var prewarmNAS: Bool = false
 
     // Notifications / general
     public var notifyCardDetected: Bool = true
@@ -53,6 +57,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// built-in ~/System/Library/Sounds names (Glass, Ping, Hero, …).
     public var completionSoundName: String = "Glass"
     public var launchAtLogin: Bool = false
+    /// Show the Library window while a card offloads, and jump it to the just-
+    /// uploaded folder when the offload finishes.
+    public var autoShowLibrary: Bool = true
 
     public init() {}
 
@@ -78,12 +85,14 @@ public struct AppConfig: Codable, Sendable, Equatable {
         keepStagedDays = try c.decodeIfPresent(Int.self, forKey: .keepStagedDays) ?? d.keepStagedDays
         hop1Workers = try c.decodeIfPresent(Int.self, forKey: .hop1Workers) ?? d.hop1Workers
         hop2Workers = try c.decodeIfPresent(Int.self, forKey: .hop2Workers) ?? d.hop2Workers
+        prewarmNAS = try c.decodeIfPresent(Bool.self, forKey: .prewarmNAS) ?? d.prewarmNAS
         notifyCardDetected = try c.decodeIfPresent(Bool.self, forKey: .notifyCardDetected) ?? d.notifyCardDetected
         notifyComplete = try c.decodeIfPresent(Bool.self, forKey: .notifyComplete) ?? d.notifyComplete
         notifyProblems = try c.decodeIfPresent(Bool.self, forKey: .notifyProblems) ?? d.notifyProblems
         playSounds = try c.decodeIfPresent(Bool.self, forKey: .playSounds) ?? d.playSounds
         completionSoundName = try c.decodeIfPresent(String.self, forKey: .completionSoundName) ?? d.completionSoundName
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
+        autoShowLibrary = try c.decodeIfPresent(Bool.self, forKey: .autoShowLibrary) ?? d.autoShowLibrary
     }
 
     public static func load() -> AppConfig {

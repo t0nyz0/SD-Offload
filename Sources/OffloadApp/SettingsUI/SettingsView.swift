@@ -90,6 +90,10 @@ struct SettingsView: View {
                 Text("Each uploaded file is read back from the NAS uncached and checksummed against the card before the card can be wiped — always. More parallel uploads can help on fast links; a single spinning-disk NAS may prefer fewer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Warm up the NAS when a card is inserted", isOn: $settings.config.prewarmNAS)
+                Text("Starts checking and waking the NAS the moment a card is detected, so the first upload doesn't stall while the connection and drives spin up. Read-only — it never writes to the NAS until your files are verified.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Library") {
@@ -112,6 +116,7 @@ struct SettingsView: View {
 
             Section("General") {
                 LoginItemToggle()
+                Toggle("Show the Library window during and after offload", isOn: $settings.config.autoShowLibrary)
                 Toggle("Play a sound when an offload finishes", isOn: $settings.config.playSounds)
                 if settings.config.playSounds {
                     HStack {

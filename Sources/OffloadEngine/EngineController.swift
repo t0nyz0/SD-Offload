@@ -64,6 +64,7 @@ private actor Coordinator {
     // volumeUnmounted so genuine re-insertion re-checks.
     private var handledThisInsertion: Set<String> = []
     private var eventsTask: Task<Void, Never>?
+    private var prewarmTask: Task<Void, Never>?
 
     init(configProvider: @escaping ConfigProvider,
          configMutator: @escaping ConfigMutator,
@@ -176,6 +177,16 @@ private actor Coordinator {
 
     // MARK: - Session lifecycle
 
+    /// Opt-in: start waking the NAS connection the moment a card is picked up, so
+    /// the first upload doesn't stall. Detached (never awaited) so it can't block the
+    /// Coordinator actor; read-only, so it can't interfere with the wipe gate.
+    private func prewarmNASIfEnabled(_ config: AppConfig) {
+        guard config.prewarmNAS else { return }
+        prewarmTask?.cancel()
+        let nas = self.nas
+        prewarmTask = Task.detached(priority: .utility) { await nas.prewarm() }
+    }
+
     private func startSession(_ volume: CandidateVolume) async {
         guard runner == nil, !startingSession else {
             // Busy (a session is running, or a start is already in flight) — queue
@@ -197,6 +208,7 @@ private actor Coordinator {
         defer { startingSession = false }
         lastVolume = volume
         let config = await configProvider()
+        prewarmNASIfEnabled(config)   // start waking the NAS while we scan/copy
         emit(.cardMounted(volume.info))
         let staging = StagingStore(rootPath: config.stagingRootPath)
         let cardRoot = URL(fileURLWithPath: volume.info.mountPath, isDirectory: true)

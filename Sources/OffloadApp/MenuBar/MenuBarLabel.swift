@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarLabel: View {
     var app: AppState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let state = app.menuBar
@@ -16,5 +17,11 @@ struct MenuBarLabel: View {
             }
         }
         .accessibilityLabel(state.accessibilityText)
+        // The label is the only view alive when no window is open, so it hosts the
+        // programmatic Library-window open (macOS 14 can't open the popover this way).
+        .onChange(of: app.libraryOpenToken) {
+            Activate.front()
+            openWindow(id: WindowID.library)
+        }
     }
 }
