@@ -3,9 +3,6 @@ import OffloadCore
 
 struct FooterView: View {
     @Environment(AppState.self) private var app
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -14,19 +11,19 @@ struct FooterView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.tertiary)
                 ForEach(app.recent.prefix(3)) { record in
-                    Button { openHistory(selecting: record.id) } label: { sessionRow(record) }
+                    Button { app.router?.openHistory(selecting: record.id) } label: { sessionRow(record) }
                         .buttonStyle(.plain)
                 }
             }
             HStack(spacing: 8) {
-                Button { openAux(WindowID.library) } label: {
+                Button { app.router?.openLibrary(folder: nil) } label: {
                     Label("Library", systemImage: "photo.stack")
                         .font(.system(size: 13, weight: .medium))
                         .padding(.vertical, 2)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
-                Button { openAux(WindowID.history) } label: {
+                Button { app.router?.openHistory(selecting: nil) } label: {
                     Label("History", systemImage: "clock.arrow.circlepath")
                         .font(.system(size: 13, weight: .medium))
                         .padding(.vertical, 2)
@@ -37,11 +34,7 @@ struct FooterView: View {
                 Spacer()
 
                 Menu {
-                    Button("Settings…") {
-                        dismiss()
-                        Activate.front()
-                        openSettings()
-                    }
+                    Button("Settings…") { app.router?.openSettings() }
                     Divider()
                     Button("Quit SD Offload") { NSApp.terminate(nil) }
                         .keyboardShortcut("q")
@@ -57,17 +50,6 @@ struct FooterView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    private func openAux(_ id: String) {
-        dismiss()
-        Activate.front()
-        openWindow(id: id)
-    }
-
-    private func openHistory(selecting id: UUID) {
-        app.pendingHistorySelection = id   // History window picks this up and scrolls to it
-        openAux(WindowID.history)
     }
 
     private func sessionRow(_ record: SessionRecord) -> some View {

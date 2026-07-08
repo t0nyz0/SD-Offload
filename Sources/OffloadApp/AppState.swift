@@ -5,7 +5,7 @@ import OffloadEngine
 
 @MainActor @Observable
 final class AppState {
-    // Coarse — the ONLY property MenuBarLabel reads. Changes ≤ ~1/s.
+    // Coarse — the status-item label mirrors this. Changes ≤ ~1/s.
     private(set) var menuBar: MenuBarState = .idle
     // Fine — popover-only. nil == idle.
     private(set) var session: SessionViewModel?
@@ -15,12 +15,6 @@ final class AppState {
     /// Set when the user clicks a recent session in the popover: the History window
     /// selects and scrolls to it, then clears this.
     var pendingHistorySelection: UUID?
-    /// Bumped to ask the always-alive MenuBarExtra label to open/focus the Library
-    /// window (the popover can't be opened programmatically on macOS 14). A fresh
-    /// UUID each time so the label's .onChange fires even on a repeat; the initial
-    /// value is ignored (.onChange never fires on first render), so nothing opens at
-    /// launch.
-    private(set) var libraryOpenToken = UUID()
     /// Absolute NAS folder the Library should jump to once on screen. nil = just
     /// show live progress. Consumed (reset to nil) by LibraryWindow.
     var pendingLibraryFolder: String?
@@ -31,6 +25,11 @@ final class AppState {
     var popoverVisible = false {
         didSet { if popoverVisible && !oldValue { refreshNASGlance(); refreshRecent() } }
     }
+
+    /// The AppKit layer that fulfills window requests (status-item popover, Library,
+    /// History, Settings). Set once at launch by the AppDelegate. Weak: the
+    /// coordinator outlives AppState in practice, but AppState must never own it.
+    @ObservationIgnored weak var router: (any WindowRouting)?
 
     let settings: SettingsStore
     @ObservationIgnored let journal: Journal
@@ -100,6 +99,8 @@ final class AppState {
                 NotificationManager.shared.notifyCardDetected(cardName: card.volumeName)
             }
             recomputeMenuBar()
+            // Pop the tray so the consent prompt is right there (ask-first path).
+            if settings.config.autoOpenTrayOnInsert { router?.showPopover() }
 
         case .cardGone:
             pendingConsent = nil
@@ -113,7 +114,9 @@ final class AppState {
             session = SessionViewModel(sessionID: id, card: card, resumed: resumed)
             startTick()
             recomputeMenuBar()
-            if settings.config.autoShowLibrary { requestLibraryOpen() }   // #1: watch progress in a window
+            // Pop the tray so progress is visible (auto-ingest / resume path, where
+            // no consent prompt fired). showPopover is a no-op refocus if already up.
+            if settings.config.autoOpenTrayOnInsert { router?.showPopover() }
 
         case .planned(let files, let bytes):
             session?.plannedFiles = files
@@ -158,7 +161,7 @@ final class AppState {
             refreshRecent()
             if settings.config.autoShowLibrary,
                let folder = Self.uploadedFolder(from: record, nasRoot: settings.config.nasRootPath) {
-                requestLibraryOpen(folder: folder)   // #3: reveal the just-uploaded batch
+                router?.openLibrary(folder: folder)   // reveal the just-uploaded batch
             }
 
         case .sessionFailed(let record, let item):
@@ -279,12 +282,6 @@ final class AppState {
     func confirmWipeTapped() { engine.confirmWipe() }
     func cancelWipeTapped() { engine.cancelWipe() }
     func ejectTapped() { engine.eject() }
-
-    /// Ask the Library window to open/focus, optionally navigating to `folder`.
-    private func requestLibraryOpen(folder: String? = nil) {
-        if let folder { pendingLibraryFolder = folder }
-        libraryOpenToken = UUID()
-    }
 
     /// The NAS day-folder (YYYY/MM/DD, absolute) that received the most files this
     /// session — a batch spanning several capture days reveals the busiest day.

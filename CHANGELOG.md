@@ -5,6 +5,25 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-08
+
+### Changed
+- **Inserting a card now pops the tray open.** The menu-bar tray (the popover you
+  used to click the icon for) opens on its own when a card goes in, so you see the
+  consent prompt and live progress without hunting for the icon. Previously the
+  Library window opened instead. Toggle in Settings → General → "Pop open the tray
+  when a card is inserted" (default on).
+- The Library still auto-reveals the uploaded batch when an offload finishes; that's
+  now its own setting ("Reveal uploaded photos in the Library when an offload
+  finishes"), separate from the tray behavior above.
+
+### Internal
+- Reworked the menu-bar layer from SwiftUI's `MenuBarExtra` to AppKit
+  (`NSStatusItem` + `NSPopover`). `MenuBarExtra` has no API to open its window in
+  code; the AppKit layer can, which is what makes the pop-on-insert behavior
+  possible. The Library and History windows are now AppKit-managed as well; Settings
+  remains a SwiftUI scene. No change to the offload/verify/wipe engine.
+
 ## [1.0.9] — 2026-07-06
 
 ### Added

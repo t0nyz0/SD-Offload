@@ -116,7 +116,8 @@ struct SettingsView: View {
 
             Section("General") {
                 LoginItemToggle()
-                Toggle("Show the Library window during and after offload", isOn: $settings.config.autoShowLibrary)
+                Toggle("Pop open the tray when a card is inserted", isOn: $settings.config.autoOpenTrayOnInsert)
+                Toggle("Reveal uploaded photos in the Library when an offload finishes", isOn: $settings.config.autoShowLibrary)
                 Toggle("Play a sound when an offload finishes", isOn: $settings.config.playSounds)
                 if settings.config.playSounds {
                     HStack {

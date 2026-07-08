@@ -3,11 +3,6 @@ import AppKit
 import OffloadCore
 import OffloadEngine
 
-enum WindowID {
-    static let history = "history"
-    static let library = "library"
-}
-
 enum Activate {
     /// LSUIElement apps must explicitly grab focus before showing a window.
     static func front() {
@@ -33,50 +28,40 @@ enum DockPresence {
     }
 }
 
+// The app owns its menu-bar item with AppKit (NSStatusItem + NSPopover) rather than
+// SwiftUI's MenuBarExtra, because MenuBarExtra has no API to open its window in code
+// and we want inserting a card to pop the tray window open. AppState lives here (one
+// instance) and is injected into the surviving Settings scene; the WindowCoordinator
+// owns the status item, popover, and the Library/History AppKit windows.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let app = AppState()
+    private var coordinator: WindowCoordinator!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Makes bare `swift run` behave like the LSUIElement bundle: no Dock icon.
-        NSApp.setActivationPolicy(.accessory)
-        Task { @MainActor in
-            NotificationManager.shared.install()
-        }
+        NSApp.setActivationPolicy(.accessory)          // menu-bar only; no Dock icon
+        let coordinator = WindowCoordinator(app: app)
+        self.coordinator = coordinator
+        app.router = coordinator                         // set before any engine event is processed
+        coordinator.installStatusItem()
+        NotificationManager.shared.install()
     }
+
+    // The status item keeps the process alive; closing the last aux window must not quit.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 @main
 struct OffloadMenuBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var app = AppState()
 
     var body: some Scene {
-        // Declared first so nothing auto-opens at launch.
-        MenuBarExtra {
-            PopoverRootView()
-                .environment(app)
-        } label: {
-            MenuBarLabel(app: app)
-        }
-        .menuBarExtraStyle(.window)
-
+        // Settings is the one window kept as a SwiftUI scene (opened from AppKit via
+        // the standard showSettingsWindow: selector). The Library/History windows are
+        // AppKit-managed by the WindowCoordinator, and the tray is an NSPopover.
         Settings {
             SettingsView()
-                .environment(app)
+                .environment(delegate.app)
         }
-
-        Window("SD Offload History", id: WindowID.history) {
-            HistoryWindow()
-                .environment(app)
-                .onAppear { DockPresence.windowOpened() }
-                .onDisappear { DockPresence.windowClosed() }
-        }
-        .defaultSize(width: 760, height: 500)
-
-        Window("Library", id: WindowID.library) {
-            LibraryWindow()
-                .environment(app)
-                .onAppear { DockPresence.windowOpened() }
-                .onDisappear { DockPresence.windowClosed() }
-        }
-        .defaultSize(width: 920, height: 620)
     }
 }

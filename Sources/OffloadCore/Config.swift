@@ -57,9 +57,12 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// built-in ~/System/Library/Sounds names (Glass, Ping, Hero, …).
     public var completionSoundName: String = "Glass"
     public var launchAtLogin: Bool = false
-    /// Show the Library window while a card offloads, and jump it to the just-
-    /// uploaded folder when the offload finishes.
+    /// Reveal the uploaded batch in the Library window when an offload finishes
+    /// (jumps to the folder that received the photos).
     public var autoShowLibrary: Bool = true
+    /// Pop the menu-bar tray open on card insert so progress is visible without
+    /// clicking the status item.
+    public var autoOpenTrayOnInsert: Bool = true
 
     public init() {}
 
@@ -93,6 +96,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         completionSoundName = try c.decodeIfPresent(String.self, forKey: .completionSoundName) ?? d.completionSoundName
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         autoShowLibrary = try c.decodeIfPresent(Bool.self, forKey: .autoShowLibrary) ?? d.autoShowLibrary
+        autoOpenTrayOnInsert = try c.decodeIfPresent(Bool.self, forKey: .autoOpenTrayOnInsert) ?? d.autoOpenTrayOnInsert
     }
 
     public static func load() -> AppConfig {

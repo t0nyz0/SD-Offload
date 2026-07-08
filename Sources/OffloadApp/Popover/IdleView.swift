@@ -55,8 +55,6 @@ struct IdleView: View {
 /// Compact NAS overview: mount dot, free space, photo count, Browse.
 struct NASGlanceRow: View {
     @Environment(AppState.self) private var app
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let glance = app.nasGlance
@@ -74,12 +72,8 @@ struct NASGlanceRow: View {
                     .monospacedDigit()
             }
             Spacer()
-            Button("Browse…") {
-                dismiss()
-                Activate.front()
-                openWindow(id: WindowID.library)
-            }
-            .controlSize(.small)
+            Button("Browse…") { app.router?.openLibrary(folder: nil) }
+                .controlSize(.small)
         }
         .padding(10)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
