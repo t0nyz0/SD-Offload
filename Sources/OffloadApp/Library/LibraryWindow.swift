@@ -892,12 +892,22 @@ struct LibraryTile: View {
         }
     }
 
-    /// The tiny line under the name: format + basic EXIF ("JPG+RAW · ISO 400 · ƒ2.8").
+    /// Format + per-file size ("JPG 26.3 MB · RAW 87.4 MB"), RAW and JPEG listed
+    /// separately for a pair so you can see each at a glance.
+    private var formatLabel: String {
+        if isVideo { return "VIDEO \(Fmt.bytes(item.primary.size))" }
+        if let jpeg = item.photo, let raw = item.rawCompanion {
+            return "JPG \(Fmt.bytes(jpeg.size)) · RAW \(Fmt.bytes(raw.size))"
+        }
+        if isRawOnly { return "RAW \(Fmt.bytes(item.primary.size))" }
+        return "JPG \(Fmt.bytes(item.primary.size))"
+    }
+
+    /// The tiny line under the name: format + sizes + basic EXIF.
     private var infoLine: String? {
         guard !item.isFolder else { return nil }
-        let format: String = isVideo ? "VIDEO" : (item.rawCompanion != nil ? "JPG+RAW" : (isRawOnly ? "RAW" : "JPG"))
-        if let exif, exif.hasAny { return "\(format) · \(exif.caption)" }
-        return format
+        if let exif, exif.hasAny { return "\(formatLabel) · \(exif.caption)" }
+        return formatLabel
     }
 
     // When a distinct RAW is attached, title the card by its base name (no
