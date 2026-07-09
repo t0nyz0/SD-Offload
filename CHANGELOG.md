@@ -5,6 +5,19 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-08
+
+### Added
+- **Zoom and pan in the photo viewer.** Roll the mouse wheel to zoom in/out on the
+  photo (centered on the cursor), then click-drag to pan around it. Trackpad pinch
+  and two-finger scroll work too, and double-click toggles fit ↔ 2×. Zoom ranges
+  from fit-to-view up to 8×. Built on AppKit's `NSScrollView` magnification so the
+  gestures feel native (momentum, rubber-banding), with mouse-wheel zoom and a
+  click-drag hand tool layered on top. Design + coordinate math were verified against
+  the AppKit SDK headers before shipping.
+  - The viewer's transparent letterbox still passes clicks through, so tapping the
+    black margin closes the viewer and the arrow keys keep stepping between photos.
+
 ## [1.1.3] — 2026-07-08
 
 ### Changed

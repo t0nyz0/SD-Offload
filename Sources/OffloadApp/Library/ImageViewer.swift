@@ -255,6 +255,11 @@ private final class ZoomScrollView: NSScrollView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// Never in the responder chain: mouse/scroll/pinch are delivered by hit-testing the
+    /// view under the cursor, not by focus, so staying out keeps the SwiftUI parent's
+    /// Left/Right arrows, Escape, Space, i, f and ⌦ shortcuts working untouched.
+    override var acceptsFirstResponder: Bool { false }
+
     /// Pin the document view to the *unmagnified* viewport size so magnification 1
     /// means fit-to-view. NSScrollView scales this frame by `magnification`, so the
     /// photo (scaleProportionallyUpOrDown, centered) letterboxes inside it at 1× and
@@ -269,10 +274,22 @@ private final class ZoomScrollView: NSScrollView {
         }
     }
 
+    /// Let clicks in the transparent letterbox fall THROUGH to the SwiftUI layer — the
+    /// black backdrop's tap-to-close and the nav chevrons layered above us — while still
+    /// claiming clicks on the drawn photo for double-click and scroll-wheel zoom. Once
+    /// zoomed, the photo fills the viewport, so every click/scroll is ours. Without this
+    /// the representable's NSView would silently eat the parent's background tap.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)               // nil if the point is outside our bounds
+        guard let hit, magnification <= minMagnification + 0.0001 else { return hit }
+        let local = pannableView.convert(point, from: superview)
+        return pannableView.fittedImageRect.contains(local) ? hit : nil
+    }
+
     override func scrollWheel(with event: NSEvent) {
-        // Precise deltas = trackpad two-finger scroll / Magic Mouse surface → let
-        // NSScrollView pan (and pinch-magnify) natively, momentum and all.
-        guard !event.hasPreciseScrollingDeltas else {
+        // Precise deltas = trackpad two-finger scroll / Magic Mouse surface (and the
+        // inertial momentum tail) → let NSScrollView pan and pinch-magnify natively.
+        guard !event.hasPreciseScrollingDeltas, event.momentumPhase == [] else {
             super.scrollWheel(with: event)
             return
         }
@@ -303,6 +320,16 @@ private final class PannableImageView: NSImageView {
     private var isZoomed: Bool {
         guard let sv = enclosingScrollView else { return false }
         return sv.magnification > sv.minMagnification + 0.0001
+    }
+
+    /// The rect the photo actually occupies inside this view — aspect-fit, centered
+    /// (matching .scaleProportionallyUpOrDown + .alignCenter). The scroll view's hitTest
+    /// uses it to tell "click on the photo" from "click in the transparent letterbox".
+    var fittedImageRect: NSRect {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return bounds }
+        let scale = min(bounds.width / image.size.width, bounds.height / image.size.height)
+        let w = image.size.width * scale, h = image.size.height * scale
+        return NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
     }
 
     /// Let a click grab-and-pan even when the window isn't yet key — a viewer should
