@@ -25,10 +25,14 @@ enum ThumbnailQuality: Int, CaseIterable, Sendable {
         switch self { case .fast: 1.5; case .balanced: 2.2; case .high: 3.2; case .maximum: 4.0 }
     }
     /// Decode the full image for a crisp thumbnail rather than the file's small
-    /// embedded preview. Off for Fast (embedded preview is quick over SMB). Note:
-    /// even when true, full decode is only used for LOCAL sources — over SMB the
-    /// embedded preview is used regardless, to avoid pulling whole RAWs per tile.
+    /// embedded preview. Off for Fast (embedded preview is quick over SMB).
     var fullDecode: Bool { self != .fast }
+    /// Also full-decode over SMB (pulling the whole file) for a crisp tile — only at
+    /// the top tiers, where the user has opted into quality over speed. This skips a
+    /// JPEG's tiny embedded EXIF thumbnail, the usual reason NAS tiles look soft. Not
+    /// applied to RAW: its embedded preview is already large, and its full file is
+    /// tens of MB to pull per tile.
+    var fullDecodeOverNetwork: Bool { self == .high || self == .maximum }
     /// JPEG quality of the on-disk thumbnail cache.
     var jpegCompression: CGFloat {
         switch self { case .fast: 0.6; case .balanced: 0.8; case .high: 0.92; case .maximum: 0.97 }
@@ -211,12 +215,16 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     private static func cgThumbnailCG(url: URL, side: CGFloat, quality: ThumbnailQuality, isLocal: Bool) -> CGImage? {
         if Task.isCancelled { return nil }
+        // Force a full-image decode (skip the file's tiny embedded thumbnail — the
+        // usual cause of soft NAS tiles) when the tier wants it: locally at Balanced+,
+        // and over SMB at High/Maximum. Never for RAW over SMB (huge file per tile;
+        // its embedded preview is already large).
+        let isRaw = MediaKind.rawExts.contains(url.pathExtension.lowercased())
+        let forceFullDecode = isLocal ? quality.fullDecode
+                                      : (quality.fullDecodeOverNetwork && !isRaw)
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            // Full-decode (sharpest) only for LOCAL sources. Over SMB, use the
-            // file's embedded preview — typically ~1600px+, far more than a ~220px
-            // tile needs — instead of pulling the whole RAW/JPEG across the wire.
-            kCGImageSourceCreateThumbnailFromImageAlways: isLocal && quality.fullDecode,
+            kCGImageSourceCreateThumbnailFromImageAlways: forceFullDecode,
             kCGImageSourceThumbnailMaxPixelSize: Int(side * quality.pixelScale),
             kCGImageSourceCreateThumbnailWithTransform: true,      // honor EXIF orientation
         ]

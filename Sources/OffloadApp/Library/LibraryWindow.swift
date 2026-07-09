@@ -2,21 +2,6 @@ import SwiftUI
 import AppKit
 import OffloadCore
 
-private enum LibraryLayout {
-    /// Cap the content column so header, search, and the card grid share one column
-    /// that stays centered and readable instead of stranding a few cards in the
-    /// top-left of a very wide window.
-    static let contentMaxWidth: CGFloat = 1160
-}
-
-private extension View {
-    /// Cap this piece of Library content to the shared column width and center it.
-    func libraryColumn() -> some View {
-        frame(maxWidth: LibraryLayout.contentMaxWidth)
-            .frame(maxWidth: .infinity, alignment: .top)
-    }
-}
-
 /// Browse the NAS (and an inserted card) at a glance: storage gauge, live photo
 /// count, and a date-folder thumbnail grid.
 struct LibraryWindow: View {
@@ -131,7 +116,7 @@ struct LibraryWindow: View {
             }
         } detail: {
             VStack(spacing: 0) {
-                LibraryHeader(model: model).libraryColumn()
+                LibraryHeader(model: model)
                 if model.source == .favorites {
                     Divider()
                     FavoritesTimeline(model: model, openViewer: { openInViewer($0, model) })
@@ -139,12 +124,11 @@ struct LibraryWindow: View {
                     Divider()
                     FacesGallery(model: model)
                 } else {
-                    SearchBar(model: model).libraryColumn()
+                    SearchBar(model: model)
                     if let label = model.faceFilterLabel {
                         FilterChip(label: label, count: model.photoItems.count) { model.clearFaceFilter() }
-                            .libraryColumn()
                     } else if !model.isSearching && !model.suggestions.isEmpty {
-                        SuggestionChips(model: model).libraryColumn()
+                        SuggestionChips(model: model)
                     }
                     Divider()
                     LibraryGrid(model: model, openViewer: { openInViewer($0, model) })
@@ -629,6 +613,12 @@ private struct LibraryGrid: View {
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: tileSize, maximum: tileSize + 60), spacing: 12)]
     }
+    // Thumbnail pixel target scaled to the tile (quantized to 80px steps so nudging
+    // the size slider doesn't invalidate the whole cache), so big tiles stay crisp
+    // instead of upscaling a fixed small thumbnail.
+    private var thumbSide: CGFloat {
+        (max(240, tileSize + 60) / 80).rounded() * 80
+    }
     // Folders get their own, larger tiles so a date hierarchy is easy to scan.
     private var folderColumns: [GridItem] {
         [GridItem(.adaptive(minimum: 250, maximum: 330), spacing: 16)]
@@ -725,7 +715,8 @@ private struct LibraryGrid: View {
                                 LibraryTile(item: item, tags: model.tags(for: item.primary),
                                             selected: model.selection.contains(item.id),
                                             isLocal: model.source == .card,
-                                            isFavorite: model.isFavorite(item.primary.id))
+                                            isFavorite: model.isFavorite(item.primary.id),
+                                            side: thumbSide)
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
                                         let flags = NSEvent.modifierFlags
@@ -739,7 +730,7 @@ private struct LibraryGrid: View {
                     }
                 }
                 .padding(DS.Space.l)
-                .libraryColumn()   // cap + center so it doesn't sprawl on a wide window
+                .frame(maxWidth: .infinity, alignment: .topLeading)   // fill the width, top-left
             }
         }
         .onExitCommand { model.clearSelection() }
@@ -823,6 +814,7 @@ struct LibraryTile: View {
     var selected: Bool = false
     var isLocal: Bool = false
     var isFavorite: Bool = false
+    var side: CGFloat = 220          // requested thumbnail size — scales with the tile
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
@@ -891,7 +883,7 @@ struct LibraryTile: View {
         .task(id: "\(entry.id)#q\(thumbQualityRaw)") {   // re-fetch when quality changes
             guard !item.isFolder else { return }
             thumb = await ThumbnailLoader.shared.thumbnail(
-                url: entry.url, size: entry.size, mtime: entry.modified, side: 220,
+                url: entry.url, size: entry.size, mtime: entry.modified, side: side,
                 quality: ThumbnailQuality(rawValue: thumbQualityRaw) ?? .defaultQuality, isLocal: isLocal)
         }
         .task(id: entry.id) {
