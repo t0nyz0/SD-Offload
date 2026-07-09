@@ -33,6 +33,7 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
     // Recreated per open, released on close (see windowWillClose).
     private var libraryWindow: NSWindow?
     private var historyWindow: NSWindow?
+    private var settingsWindow: NSWindow?
 
     init(app: AppState) {
         self.app = app
@@ -154,10 +155,27 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
     }
 
     func openSettings() {
+        // Own the Settings window in AppKit too, rather than routing through the
+        // private `showSettingsWindow:` selector — that selector walks the responder
+        // chain, which has no key window in an accessory app's status-item context,
+        // so `NSApp.sendAction` found no target and nothing opened. Same makeWindow
+        // path as Library/History, so it's deterministic.
         closePopover()
+        if let window = settingsWindow {
+            Activate.front()
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let window = makeWindow(
+            title: "SD Offload Settings",
+            size: NSSize(width: 480, height: 640),
+            autosaveName: "OffloadSettingsWindow",
+            content: SettingsView().environment(app)
+        )
+        settingsWindow = window
+        DockPresence.windowOpened()
         Activate.front()
-        // Standard AppKit route into the SwiftUI `Settings` scene (macOS 14+ selector).
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func makeWindow<Content: View>(
@@ -191,6 +209,9 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
             DockPresence.windowClosed()
         } else if window === historyWindow {
             historyWindow = nil
+            DockPresence.windowClosed()
+        } else if window === settingsWindow {
+            settingsWindow = nil
             DockPresence.windowClosed()
         }
     }

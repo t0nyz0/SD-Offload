@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-07-08
+
+### Fixed
+- **Settings… in the tray gear menu did nothing.** After the 1.1.0 AppKit rework,
+  Settings was opened via the private `showSettingsWindow:` selector, which walks the
+  responder chain — and an accessory app's status-item context has no key window
+  there, so the action found no target. Settings is now an AppKit-managed window on
+  the same path as Library and History, so it opens reliably. (⌘, still works too.)
+
 ## [1.1.0] — 2026-07-08
 
 ### Changed
