@@ -185,12 +185,10 @@ private struct LibraryConsentBanner: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer(minLength: DS.Space.m)
-            Button("Ignore") { app.declineTapped(remember: .ignore) }
+            Button("Not now") { app.declineTapped() }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).controlSize(.small)
-            Button("Just once") { app.consentTapped(remember: nil) }
-            Button("Always") { app.consentTapped(remember: .alwaysIngest) }
+            Button("Offload now") { app.consentTapped() }
                 .buttonStyle(.borderedProminent).tint(Theme.accent)
-                .help("Offload now and always offload this card")
         }
         .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.s)
         .background(DS.Palette.surfaceRaised.opacity(0.5))

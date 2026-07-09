@@ -20,11 +20,11 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     }
 
     public func start() { Task { await coordinator.start() } }
-    public func consentToIngest(cardUUID: String, remember: CardPolicy?) {
-        Task { await coordinator.consent(cardUUID: cardUUID, remember: remember) }
+    public func consentToIngest(cardUUID: String) {
+        Task { await coordinator.consent(cardUUID: cardUUID) }
     }
-    public func declineIngest(cardUUID: String, remember: CardPolicy?) {
-        Task { await coordinator.decline(cardUUID: cardUUID, remember: remember) }
+    public func declineIngest(cardUUID: String) {
+        Task { await coordinator.decline(cardUUID: cardUUID) }
     }
     public func pause() { Task { await coordinator.runner?.pause() } }
     public func resume() { Task { await coordinator.runner?.resume() } }
@@ -153,9 +153,6 @@ private actor Coordinator {
                 // dialog mid-copy.
                 preauthorizeVolumeAccess(cardMountPath: volume.info.mountPath, config: config)
                 pendingCandidates[volume.info.volumeUUID] = volume
-                await configMutator { [name = volume.info.volumeName, uuid = volume.info.volumeUUID] in
-                    $0.cardNames[uuid] = name
-                }
                 emit(.cardAwaitingConsent(volume.info))
                 handledThisInsertion.insert(volume.info.volumeUUID)   // don't re-prompt on a flap
             case .ingest:
@@ -175,19 +172,13 @@ private actor Coordinator {
         }
     }
 
-    func consent(cardUUID: String, remember: CardPolicy?) async {
+    func consent(cardUUID: String) async {
         guard let volume = pendingCandidates.removeValue(forKey: cardUUID) else { return }
-        if let remember {
-            await configMutator { $0.cardPolicies[cardUUID] = remember }
-        }
         await startSession(volume)
     }
 
-    func decline(cardUUID: String, remember: CardPolicy?) async {
+    func decline(cardUUID: String) async {
         pendingCandidates.removeValue(forKey: cardUUID)
-        if let remember {
-            await configMutator { $0.cardPolicies[cardUUID] = remember }
-        }
         emit(.cardGone)
     }
 

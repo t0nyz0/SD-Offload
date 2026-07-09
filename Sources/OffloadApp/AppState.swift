@@ -261,16 +261,15 @@ final class AppState {
 
     // MARK: - User intents
 
-    func consentTapped(remember: CardPolicy?) {
+    func consentTapped() {
         guard let card = pendingConsent else { return }
-        settings.config.cardNames[card.volumeUUID] = card.volumeName
-        engine.consentToIngest(cardUUID: card.volumeUUID, remember: remember)
+        engine.consentToIngest(cardUUID: card.volumeUUID)
         pendingConsent = nil
     }
 
-    func declineTapped(remember: CardPolicy?) {
+    func declineTapped() {
         guard let card = pendingConsent else { return }
-        engine.declineIngest(cardUUID: card.volumeUUID, remember: remember)
+        engine.declineIngest(cardUUID: card.volumeUUID)
         pendingConsent = nil
         recomputeMenuBar()
     }

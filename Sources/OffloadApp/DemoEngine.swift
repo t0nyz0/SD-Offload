@@ -107,8 +107,8 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
         emit(.phase(.done))
     }
 
-    func consentToIngest(cardUUID: String, remember: CardPolicy?) {}
-    func declineIngest(cardUUID: String, remember: CardPolicy?) {}
+    func consentToIngest(cardUUID: String) {}
+    func declineIngest(cardUUID: String) {}
     func pause() { paused = true; emit(.phase(.pausedByUser)) }
     func resume() { paused = false; emit(.phase(.transferring)) }
     func cancel() { scriptTask?.cancel(); emit(.phase(.cancelled)) }

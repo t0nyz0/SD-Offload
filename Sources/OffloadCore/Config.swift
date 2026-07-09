@@ -23,9 +23,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
 
     // Ingest
     public var ingestScope: IngestScope = .mediaRootsOnly
-    public var cardPolicies: [String: CardPolicy] = [:]
-    /// volumeUUID → last-seen name, for the Settings list.
-    public var cardNames: [String: String] = [:]
+    /// What to do with ANY camera card on insert — one global rule, not a per-card
+    /// memory. `alwaysIngest`: offload automatically. `ask`: prompt each insert.
+    /// `ignore`: do nothing. Default is to offload automatically.
+    public var defaultCardAction: CardPolicy = .alwaysIngest
     /// Volume-name prefixes that classify as cards regardless of DA quirks (test DMGs).
     public var testVolumeAllowlist: [String] = ["OFFLOADTEST"]
     /// TEST SEAM ONLY. When true, a plain local folder at the NAS path counts as
@@ -78,8 +79,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
         autoEject = try c.decodeIfPresent(Bool.self, forKey: .autoEject) ?? d.autoEject
         wipeCountdownSeconds = try c.decodeIfPresent(Int.self, forKey: .wipeCountdownSeconds) ?? d.wipeCountdownSeconds
         ingestScope = try c.decodeIfPresent(IngestScope.self, forKey: .ingestScope) ?? d.ingestScope
-        cardPolicies = try c.decodeIfPresent([String: CardPolicy].self, forKey: .cardPolicies) ?? d.cardPolicies
-        cardNames = try c.decodeIfPresent([String: String].self, forKey: .cardNames) ?? d.cardNames
+        defaultCardAction = try c.decodeIfPresent(CardPolicy.self, forKey: .defaultCardAction) ?? d.defaultCardAction
+        // Note: legacy per-card `cardPolicies` / `cardNames` keys are intentionally
+        // no longer decoded — the old per-card model is gone, so any stored entries
+        // (e.g. a card stuck on "alwaysIngest") are dropped on the next save.
         testVolumeAllowlist = try c.decodeIfPresent([String].self, forKey: .testVolumeAllowlist) ?? d.testVolumeAllowlist
         testAllowLocalNAS = try c.decodeIfPresent(Bool.self, forKey: .testAllowLocalNAS) ?? d.testAllowLocalNAS
         stagingRootPath = try c.decodeIfPresent(String.self, forKey: .stagingRootPath) ?? d.stagingRootPath

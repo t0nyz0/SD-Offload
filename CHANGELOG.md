@@ -5,6 +5,20 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-07-08
+
+### Changed
+- **One global rule for what happens on card insert — no per-card prompts.** Replaced
+  the per-card "remember this card" model (and its "Always offload this card" /
+  "Ignore this card" buttons) with a single setting: **Settings → Ingest → "When a
+  card is inserted"** → **Offload automatically** / **Ask each time** / **Do nothing**.
+  - Default is **Offload automatically**: insert a camera card and it ingests to the
+    NAS with no prompt.
+  - **Ask each time** shows a one-time Offload / Not now prompt on each insert (no
+    per-card memory).
+  - **Do nothing** ignores inserted cards.
+  - Any stale per-card policy from earlier versions is dropped on upgrade.
+
 ## [1.2.4] — 2026-07-08
 
 ### Fixed

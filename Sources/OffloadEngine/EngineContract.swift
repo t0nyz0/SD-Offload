@@ -86,9 +86,10 @@ public enum EngineEvent: Sendable {
 public protocol EngineControlling: AnyObject {
     var events: AsyncStream<EngineEvent> { get }
     func start()
-    /// Ask-mode consent for a detected card. `remember` persists a policy for this volume UUID.
-    func consentToIngest(cardUUID: String, remember: CardPolicy?)
-    func declineIngest(cardUUID: String, remember: CardPolicy?)
+    /// Ask-mode consent for a detected card (one-time — the global default decides
+    /// whether the prompt appears at all; there is no per-card memory).
+    func consentToIngest(cardUUID: String)
+    func declineIngest(cardUUID: String)
     func pause()
     func resume()
     func cancel()

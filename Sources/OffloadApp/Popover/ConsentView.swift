@@ -24,29 +24,26 @@ struct ConsentView: View {
 
             VStack(spacing: 6) {
                 Button {
-                    app.consentTapped(remember: .alwaysIngest)
+                    app.consentTapped()
                 } label: {
-                    Text("Always offload this card").frame(maxWidth: .infinity)
+                    Text("Offload now").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
 
                 Button {
-                    app.consentTapped(remember: nil)
+                    app.declineTapped()
                 } label: {
-                    Text("Just this once").frame(maxWidth: .infinity)
+                    Text("Not now").frame(maxWidth: .infinity)
                 }
-
-                Button {
-                    app.declineTapped(remember: .ignore)
-                } label: {
-                    Text("Ignore this card").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .controlSize(.small)
             }
             .padding(.horizontal, 40)
+
+            Text("Asking because “When a card is inserted” is set to Ask in Settings.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
         }
         .padding(.vertical, 18)
     }

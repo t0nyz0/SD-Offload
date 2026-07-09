@@ -48,12 +48,14 @@ struct SettingsView: View {
             }
 
             Section("Ingest") {
+                Picker("When a card is inserted", selection: $settings.config.defaultCardAction) {
+                    Text("Offload automatically").tag(CardPolicy.alwaysIngest)
+                    Text("Ask each time").tag(CardPolicy.ask)
+                    Text("Do nothing").tag(CardPolicy.ignore)
+                }
                 Picker("Copy", selection: $settings.config.ingestScope) {
                     Text("Camera folders only (DCIM & video)").tag(IngestScope.mediaRootsOnly)
                     Text("Entire card").tag(IngestScope.wholeCard)
-                }
-                if !settings.config.cardPolicies.isEmpty {
-                    CardRulesList()
                 }
             }
 
@@ -151,39 +153,6 @@ struct SettingsView: View {
         panel.directoryURL = URL(fileURLWithPath: "/Volumes")
         if panel.runModal() == .OK, let url = panel.url {
             apply(url.path)
-        }
-    }
-}
-
-/// Remembered per-card rules.
-struct CardRulesList: View {
-    @Environment(AppState.self) private var app
-
-    var body: some View {
-        @Bindable var settings = app.settings
-        ForEach(settings.config.cardPolicies.keys.sorted(), id: \.self) { uuid in
-            HStack {
-                Text(settings.config.cardNames[uuid] ?? String(uuid.prefix(12)))
-                    .lineLimit(1)
-                Spacer()
-                Picker("", selection: Binding(
-                    get: { settings.config.cardPolicies[uuid] ?? .ask },
-                    set: { settings.config.cardPolicies[uuid] = $0 }
-                )) {
-                    Text("Always offload").tag(CardPolicy.alwaysIngest)
-                    Text("Ask").tag(CardPolicy.ask)
-                    Text("Ignore").tag(CardPolicy.ignore)
-                }
-                .labelsHidden()
-                .fixedSize()
-                Button {
-                    settings.config.cardPolicies.removeValue(forKey: uuid)
-                    settings.config.cardNames.removeValue(forKey: uuid)
-                } label: {
-                    Image(systemName: "minus.circle")
-                }
-                .buttonStyle(.borderless)
-            }
         }
     }
 }

@@ -3,12 +3,13 @@ import OffloadCore
 
 /// Decides whether a mounted volume is a camera card and what to do with it.
 /// Never classifies by device protocol string (the built-in reader on this
-/// machine reports "USB"): removable/ejectable/external + DCIM + remembered
-/// per-UUID policy, plus a name allowlist for test DMGs.
+/// machine reports "USB"): removable/ejectable/external + a media root (DCIM etc.),
+/// plus a name allowlist for test DMGs. The action for a camera card comes from ONE
+/// global setting (`defaultCardAction`) — there is no per-card memory.
 public enum CardClassifier {
     public enum Classification: Equatable, Sendable {
-        case ingest      // remembered alwaysIngest
-        case ask         // camera card, no remembered decision
+        case ingest      // global setting: offload automatically
+        case ask         // global setting: prompt this insert
         case ignore
     }
 
@@ -24,10 +25,10 @@ public enum CardClassifier {
         let cardLike = volume.isRemovable || volume.isEjectable || !volume.isInternal
         guard allowlisted || (cardLike && volume.info.hasMediaRoot) else { return .ignore }
 
-        switch config.cardPolicies[volume.info.volumeUUID] {
+        switch config.defaultCardAction {
         case .alwaysIngest: return .ingest
         case .ignore: return .ignore
-        case .ask, .none: return .ask
+        case .ask: return .ask
         }
     }
 }
