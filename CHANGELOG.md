@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.2.4] — 2026-07-08
+
+### Fixed
+- **"SD Card" stayed in the Library sidebar after the card was ejected.** The Library
+  tracked the card in an observation-ignored field, so `hasCard` never re-evaluated
+  when the card left — the row only cleared if something else forced a redraw. It's
+  now a proper observed value, so the "SD Card" entry appears and disappears in step
+  with the card being mounted/removed.
+
 ## [1.2.3] — 2026-07-08
 
 ### Fixed

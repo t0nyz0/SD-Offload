@@ -132,11 +132,15 @@ final class LibraryModel {
     init(nasRootPath: String, cardRootPath: String?) {
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
+        self.hasCard = cardRootPath != nil
         favoritePaths = Set(JSONIO.loadGuarded([String].self, from: Paths.favoritesFile) ?? [])
         pinnedFolders = JSONIO.loadGuarded([String].self, from: Paths.pinnedFoldersFile) ?? []
     }
 
-    var hasCard: Bool { cardRootPath != nil }
+    /// Whether a card is mounted. Stored (not computed off the @ObservationIgnored
+    /// cardRootPath) so the sidebar's "SD Card" row reactively appears AND disappears
+    /// — a computed getter over ignored state never re-evaluates when the card leaves.
+    private(set) var hasCard: Bool
     var currentDir: URL? { pathStack.last }
     var rootURL: URL? { pathStack.first }
 
@@ -173,6 +177,7 @@ final class LibraryModel {
         let cardChanged = self.cardRootPath != cardRootPath
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
+        self.hasCard = cardRootPath != nil
         if source == .card && cardRootPath == nil {
             select(.nas)               // card ejected while viewing it
         } else if cardChanged && source == .card, let root = cardRootPath {
