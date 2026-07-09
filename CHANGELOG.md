@@ -5,6 +5,21 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.2.3] — 2026-07-08
+
+### Fixed
+- **Re-inserted cards are now detected automatically and reliably.** The previous
+  build leaned on a manual "Look for a card" button, which was the wrong answer.
+  Root problem: detection trusted DiskArbitration's event stream to report when a
+  card leaves, but on the built-in reader that removal event isn't always delivered
+  (a card held busy by the Library, or a reader that keeps its disk object across
+  swaps), which left a stale "already handled" marker so a genuine re-insert was
+  swallowed. The watcher now **reconciles against ground truth**: a ~1.5 s poll
+  compares what it thinks is mounted against the live kernel mount table and emits
+  the missing removal on its own (after a short grace so a sub-second flap isn't
+  mistaken for a removal). Re-insertion is picked up automatically, no button press.
+  The "Look for a card" button stays as a harmless manual fallback.
+
 ## [1.2.2] — 2026-07-08
 
 ### Fixed

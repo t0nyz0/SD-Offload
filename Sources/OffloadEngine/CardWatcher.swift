@@ -42,6 +42,20 @@ public final class CardWatcher: @unchecked Sendable {
     private var pendingUnmounts: [String: DispatchWorkItem] = [:]
     private let pathFlapGrace: DispatchTimeInterval = .milliseconds(750)
 
+    /// Ground-truth reconciliation. DiskArbitration's event stream can miss a card's
+    /// removal (a busy volume held open by the Library; a reader that keeps its disk
+    /// object across card swaps), leaving knownVolumes stale so a genuine re-insert is
+    /// mistaken for a duplicate and swallowed. A low-rate poll compares knownVolumes
+    /// against the live kernel mount table and emits the unmount the event stream never
+    /// delivered — so re-insertion re-detects on its own, no matter how the reader
+    /// behaves. Guarded by daQueue (the timer fires there). `absentPolls` requires a
+    /// volume to be gone for a few consecutive polls before we believe it, so a
+    /// sub-second FSKit path-flap can't be mistaken for a real removal.
+    private var reconcileTimer: DispatchSourceTimer?
+    private var absentPolls: [String: Int] = [:]
+    private let reconcileInterval: TimeInterval = 1.5
+    private let absentPollsBeforeUnmount = 2          // ~3 s gone ⇒ real removal, not a flap
+
     public init() {
         var cont: AsyncStream<RawCardEvent>.Continuation!
         events = AsyncStream(bufferingPolicy: .unbounded) { cont = $0 }
@@ -72,6 +86,13 @@ public final class CardWatcher: @unchecked Sendable {
             guard let ctx else { return }
             Unmanaged<CardWatcher>.fromOpaque(ctx).takeUnretainedValue().diskDisappeared(disk)
         }, ctx)
+
+        // Self-healing backstop for removals the callbacks above never deliver.
+        let timer = DispatchSource.makeTimerSource(queue: daQueue)
+        timer.schedule(deadline: .now() + reconcileInterval, repeating: reconcileInterval)
+        timer.setEventHandler { [weak self] in self?.reconcile() }
+        timer.resume()
+        reconcileTimer = timer
     }
 
     /// Force a re-check of every currently-mounted volume, dropping the dedup state
@@ -109,9 +130,50 @@ public final class CardWatcher: @unchecked Sendable {
     private func diskDisappeared(_ disk: DADisk) {
         guard let bsdName = DADiskGetBSDName(disk).map({ String(cString: $0) }) else { return }
         pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // real removal supersedes a pending flap
+        absentPolls.removeValue(forKey: bsdName)
         if let uuid = knownVolumes.removeValue(forKey: bsdName) {
             continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
         }
+    }
+
+    /// Poll the live mount table (ground truth) and emit the unmount for any volume we
+    /// still think is mounted but that has actually gone — the self-heal for a removal
+    /// event the callbacks never delivered. Only after `absentPollsBeforeUnmount`
+    /// consecutive misses, so a sub-second FSKit path-flap isn't mistaken for removal.
+    private func reconcile() {
+        guard !knownVolumes.isEmpty else { return }
+        let mounted = Self.mountedBSDNames()
+        for (bsdName, uuid) in knownVolumes {
+            if mounted.contains(bsdName) {
+                absentPolls[bsdName] = 0
+                continue
+            }
+            let misses = (absentPolls[bsdName] ?? 0) + 1
+            absentPolls[bsdName] = misses
+            guard misses >= absentPollsBeforeUnmount else { continue }
+            absentPolls.removeValue(forKey: bsdName)
+            pendingUnmounts.removeValue(forKey: bsdName)?.cancel()
+            knownVolumes.removeValue(forKey: bsdName)
+            continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
+        }
+    }
+
+    /// BSD names ("disk4s1") of every currently-mounted LOCAL volume, read straight
+    /// from the kernel mount table. Network mounts (f_mntfromname like
+    /// "//user@host/share", no "/dev/" prefix) are skipped — they're never cards.
+    private static func mountedBSDNames() -> Set<String> {
+        var out = Set<String>()
+        var buf: UnsafeMutablePointer<statfs>?
+        let count = getmntinfo(&buf, MNT_NOWAIT)
+        guard count > 0, let buf else { return out }
+        for i in 0..<Int(count) {
+            var fs = buf[i]
+            let from = withUnsafePointer(to: &fs.f_mntfromname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MNAMELEN)) { String(cString: $0) }
+            }
+            if from.hasPrefix("/dev/") { out.insert(String(from.dropFirst(5))) }
+        }
+        return out
     }
 
     private func handlePossibleMount(_ disk: DADisk) {
