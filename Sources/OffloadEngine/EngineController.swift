@@ -137,6 +137,10 @@ private actor Coordinator {
             case .ignore:
                 break
             case .ask:
+                // Front-load the OS volume-access prompts now, while the consent
+                // prompt is up — so approving "Offload" doesn't then hit a permission
+                // dialog mid-copy.
+                preauthorizeVolumeAccess(cardMountPath: volume.info.mountPath, config: config)
                 pendingCandidates[volume.info.volumeUUID] = volume
                 await configMutator { [name = volume.info.volumeName, uuid = volume.info.volumeUUID] in
                     $0.cardNames[uuid] = name
@@ -144,6 +148,7 @@ private actor Coordinator {
                 emit(.cardAwaitingConsent(volume.info))
                 handledThisInsertion.insert(volume.info.volumeUUID)   // don't re-prompt on a flap
             case .ingest:
+                preauthorizeVolumeAccess(cardMountPath: volume.info.mountPath, config: config)
                 await startSession(volume)
             }
 
@@ -185,6 +190,25 @@ private actor Coordinator {
         prewarmTask?.cancel()
         let nas = self.nas
         prewarmTask = Task.detached(priority: .utility) { await nas.prewarm() }
+    }
+
+    /// Trip the macOS removable- and network-volume permission prompts UP FRONT, the
+    /// moment a card is picked up, so they can't interrupt the copy/verify/wipe
+    /// mid-transfer. A read-only directory *listing* is what actually trips TCC on
+    /// these volumes — `stat`/`fileExists` don't — and once the user grants it, it's
+    /// silent for the rest of the session. Detached + best-effort: never blocks the
+    /// Coordinator actor, never throws, and being read-only it can't touch the wipe
+    /// gate or the ghost-mount guard. Fired for cards we're about to offload (ask /
+    /// ingest), never for ignored cards.
+    private func preauthorizeVolumeAccess(cardMountPath: String, config: AppConfig) {
+        let nasRoot = config.nasRootPath
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            _ = try? fm.contentsOfDirectory(atPath: cardMountPath)   // → removable-volume prompt
+            if fm.fileExists(atPath: nasRoot) {
+                _ = try? fm.contentsOfDirectory(atPath: nasRoot)     // → network-volume prompt
+            }
+        }
     }
 
     private func startSession(_ volume: CandidateVolume) async {

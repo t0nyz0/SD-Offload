@@ -5,6 +5,20 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-07-08
+
+### Changed
+- **Ask for macOS volume permissions up front, not mid-transfer.** The first time
+  the app touches your SD card or NAS, macOS prompts for removable-/network-volume
+  access. Those prompts used to fire during the copy (the NAS one deep into the
+  upload). Now, the moment a card is picked up, the app does a harmless read-only
+  directory listing of the card and the NAS to trigger both prompts right then — so
+  by the time an offload runs, access is already granted and nothing interrupts it.
+  Read-only, so it never affects the wipe gate or the ghost-mount guard.
+  - Note: because the app is ad-hoc signed (not yet notarized), macOS re-asks after
+    each app update. Notarization with a Developer ID is the fix for that and is
+    still on the list.
+
 ## [1.2.0] — 2026-07-08
 
 ### Added
