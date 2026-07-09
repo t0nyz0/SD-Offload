@@ -60,10 +60,25 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
     }
 
     @objc private func toggle() {
-        popover.isShown ? closePopover() : showPopover()
+        popover.isShown ? closePopover() : presentPopover()
     }
 
+    /// Auto-present on card insert (called by AppState). If the Library window is
+    /// open it already surfaces the card-ready / progress state inline (its banner),
+    /// and a transient popover won't reliably present over a key window — so bring
+    /// that window forward instead of popping a hidden/janky popover over it.
     func showPopover() {
+        if let lib = libraryWindow, lib.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            lib.makeKeyAndOrderFront(nil)
+            return
+        }
+        presentPopover()
+    }
+
+    /// Actually show the popover anchored to the status item. Used by the manual
+    /// icon click (always) and by showPopover() when no window is covering it.
+    private func presentPopover() {
         guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)              // LSUIElement apps must grab focus first
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)

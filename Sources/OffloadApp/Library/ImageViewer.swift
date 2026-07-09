@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import OffloadCore
 
 /// A fast in-app image viewer — opens instantly instead of launching Preview.

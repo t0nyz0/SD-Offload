@@ -14,6 +14,12 @@ struct LibraryWindow: View {
             if let vm = app.session {           // live offload progress, right in this window
                 LibraryProgressBanner(vm: vm)
                 Divider()
+            } else if let card = app.pendingConsent {
+                // A card was inserted while the Library is open. The menu-bar popover
+                // can't reliably present over a key window, so the offload prompt has
+                // to live right here, where the user is already looking.
+                LibraryConsentBanner(card: card)
+                Divider()
             }
             Group {
                 if let model {
@@ -146,6 +152,36 @@ struct LibraryWindow: View {
 /// a miniature of the popover's progress view, so you can watch progress in the same
 /// window you'll browse the results in. Driven by AppState.session; vanishes ~6s
 /// after the offload finishes (when AppState nils the session).
+/// "Card ready" banner shown at the top of the Library when a card is inserted but
+/// not yet consented — the same choices as the popover's ConsentView, inline so the
+/// prompt is reachable even when the popover can't present over this window.
+private struct LibraryConsentBanner: View {
+    @Environment(AppState.self) private var app
+    let card: CardInfo
+
+    var body: some View {
+        HStack(spacing: DS.Space.m) {
+            Image(systemName: "sdcard.fill")
+                .font(.system(size: 20)).foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Offload \(card.volumeName)?")
+                    .font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Text("\(Fmt.bytes(card.usedBytes)) used of \(Fmt.bytes(card.capacityBytes))\(card.hasMediaRoot ? " · camera card" : "")")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Spacer(minLength: DS.Space.m)
+            Button("Ignore") { app.declineTapped(remember: .ignore) }
+                .buttonStyle(.borderless).foregroundStyle(.secondary).controlSize(.small)
+            Button("Just once") { app.consentTapped(remember: nil) }
+            Button("Always") { app.consentTapped(remember: .alwaysIngest) }
+                .buttonStyle(.borderedProminent).tint(Theme.accent)
+                .help("Offload now and always offload this card")
+        }
+        .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.s)
+        .background(DS.Palette.surfaceRaised.opacity(0.5))
+    }
+}
+
 private struct LibraryProgressBanner: View {
     @Environment(AppState.self) private var app
     var vm: SessionViewModel

@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-07-08
+
+### Fixed
+- **Inserting a card while the Library window was open looked like nothing happened.**
+  The offload prompt lived only in the menu-bar popover, which can't reliably present
+  over an open (key) window — so with the Library up, an inserted card gave no way to
+  start the offload. The Library now shows a "card ready" banner at the top (Always /
+  Just once / Ignore) whenever a card is waiting, mirroring the popover prompt, and a
+  card insert brings the Library forward instead of trying to pop a hidden popover
+  over it. Detection itself was never the problem — the prompt just had nowhere to go.
+
 ## [1.1.1] — 2026-07-08
 
 ### Fixed
