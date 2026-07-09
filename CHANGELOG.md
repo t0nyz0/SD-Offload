@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-07-09
+
+### Performance
+- **The library no longer re-counts the entire NAS folder on every open.** The
+  "N items · X GB" header total was recursively walking the whole Photos tree over
+  SMB each time you opened a folder — the spinner you saw — which starved thumbnail
+  loading. It's now served from the cached total and only re-counted on **Refresh**
+  or automatically **after an offload** adds photos (so the number stays accurate).
+
 ## [1.5.1] — 2026-07-09
 
 ### Performance

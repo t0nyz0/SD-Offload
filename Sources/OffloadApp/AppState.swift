@@ -159,6 +159,9 @@ final class AppState {
         case .completed(let record):
             session?.completed = record
             refreshRecent()
+            // New photos just landed on the NAS — drop the cached library total so it
+            // re-counts (accurate header without a manual Refresh).
+            LibraryIndex.invalidate()
             if settings.config.autoShowLibrary,
                let folder = Self.uploadedFolder(from: record, nasRoot: settings.config.nasRootPath) {
                 router?.openLibrary(folder: folder)   // reveal the just-uploaded batch

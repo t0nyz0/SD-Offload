@@ -93,4 +93,10 @@ public struct LibraryIndex: Codable, Sendable {
     public func save() {
         try? JSONIO.save(self, to: Paths.libraryIndexFile)
     }
+
+    /// Drop the cached library total so the next open re-counts — call after an
+    /// offload adds photos, so the header stays accurate without a manual Refresh.
+    public static func invalidate() {
+        try? FileManager.default.removeItem(at: Paths.libraryIndexFile)
+    }
 }

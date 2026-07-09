@@ -925,7 +925,7 @@ final class LibraryModel {
     /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
         FolderStatsLoader.shared.invalidateAll()   // rebuild folder counts (catches deep-added photos)
-        if let root = rootURL { refreshVolumeStats(root); startCount(root) }
+        if let root = rootURL { refreshVolumeStats(root); startCount(root, force: true) }
         loadEntries()
     }
 
@@ -995,11 +995,19 @@ final class LibraryModel {
         }
     }
 
-    private func startCount(_ root: URL) {
+    private func startCount(_ root: URL, force: Bool = false) {
         countTask?.cancel()
         let cached = LibraryIndex.load(rootPath: root.path)
         totalMedia = cached?.totalMedia
         totalBytes = cached?.totalBytes ?? 0
+        // Skip the full-tree SMB walk when a complete total is already cached and the
+        // caller didn't force it — otherwise every folder open re-counts the whole
+        // library over the NAS and starves thumbnail loads. It's invalidated after an
+        // offload and by Refresh, so the number stays accurate.
+        if !force, let cached, cached.complete {
+            countComplete = true
+            return
+        }
         countComplete = false
         let browser = self.browser
         let isNAS = source == .nas
