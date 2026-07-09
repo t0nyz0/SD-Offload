@@ -29,6 +29,11 @@ public struct PhotoRecord: Codable, Sendable {
     // for a coordinate, so a re-scan doesn't re-read every no-GPS photo's header.
     public var location: GeoPoint?
     public var gpsChecked: Bool?
+    // Fine-grained identification from the `claude` CLI (on-demand, richer than the
+    // on-device labels). Optional so index files written before this still decode.
+    public var aiTags: [String]? = nil
+    public var aiDescription: String? = nil
+    public var aiAnalyzedAt: Date? = nil
 
     public init(path: String, size: Int64, mtime: Date, labels: [PhotoLabel],
                 animals: [String], analyzedAt: Date = Date(),
@@ -38,11 +43,12 @@ public struct PhotoRecord: Codable, Sendable {
         self.location = location; self.gpsChecked = gpsChecked
     }
 
-    /// De-duplicated tag list (animals first, then labels), lowercased.
+    /// De-duplicated tag list, lowercased — AI tags first (the specific ones), then
+    /// animals, then on-device labels. Powers tile overlays, search, and suggestions.
     public var tags: [String] {
         var seen = Set<String>()
         var out: [String] = []
-        for t in animals.map({ $0.lowercased() }) + labels.map({ $0.name.lowercased() }) {
+        for t in (aiTags ?? []).map({ $0.lowercased() }) + animals.map({ $0.lowercased() }) + labels.map({ $0.name.lowercased() }) {
             if seen.insert(t).inserted { out.append(t) }
         }
         return out
@@ -75,6 +81,17 @@ public actor PhotoIndex {
 
     public func put(_ record: PhotoRecord) {
         records[record.path] = record
+        dirty = true
+    }
+
+    /// Store on-demand AI identification for a photo, creating a record if it hasn't
+    /// been analyzed on-device yet. Leaves any existing labels/GPS intact.
+    public func setAI(path: String, size: Int64, mtime: Date, tags: [String], description: String) {
+        var r = records[path] ?? PhotoRecord(path: path, size: size, mtime: mtime, labels: [], animals: [])
+        r.aiTags = tags
+        r.aiDescription = description
+        r.aiAnalyzedAt = Date()
+        records[path] = r
         dirty = true
     }
 

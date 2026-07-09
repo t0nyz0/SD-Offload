@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import OffloadCore
+import OffloadEngine
 
 /// A fast in-app image viewer — opens instantly instead of launching Preview.
 /// Always shows the JPEG (the display copy); the RAW opens externally on demand.
@@ -400,6 +401,10 @@ private struct InfoPanel: View {
     let model: LibraryModel
     @State private var detections: [Detection] = []
     @State private var reloadToken = 0
+    @State private var ai: PhotoIdentifier.Identification?
+    @State private var identifying = false
+    @State private var aiError: String?
+    @State private var runToken = UUID()   // guards a slow identify against a photo switch
 
     private func kindLabel(_ e: LibraryEntry) -> String {
         switch e.kind {
@@ -442,6 +447,7 @@ private struct InfoPanel: View {
                 Text("Info")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
+                aiSection
                 row("File", fileLine)
                 if let d = meta?.dateText { row("Taken", d) }
                 if let c = meta?.cameraName { row("Camera", c) }
@@ -518,6 +524,72 @@ private struct InfoPanel: View {
         .foregroundStyle(.white)
         .task(id: "\(item.id)#\(reloadToken)") {
             detections = await model.detections(for: item.primary.id)
+        }
+    }
+
+    // On-demand Claude identification: description + specific tags, or a button to run it.
+    @ViewBuilder private var aiSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles").font(.system(size: 9)).foregroundStyle(Theme.accent)
+                label("AI Identification")
+            }
+            if let ai {
+                if !ai.description.isEmpty {
+                    Text(ai.description)
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.9))
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                }
+                if !ai.tags.isEmpty {
+                    FlowLayout(spacing: 5) {
+                        ForEach(ai.tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 10, weight: .medium))
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Theme.accent.opacity(0.22), in: Capsule())
+                                .foregroundStyle(.white.opacity(0.92))
+                        }
+                    }
+                }
+            } else if identifying {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Identifying with Claude…").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            } else {
+                Button { runIdentify() } label: {
+                    Label("Identify with AI", systemImage: "sparkles").font(.system(size: 11))
+                }
+                .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                Text("Uses your Claude session to name the subject, species, and scene.")
+                    .font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let aiError {
+                    Text(aiError).font(.system(size: 9)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .task(id: item.id) {
+            runToken = UUID()
+            ai = nil; aiError = nil; identifying = false
+            ai = await model.existingIdentification(for: item)
+        }
+    }
+
+    private func runIdentify() {
+        let token = runToken
+        identifying = true; aiError = nil
+        Task {
+            do {
+                let result = try await model.identify(item)
+                guard token == runToken else { return }   // user moved on; result stays saved
+                ai = result
+            } catch {
+                guard token == runToken else { return }
+                aiError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            if token == runToken { identifying = false }
         }
     }
 

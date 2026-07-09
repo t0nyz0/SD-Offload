@@ -116,6 +116,7 @@ final class LibraryModel {
 
     private let browser = LibraryBrowser()
     private let analyzer = PhotoAnalyzer()
+    private let identifier = PhotoIdentifier()
     let photoIndex = PhotoIndex()
     let faceIndex = FaceIndex()
     let identityIndex = IdentityIndex()
@@ -394,6 +395,27 @@ final class LibraryModel {
     }
 
     func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
+
+    // MARK: - AI identification (on-demand, via the claude CLI)
+
+    /// A previously-run identification for this photo, if any (so reopening shows it
+    /// without spending another call).
+    func existingIdentification(for item: DisplayItem) async -> PhotoIdentifier.Identification? {
+        guard let r = await photoIndex.record(item.primary.id), let d = r.aiDescription else { return nil }
+        return PhotoIdentifier.Identification(description: d, tags: r.aiTags ?? [])
+    }
+
+    /// Identify a photo with Claude vision, persist the result, and fold its tags into
+    /// the searchable index + tile overlays. Throws on CLI/parse failure.
+    func identify(_ item: DisplayItem) async throws -> PhotoIdentifier.Identification {
+        let result = try await identifier.identify(imageURL: item.primary.url)
+        await photoIndex.setAI(path: item.primary.id, size: item.primary.size,
+                               mtime: item.primary.modified, tags: result.tags, description: result.description)
+        await photoIndex.save()
+        if !result.tags.isEmpty { tagsByPath[item.primary.id] = Array(result.tags.prefix(3)) }
+        refreshSuggestions()
+        return result
+    }
 
     /// Directory + basename (no extension), so DSCF0037.JPG and DSCF0037.RAF group.
     nonisolated static func groupKey(_ path: String) -> String {
