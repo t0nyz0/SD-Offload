@@ -5,6 +5,21 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-07-09
+
+### Performance
+From a multi-lens performance audit of the Library:
+- **No more thumbnail flash on folder re-open.** Tiles now read the in-memory cache
+  synchronously and paint the cached image on the first frame instead of flashing a
+  placeholder. The memory cache is also larger so scroll-back stays warm.
+- **Folder card counts are cached to disk.** "N photos · X GB" no longer re-walks the
+  whole subtree over the NAS every time you open a folder — it's persisted per folder
+  and served instantly. (Refresh / ⌘R rebuilds them.)
+- **AI Analyze writes the index far less often** (every ~10 photos instead of after
+  every 2), and the `claude` CLI is located once per run instead of per photo.
+- **Focus doesn't re-list the folder every time** — the on-activate refresh is
+  throttled instead of re-scanning the NAS on every app switch.
+
 ## [1.5.0] — 2026-07-09
 
 ### Added

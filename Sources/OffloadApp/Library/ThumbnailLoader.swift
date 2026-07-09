@@ -81,8 +81,8 @@ final class ThumbnailLoader: @unchecked Sendable {
 
     private let mem: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
-        c.countLimit = 400
-        c.totalCostLimit = 256 << 20   // 256 MB of decoded bitmaps — caps RAM at any quality
+        c.countLimit = 600
+        c.totalCostLimit = 384 << 20   // decoded-bitmap RAM cap — bigger so scroll-back stays warm at High/Max
         return c
     }()
     private let limiter = ThumbLimiter(limit: 6)
@@ -145,6 +145,15 @@ final class ThumbnailLoader: @unchecked Sendable {
         let s = "\(path)|\(size)|\(Int(mtime.timeIntervalSince1970))|\(Int(side))|q\(quality.rawValue)|l\(isLocal ? 1 : 0)"
         let hash = SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
         return String(hash.prefix(40))
+    }
+
+    /// Synchronous in-memory cache peek — returns a warm bitmap instantly (no decode,
+    /// no SMB) so a recycled/reopened tile paints on the FIRST frame instead of
+    /// flashing the placeholder. nil ⇒ not warm; fall back to the async path.
+    func cached(url: URL, size: Int64, mtime: Date, side: CGFloat,
+                quality: ThumbnailQuality = .current, isLocal: Bool = false) -> NSImage? {
+        mem.object(forKey: key(path: url.path, size: size, mtime: mtime, side: side,
+                               quality: quality, isLocal: isLocal) as NSString)
     }
 
     func thumbnail(url: URL, size: Int64, mtime: Date, side: CGFloat,

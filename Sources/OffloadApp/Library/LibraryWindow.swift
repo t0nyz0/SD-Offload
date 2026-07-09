@@ -61,7 +61,7 @@ struct LibraryWindow: View {
         // Coming back to the app (e.g. after deleting files in Finder) re-scans the
         // current folder so external changes show up without a manual refresh.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            model?.reloadCurrentFolder()
+            model?.reloadOnFocus()
         }
     }
 
@@ -832,6 +832,18 @@ struct LibraryTile: View {
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
+
+    init(item: DisplayItem, tags: [String] = [], selected: Bool = false, isLocal: Bool = false,
+         isFavorite: Bool = false, analyzed: Bool = false, side: CGFloat = 220) {
+        self.item = item; self.tags = tags; self.selected = selected; self.isLocal = isLocal
+        self.isFavorite = isFavorite; self.analyzed = analyzed; self.side = side
+        // Seed from the warm in-memory cache so a reopened / scrolled-back tile paints
+        // its cached bitmap on the first frame instead of flashing the placeholder.
+        let warm = item.isFolder ? nil : ThumbnailLoader.shared.cached(
+            url: item.primary.url, size: item.primary.size, mtime: item.primary.modified,
+            side: side, quality: .current, isLocal: isLocal)
+        _thumb = State(initialValue: warm)
+    }
 
     private var entry: LibraryEntry { item.primary }
     private var isVideo: Bool { if case .media(.video) = entry.kind { return true }; return false }

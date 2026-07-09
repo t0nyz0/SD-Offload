@@ -731,8 +731,8 @@ final class LibraryModel {
                         await MainActor.run { [weak self] in self?.analyzeDone += 1 }
                     }
                 }
-                await index.save()
                 i += width
+                if i % 10 == 0 { await index.save() }   // persist every ~10 photos, not every batch (whole-file rewrite)
             }
             await index.save()
             guard let self else { return }
@@ -924,6 +924,7 @@ final class LibraryModel {
     /// Full refresh: re-scan the current folder, re-check free space, and recount
     /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
+        FolderStatsLoader.shared.invalidateAll()   // rebuild folder counts (catches deep-added photos)
         if let root = rootURL { refreshVolumeStats(root); startCount(root) }
         loadEntries()
     }
@@ -934,6 +935,15 @@ final class LibraryModel {
     func reloadCurrentFolder() {
         guard currentDir != nil else { return }
         loadEntries()
+    }
+
+    @ObservationIgnored private var lastFocusReload = Date.distantPast
+    /// Focus-return reload, throttled — re-listing the folder over SMB on every app
+    /// activation is wasteful and makes the grid appear to rebuild constantly.
+    func reloadOnFocus() {
+        guard Date().timeIntervalSince(lastFocusReload) > 20 else { return }
+        lastFocusReload = Date()
+        reloadCurrentFolder()
     }
 
     private func loadEntries() {

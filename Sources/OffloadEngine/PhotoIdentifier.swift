@@ -170,14 +170,24 @@ public struct PhotoIdentifier: Sendable {
         }
     }
 
+    private static let cachedBinary = ResolvedBinary()
+
     private func resolveBinary() throws -> String {
         let fm = FileManager.default
         if let p = binaryPath, fm.isExecutableFile(atPath: p) { return p }
-        if let f = Self.loginShellWhich(), fm.isExecutableFile(atPath: f) { return f }
-        let home = NSHomeDirectory()
-        for c in ["/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.local/bin/claude",
-                  "\(home)/.claude/local/claude", "/usr/bin/claude"] where fm.isExecutableFile(atPath: c) { return c }
-        throw IDError.cliNotFound
+        // Discovery spawns a login shell — cache it once per process instead of doing
+        // it for every photo in a batch.
+        if let hit = Self.cachedBinary.get() { return hit }
+        var found: String?
+        if let f = Self.loginShellWhich(), fm.isExecutableFile(atPath: f) { found = f }
+        else {
+            let home = NSHomeDirectory()
+            found = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude", "\(home)/.local/bin/claude",
+                     "\(home)/.claude/local/claude", "/usr/bin/claude"].first { fm.isExecutableFile(atPath: $0) }
+        }
+        guard let path = found else { throw IDError.cliNotFound }
+        Self.cachedBinary.set(path)
+        return path
     }
 
     private static func loginShellWhich() -> String? {
@@ -262,4 +272,12 @@ private final class LockedData: @unchecked Sendable {
     private let lock = NSLock()
     func append(_ d: Data) { lock.lock(); data.append(d); lock.unlock() }
     var value: Data { lock.lock(); defer { lock.unlock() }; return data }
+}
+
+/// Process-wide cache of the discovered `claude` path (discovery spawns a shell).
+private final class ResolvedBinary: @unchecked Sendable {
+    private let lock = NSLock()
+    private var path: String?
+    func get() -> String? { lock.lock(); defer { lock.unlock() }; return path }
+    func set(_ p: String) { lock.lock(); path = p; lock.unlock() }
 }
