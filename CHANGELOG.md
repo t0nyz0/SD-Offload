@@ -5,6 +5,18 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-07-08
+
+### Fixed
+- **A re-inserted card sometimes wasn't detected (menu-bar icon stayed idle).** After
+  a card had been handled once, the engine remembers it as "already handled this
+  insertion" and only forgets that on a clean removal event. If that removal event
+  never landed — e.g. the card sat busy in the Library window when it was pulled — a
+  genuine re-insert got silently deduped, so nothing happened. Added a **"Look for a
+  card"** button (in the tray's idle view and at the bottom of the Library sidebar)
+  that force-re-checks every mounted volume, clearing the stale dedup markers so the
+  card is picked up. It can't disturb an in-progress offload.
+
 ## [1.2.1] — 2026-07-08
 
 ### Changed

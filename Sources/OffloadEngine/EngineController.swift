@@ -34,6 +34,7 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     public func eject() { Task { await coordinator.eject() } }
     public func retry() { Task { await coordinator.retry() } }
     public func refreshNASGlance() { Task { await coordinator.emitGlance() } }
+    public func rescan() { Task { await coordinator.rescan() } }
 }
 
 private actor Coordinator {
@@ -109,6 +110,16 @@ private actor Coordinator {
     }
 
     // MARK: - Card events
+
+    /// Manual "look again": the user says a card is present that we didn't pick up.
+    /// Drop the per-insertion dedup and ask the watcher to re-emit every mounted
+    /// volume, so a card whose removal event never landed gets re-evaluated. A live
+    /// session is unaffected — the runner-match and incomplete-session guards in
+    /// handle() still win, so an in-progress offload can't be disturbed.
+    func rescan() async {
+        handledThisInsertion.removeAll()
+        watcher.rescan()
+    }
 
     private func handle(_ event: RawCardEvent) async {
         switch event {

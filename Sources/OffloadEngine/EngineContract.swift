@@ -97,4 +97,8 @@ public protocol EngineControlling: AnyObject {
     func eject()
     func retry()
     func refreshNASGlance()
+    /// Force a re-check of every mounted volume, ignoring the per-insertion dedup.
+    /// Recovery for a card whose insert was swallowed because its previous removal
+    /// event never cleared the dedup markers (e.g. it sat busy in the Library).
+    func rescan()
 }

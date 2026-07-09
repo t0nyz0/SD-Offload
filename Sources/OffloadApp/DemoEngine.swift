@@ -116,6 +116,7 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
     func cancelWipe() { emit(.phase(.transferring)) }
     func eject() {}
     func retry() {}
+    func rescan() {}
     func refreshNASGlance() {
         emit(.nasGlance(NASGlance(mounted: true, healthy: true,
                                   freeBytes: 2_100_000_000_000, totalBytes: 8_000_000_000_000,

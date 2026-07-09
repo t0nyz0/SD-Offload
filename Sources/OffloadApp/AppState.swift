@@ -282,6 +282,9 @@ final class AppState {
     func confirmWipeTapped() { engine.confirmWipe() }
     func cancelWipeTapped() { engine.cancelWipe() }
     func ejectTapped() { engine.eject() }
+    /// "Look for a card" — force the engine to re-check mounted volumes when an
+    /// insert wasn't picked up automatically.
+    func rescanTapped() { engine.rescan() }
 
     /// The NAS day-folder (YYYY/MM/DD, absolute) that received the most files this
     /// session — a batch spanning several capture days reveals the busiest day.

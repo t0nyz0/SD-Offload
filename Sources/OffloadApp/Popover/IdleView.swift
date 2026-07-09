@@ -29,6 +29,14 @@ struct IdleView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            Button { app.rescanTapped() } label: {
+                Label("Look for a card", systemImage: "arrow.clockwise").font(.system(size: 11))
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .foregroundStyle(.secondary)
+            .help("Re-check for an inserted card if one wasn't picked up automatically")
+
             NASGlanceRow()
                 .padding(.horizontal, 16)
 

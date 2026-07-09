@@ -74,6 +74,27 @@ public final class CardWatcher: @unchecked Sendable {
         }, ctx)
     }
 
+    /// Force a re-check of every currently-mounted volume, dropping the dedup state
+    /// that normally suppresses repeat signals. The recovery path when a genuine
+    /// re-insert was mistaken for a flap (or its unmount event never landed) and
+    /// swallowed — e.g. the card sat busy in the Library while it was pulled and put
+    /// back. Runs on daQueue like the real callbacks, so it's safe with knownVolumes.
+    public func rescan() {
+        daQueue.async { [weak self] in
+            guard let self, let session = self.daSession else { return }
+            self.pendingUnmounts.values.forEach { $0.cancel() }
+            self.pendingUnmounts.removeAll()
+            self.knownVolumes.removeAll()                     // forget dedup so every mount re-emits
+            let urls = FileManager.default.mountedVolumeURLs(
+                includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? []
+            for url in urls {
+                if let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL) {
+                    self.handlePossibleMount(disk)
+                }
+            }
+        }
+    }
+
     // MARK: - Callbacks (on daQueue)
 
     private func diskAppeared(_ disk: DADisk) {

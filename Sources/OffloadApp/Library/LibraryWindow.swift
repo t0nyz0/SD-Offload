@@ -99,6 +99,21 @@ struct LibraryWindow: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
+            .safeAreaInset(edge: .bottom) {
+                // A card inserted while this window is open isn't always picked up
+                // automatically (a stale unmount signal can swallow it); this forces
+                // a re-check without quitting the app.
+                Button { app.rescanTapped() } label: {
+                    Label("Look for a card", systemImage: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .help("Re-check for an inserted card")
+            }
         } detail: {
             VStack(spacing: 0) {
                 LibraryHeader(model: model)
