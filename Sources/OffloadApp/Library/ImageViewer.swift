@@ -175,45 +175,18 @@ struct ImageViewer: View {
     }
 }
 
-/// Loads the full image off-main (NAS reads can be slow → spinner), then allows
-/// pinch/scroll zoom and drag-to-pan, double-click to toggle 1×/2×.
+/// Loads the full image off-main (NAS reads can be slow → spinner), then hands it to
+/// an AppKit-backed zoom/pan surface. The parent's `.id(item.id)` remounts this view
+/// per photo, so zoom/pan reset for free — we never carry state between photos.
 private struct ZoomableImage: View {
     let url: URL
     @State private var image: NSImage?
     @State private var failed = false
-    @State private var zoom: CGFloat = 1
-    @State private var committedZoom: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var committedOffset: CGSize = .zero
 
     var body: some View {
         ZStack {
             if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .scaleEffect(zoom)
-                    .offset(offset)
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { zoom = min(8, max(1, committedZoom * $0)) }
-                            .onEnded { _ in committedZoom = zoom; if zoom <= 1 { resetPan() } }
-                    )
-                    .simultaneousGesture(
-                        DragGesture()
-                            .onChanged { g in
-                                guard zoom > 1 else { return }
-                                offset = CGSize(width: committedOffset.width + g.translation.width,
-                                                height: committedOffset.height + g.translation.height)
-                            }
-                            .onEnded { _ in committedOffset = offset }
-                    )
-                    .onTapGesture(count: 2) {
-                        withAnimation(.snappy(duration: 0.2)) {
-                            if zoom > 1 { zoom = 1; committedZoom = 1; resetPan() }
-                            else { zoom = 2; committedZoom = 2 }
-                        }
-                    }
+                ZoomPanSurface(image: image)
             } else if failed {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle").font(.system(size: 28))
@@ -225,17 +198,169 @@ private struct ZoomableImage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
         .task(id: url) { await load() }
     }
 
-    private func resetPan() { offset = .zero; committedOffset = .zero }
-
     private func load() async {
-        image = nil; failed = false; zoom = 1; committedZoom = 1; resetPan()
+        image = nil; failed = false
         let u = url
         let loaded = await Task.detached(priority: .userInitiated) { NSImage(contentsOf: u) }.value
         if let loaded { image = loaded } else { failed = true }
+    }
+}
+
+/// Bridges the loaded photo into `ZoomScrollView`. We drop to AppKit because
+/// NSScrollView gives us native pinch magnification, trackpad two-finger pan (precise
+/// scroll) and momentum for free — things SwiftUI's Magnification/Drag gestures can't
+/// match — and we layer mouse-wheel zoom + a click-drag hand tool on top of it.
+private struct ZoomPanSurface: NSViewRepresentable {
+    let image: NSImage
+
+    func makeNSView(context: Context) -> ZoomScrollView { ZoomScrollView(image: image) }
+
+    func updateNSView(_ nsView: ZoomScrollView, context: Context) {
+        // `.id(item.id)` remounts us per photo, so the image is normally set once at
+        // init; refresh only if SwiftUI happened to reuse the view for a new image.
+        if nsView.pannableView.image !== image { nsView.pannableView.image = image }
+    }
+}
+
+/// The scroll view: owns magnification limits, a transparent background, and
+/// mouse-wheel zoom. Trackpad/precise scrolling is deferred to `super` so native
+/// two-finger pan and pinch keep their momentum and rubber-banding.
+private final class ZoomScrollView: NSScrollView {
+    let pannableView: PannableImageView
+
+    init(image: NSImage) {
+        pannableView = PannableImageView()
+        super.init(frame: .zero)
+
+        pannableView.image = image
+        pannableView.imageScaling = .scaleProportionallyUpOrDown   // fit, never crop
+        pannableView.imageAlignment = .alignCenter
+        documentView = pannableView
+
+        // 1× is fit-to-view (see `tile()`); 8× is the ceiling the task calls for.
+        allowsMagnification = true
+        minMagnification = 1
+        maxMagnification = 8
+
+        // Transparent so the surrounding SwiftUI black shows through the letterbox
+        // margins; no scrollers — the hand tool and wheel are the whole interaction.
+        drawsBackground = false
+        contentView.drawsBackground = false
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Pin the document view to the *unmagnified* viewport size so magnification 1
+    /// means fit-to-view. NSScrollView scales this frame by `magnification`, so the
+    /// photo (scaleProportionallyUpOrDown, centered) letterboxes inside it at 1× and
+    /// there is nothing to pan until you zoom past fit. `contentView.frame` is the
+    /// viewport in scroll-view space (magnification-independent), so this tracks
+    /// window resizes without fighting the zoom.
+    override func tile() {
+        super.tile()
+        let size = contentView.frame.size
+        if documentView?.frame.size != size {
+            documentView?.frame = NSRect(origin: .zero, size: size)
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // Precise deltas = trackpad two-finger scroll / Magic Mouse surface → let
+        // NSScrollView pan (and pinch-magnify) natively, momentum and all.
+        guard !event.hasPreciseScrollingDeltas else {
+            super.scrollWheel(with: event)
+            return
+        }
+        // Coarse, line-based deltas = a real scroll wheel → zoom about the cursor.
+        // deltaY > 0 (wheel rolled up/away) zooms in; multiplicative so each notch is
+        // an even step across 1×–8×. (Flip this sign if a user's "natural scrolling"
+        // preference ever makes the wheel direction feel inverted.)
+        let notches = event.deltaY
+        guard notches != 0 else { return }
+        let target = min(maxMagnification, max(minMagnification, magnification * pow(1.25, notches)))
+        // setMagnification wants the anchor in content (clip) space.
+        setMagnification(target, centeredAt: contentView.convert(event.locationInWindow, from: nil))
+    }
+}
+
+/// The document view. Owns the click-drag "hand tool" pan and the double-click zoom.
+/// We handle the mouse here rather than on the scroll view because, as the front-most
+/// view under the cursor, it reliably receives mouseDown/Dragged — a control-derived
+/// NSImageView won't necessarily bubble those up to the enclosing scroll view.
+private final class PannableImageView: NSImageView {
+    /// Anchor captured at mouseDown: cursor position in *window* space (stable while we
+    /// scroll) and the clip's bounds origin at that instant. Recomputing an absolute
+    /// origin from this fixed anchor each drag avoids the drift of summing per-event deltas.
+    private var panStartInWindow: NSPoint?
+    private var panStartOrigin: NSPoint = .zero
+
+    /// Zoomed past fit → there is room to pan and the grab cursor makes sense.
+    private var isZoomed: Bool {
+        guard let sv = enclosingScrollView else { return false }
+        return sv.magnification > sv.minMagnification + 0.0001
+    }
+
+    /// Let a click grab-and-pan even when the window isn't yet key — a viewer should
+    /// feel immediate.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    // Show an open-hand cursor while hovering a zoomed (grabbable) photo.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero,
+                                       options: [.inVisibleRect, .cursorUpdate, .activeInKeyWindow],
+                                       owner: self, userInfo: nil))
+    }
+    override func cursorUpdate(with event: NSEvent) {
+        if isZoomed { NSCursor.openHand.set() } else { super.cursorUpdate(with: event) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let sv = enclosingScrollView else { return }
+        if event.clickCount == 2 {
+            // Double-click toggles fit ↔ 2×, centered on the cursor, animated to match
+            // the SwiftUI "snappy" feel the rest of the viewer uses.
+            let anchor = sv.contentView.convert(event.locationInWindow, from: nil)
+            let target: CGFloat = isZoomed ? sv.minMagnification : 2
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.2
+                ctx.allowsImplicitAnimation = true
+                sv.animator().setMagnification(target, centeredAt: anchor)
+            }
+            return
+        }
+        guard isZoomed else { return }   // at fit there is nothing to pan
+        panStartInWindow = event.locationInWindow
+        panStartOrigin = sv.contentView.bounds.origin
+        NSCursor.closedHand.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let sv = enclosingScrollView, let start = panStartInWindow else { return }
+        let clip = sv.contentView
+        let scale = sv.magnification
+        let now = event.locationInWindow
+        // Hand tool: shift the clip's bounds origin OPPOSITE the cursor's screen motion
+        // so the photo tracks the pointer 1:1. Divide by magnification because one screen
+        // point spans 1/scale document points when zoomed. Window coords are y-up and the
+        // clip view is unflipped, so subtracting keeps "drag right → image right" and
+        // "drag up → image up" (decreasing an unflipped clip's origin.y scrolls content up).
+        let proposed = NSPoint(x: panStartOrigin.x - (now.x - start.x) / scale,
+                               y: panStartOrigin.y - (now.y - start.y) / scale)
+        let constrained = clip.constrainBoundsRect(NSRect(origin: proposed, size: clip.bounds.size))
+        clip.scroll(to: constrained.origin)
+        sv.reflectScrolledClipView(clip)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if panStartInWindow != nil { NSCursor.openHand.set() }
+        panStartInWindow = nil
     }
 }
 

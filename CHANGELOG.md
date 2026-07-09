@@ -5,6 +5,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.1.3] — 2026-07-08
+
+### Changed
+- **The tray popover now pops up on card insert even when the Library window is
+  open.** 1.1.2 suppressed it (deferring to the Library's inline banner) because a
+  transient popover can land behind a key window; it now raises the popover above
+  that window and gives it focus, so you get the tray prompt AND the Library banner.
+
 ## [1.1.2] — 2026-07-08
 
 ### Fixed

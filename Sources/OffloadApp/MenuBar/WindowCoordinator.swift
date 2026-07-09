@@ -63,26 +63,29 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
         popover.isShown ? closePopover() : presentPopover()
     }
 
-    /// Auto-present on card insert (called by AppState). If the Library window is
-    /// open it already surfaces the card-ready / progress state inline (its banner),
-    /// and a transient popover won't reliably present over a key window — so bring
-    /// that window forward instead of popping a hidden/janky popover over it.
+    /// Auto-present on card insert (called by AppState). Always shows the tray
+    /// popover — even when the Library window is open, presentPopover() forces it
+    /// above that window so it isn't hidden behind it. (The Library ALSO shows its
+    /// own inline "card ready" banner, so the prompt is reachable either way.)
     func showPopover() {
-        if let lib = libraryWindow, lib.isVisible {
-            NSApp.activate(ignoringOtherApps: true)
-            lib.makeKeyAndOrderFront(nil)
-            return
-        }
         presentPopover()
     }
 
-    /// Actually show the popover anchored to the status item. Used by the manual
-    /// icon click (always) and by showPopover() when no window is covering it.
+    /// Show the popover anchored to the status item, then force its window above any
+    /// open key window (e.g. the Library) and give it focus. A transient popover
+    /// shown while another window is key can otherwise land behind that window or be
+    /// dismissed before it's seen — raising the level + orderFrontRegardless fixes it.
     private func presentPopover() {
         guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)              // LSUIElement apps must grab focus first
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        if !popover.isShown {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+        if let pw = popover.contentViewController?.view.window {
+            pw.level = .floating                             // above the Library's .normal window
+            pw.orderFrontRegardless()
+            pw.makeKey()
+        }
     }
 
     func closePopover() {
