@@ -412,6 +412,7 @@ private struct SearchBar: View {
     @AppStorage("offload.library.tileSize") private var tileSize = 150.0
     @AppStorage("offload.faces.consented") private var facesConsented = false
     @State private var showFacesConsent = false
+    @State private var confirmAnalyze = false
 
     var body: some View {
         HStack(spacing: DS.Space.s) {
@@ -452,12 +453,23 @@ private struct SearchBar: View {
                     Button("Stop") { model.cancelAnalysis() }.controlSize(.small)
                 }
             } else {
-                Button {
-                    model.analyzeCurrentSource()
-                } label: {
+                Button { confirmAnalyze = true } label: {
                     Label("Analyze", systemImage: "sparkles")
                 }
-                .help("Scan this library on-device to tag what's in each photo, so you can search by content.")
+                .help("Deep-analyze photos with AI — names the subject, species, and scene so you can search by content.")
+                .confirmationDialog("Deep-analyze with AI?", isPresented: $confirmAnalyze, titleVisibility: .visible) {
+                    if model.selectedCount > 0 {
+                        Button("Scan \(model.selectedCount) selected") { model.aiAnalyze(model.selectedItems) }
+                    }
+                    Button("Scan all in this folder") { model.aiAnalyzeAll() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Each photo is analyzed by Claude — this uses your Claude usage and can take a while for a lot of photos. It runs in the background; you can Stop anytime. Already-analyzed photos are skipped.")
+                }
+                if let err = model.analyzeError {
+                    Text(err).font(.system(size: 10)).foregroundStyle(.orange)
+                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if model.findingFaces {
@@ -716,6 +728,7 @@ private struct LibraryGrid: View {
                                             selected: model.selection.contains(item.id),
                                             isLocal: model.source == .card,
                                             isFavorite: model.isFavorite(item.primary.id),
+                                            analyzed: model.aiDonePaths.contains(item.primary.id),
                                             side: thumbSide)
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
@@ -814,6 +827,7 @@ struct LibraryTile: View {
     var selected: Bool = false
     var isLocal: Bool = false
     var isFavorite: Bool = false
+    var analyzed: Bool = false       // has a deep (AI) analysis → shows a sparkles badge
     var side: CGFloat = 220          // requested thumbnail size — scales with the tile
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
@@ -849,7 +863,20 @@ struct LibraryTile: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.m))
-                .overlay(alignment: .topTrailing) { formatBadge }
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 4) {
+                        if analyzed {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(Theme.accent, in: Circle())
+                                .help("Deep-analyzed with AI")
+                        }
+                        formatBadge
+                    }
+                    .padding(5)
+                }
                 .overlay(alignment: .bottomLeading) { tagBadge }
                 .overlay(alignment: .bottomTrailing) { favoriteBadge }
                 .overlay(alignment: .topLeading) {

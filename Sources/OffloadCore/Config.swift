@@ -65,6 +65,13 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// clicking the status item.
     public var autoOpenTrayOnInsert: Bool = true
 
+    // AI photo analysis
+    /// How AI analysis reaches Claude (CLI session vs API key). The API key itself
+    /// lives in the Keychain, never in this file.
+    public var aiProvider: AIProvider = .cli
+    /// Model for API mode ("" = the app's default). CLI mode uses your session default.
+    public var aiModel: String = ""
+
     public init() {}
 
     // Tolerant decoding: every key optional, defaults fill the gaps.
@@ -100,6 +107,8 @@ public struct AppConfig: Codable, Sendable, Equatable {
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         autoShowLibrary = try c.decodeIfPresent(Bool.self, forKey: .autoShowLibrary) ?? d.autoShowLibrary
         autoOpenTrayOnInsert = try c.decodeIfPresent(Bool.self, forKey: .autoOpenTrayOnInsert) ?? d.autoOpenTrayOnInsert
+        aiProvider = try c.decodeIfPresent(AIProvider.self, forKey: .aiProvider) ?? d.aiProvider
+        aiModel = try c.decodeIfPresent(String.self, forKey: .aiModel) ?? d.aiModel
     }
 
     public static func load() -> AppConfig {

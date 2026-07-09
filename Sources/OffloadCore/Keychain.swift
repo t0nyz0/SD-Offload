@@ -5,6 +5,8 @@ import Security
 public enum Keychain {
     /// SMB credentials for the NAS remount, stored as "user\npassword".
     public static let nasCredentialsService = "offload-nas-smb"
+    /// Anthropic API key for AI photo analysis in API mode (CLI mode needs none).
+    public static let aiAPIKeyService = "offload-anthropic-api-key"
 
     public static func set(_ value: String, service: String, account: String = "default") {
         let data = Data(value.utf8)

@@ -85,6 +85,9 @@ final class LibraryModel {
     private(set) var analyzing = false
     private(set) var analyzeDone = 0
     private(set) var analyzeTotal = 0
+    private(set) var analyzeError: String?
+    /// Paths with a deep (AI) analysis — drives the tile "analyzed" badge.
+    private(set) var aiDonePaths: Set<String> = []
     private(set) var suggestions: [(tag: String, count: Int)] = []
     private(set) var tagsByPath: [String: [String]] = [:]   // for tile overlays
 
@@ -115,8 +118,6 @@ final class LibraryModel {
     }
 
     private let browser = LibraryBrowser()
-    private let analyzer = PhotoAnalyzer()
-    private let identifier = PhotoIdentifier()
     let photoIndex = PhotoIndex()
     let faceIndex = FaceIndex()
     let identityIndex = IdentityIndex()
@@ -408,11 +409,12 @@ final class LibraryModel {
     /// Identify a photo with Claude vision, persist the result, and fold its tags into
     /// the searchable index + tile overlays. Throws on CLI/parse failure.
     func identify(_ item: DisplayItem) async throws -> PhotoIdentifier.Identification {
-        let result = try await identifier.identify(imageURL: item.primary.url)
+        let result = try await makeIdentifier().identify(imageURL: item.primary.url)
         await photoIndex.setAI(path: item.primary.id, size: item.primary.size,
                                mtime: item.primary.modified, tags: result.tags, description: result.description)
         await photoIndex.save()
         if !result.tags.isEmpty { tagsByPath[item.primary.id] = Array(result.tags.prefix(3)) }
+        aiDonePaths.insert(item.primary.id)
         refreshSuggestions()
         return result
     }
@@ -485,6 +487,8 @@ final class LibraryModel {
     var selection: Set<String> = []
     @ObservationIgnored private var anchorID: String?
     var selectedCount: Int { selection.count }
+    /// The currently-selected photos (for "scan selected" in Analyze).
+    var selectedItems: [DisplayItem] { photoItems.filter { selection.contains($0.id) } }
 
     /// Click behavior: plain = select only; ⌘ = toggle; ⇧ = range from anchor.
     /// Folders never select (they navigate).
@@ -664,100 +668,100 @@ final class LibraryModel {
 
     // MARK: - AI analysis
 
-    func analyzeCurrentSource() {
-        guard !analyzing, let root = rootURL else { return }
-        analyzing = true
-        analyzeDone = 0
-        analyzeTotal = 0
+    /// Count of photos under the current root not yet deep-analyzed (for the confirm
+    /// prompt). Best-effort/quick — the actual run re-checks per photo.
+    func aiAnalyzeAll() {
+        guard let root = rootURL else { return }
+        let browser = self.browser
+        Task { [weak self] in
+            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
+            let primaries = Self.primaryEntries(media)
+            await MainActor.run { self?.startAIAnalysis(primaries) }
+        }
+    }
+
+    /// AI-analyze a specific set of photos (the "scan selected" choice).
+    func aiAnalyze(_ items: [DisplayItem]) {
+        startAIAnalysis(items.filter { !$0.isFolder }.map(\.primary))
+    }
+
+    /// Core deep-analysis: identify each photo with Claude (per the AI provider
+    /// setting). Bounded concurrency (AI calls are heavy), cancellable, skips photos
+    /// already deep-analyzed, persists incrementally so a Stop keeps what's done, and
+    /// folds tags into search + overlays. A fatal setup error (no CLI / no API key /
+    /// bad key) stops the run and surfaces the message.
+    private func startAIAnalysis(_ entries: [LibraryEntry]) {
+        guard !analyzing, !entries.isEmpty else { return }
+        analyzing = true; analyzeDone = 0; analyzeTotal = 0; analyzeError = nil
         analyzeEpoch += 1
         let epoch = analyzeEpoch
-        let browser = self.browser
-        let analyzer = self.analyzer
         let index = photoIndex
+        let id = makeIdentifier()
         analyzeTask = Task { [weak self] in
-            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
-            // One representative per RAW+JPEG pair — no point analyzing both.
-            let primaries = Self.primaryEntries(media)
-            // Drop index entries for photos that no longer exist under this root.
-            await index.pruneMissing(underPrefix: root.path, keeping: Set(media.map(\.id)))
             var todo: [LibraryEntry] = []
-            for e in primaries where await index.needsAnalysis(path: e.id, mtime: e.modified) {
+            for e in entries {
+                if let r = await index.record(e.id), r.aiDescription != nil { continue }   // already deep-analyzed
                 todo.append(e)
             }
-            await MainActor.run { [weak self] in
-                self?.analyzeTotal = todo.count
-                self?.tagsByPath.reserveCapacity(primaries.count)
-            }
-            // Populate tag overlays for already-analyzed photos too.
-            let existing = await index.records(forPaths: primaries.map(\.id))
-            await MainActor.run { [weak self] in
-                for (p, r) in existing { self?.tagsByPath[p] = Array(r.tags.prefix(3)) }
-            }
-
-            // Analyze up to 4 at a time.
-            let width = 4
+            await MainActor.run { self?.analyzeTotal = todo.count }
+            let width = 2
             var i = 0
-            while i < todo.count {
+            var fatal: String?
+            while i < todo.count, fatal == nil {
                 if Task.isCancelled { break }
                 let batch = Array(todo[i..<min(i + width, todo.count)])
-                await withTaskGroup(of: (String, PhotoRecord).self) { group in
+                await withTaskGroup(of: (LibraryEntry, Result<PhotoIdentifier.Identification, Error>).self) { group in
                     for e in batch {
                         group.addTask {
-                            // Always store a record (empty if Vision found nothing)
-                            // so an unlabelable photo isn't re-analyzed every run.
-                            let result = analyzer.analyze(url: e.url)
-                            let rec = PhotoRecord(path: e.id, size: e.size, mtime: e.modified,
-                                                  labels: result?.labels ?? [], animals: result?.animals ?? [],
-                                                  location: result?.location, gpsChecked: true)
-                            return (e.id, rec)
+                            do { return (e, .success(try await id.identify(imageURL: e.url))) }
+                            catch { return (e, .failure(error)) }
                         }
                     }
-                    for await (path, rec) in group {
-                        await index.put(rec)
-                        await MainActor.run { [weak self] in
-                            self?.analyzeDone += 1
-                            let tags = Array(rec.tags.prefix(3))
-                            if !tags.isEmpty { self?.tagsByPath[path] = tags }
+                    for await (e, outcome) in group {
+                        switch outcome {
+                        case .success(let r):
+                            await index.setAI(path: e.id, size: e.size, mtime: e.modified, tags: r.tags, description: r.description)
+                            await MainActor.run { [weak self] in
+                                if !r.tags.isEmpty { self?.tagsByPath[e.id] = Array(r.tags.prefix(3)) }
+                                self?.aiDonePaths.insert(e.id)
+                            }
+                        case .failure(let err):
+                            if Self.isFatalAIError(err) { fatal = (err as? LocalizedError)?.errorDescription ?? "\(err)" }
                         }
-                    }
-                }
-                i += width
-            }
-
-            // Cheap GPS backfill (header-only, no Vision) for photos analyzed
-            // before GPS support, so coverage reflects the whole library.
-            let todoIDs = Set(todo.map(\.id))
-            var gpsTodo: [LibraryEntry] = []
-            for e in primaries where !todoIDs.contains(e.id) {
-                if await index.needsGPSCheck(path: e.id) { gpsTodo.append(e) }
-            }
-            await MainActor.run { [weak self] in self?.analyzeTotal += gpsTodo.count }
-            var g = 0
-            while g < gpsTodo.count {
-                if Task.isCancelled { break }
-                let batch = Array(gpsTodo[g..<min(g + width, gpsTodo.count)])
-                await withTaskGroup(of: (String, GeoPoint?).self) { group in
-                    for e in batch { group.addTask { (e.id, analyzer.gpsOnly(url: e.url)) } }
-                    for await (path, geo) in group {
-                        await index.setGPS(path: path, location: geo)
                         await MainActor.run { [weak self] in self?.analyzeDone += 1 }
                     }
                 }
-                g += width
+                await index.save()
+                i += width
             }
-
             await index.save()
-            let stats = await index.geoStats(underPrefix: root.path)
             guard let self else { return }
             await MainActor.run {
-                // Ignore a stale task that a newer Analyze run superseded.
                 guard self.analyzeEpoch == epoch else { return }
                 self.analyzing = false
-                self.geoWithGPS = stats.withGPS
-                self.geoChecked = stats.checked
+                self.analyzeError = fatal
                 self.refreshSuggestions()
                 if self.isSearching { self.runSearch() }
             }
+        }
+    }
+
+    /// Build an identifier from the current AI settings (provider, model, and — in API
+    /// mode — the key from the Keychain).
+    private func makeIdentifier() -> PhotoIdentifier {
+        let cfg = AppConfig.load()
+        let key = cfg.aiProvider == .api ? Keychain.get(service: Keychain.aiAPIKeyService) : nil
+        return PhotoIdentifier(provider: cfg.aiProvider, apiKey: key, model: cfg.aiModel)
+    }
+
+    private static func isFatalAIError(_ err: Error) -> Bool {
+        guard let e = err as? PhotoIdentifier.IDError else { return false }
+        switch e {
+        case .cliNotFound, .noAPIKey: return true
+        case .apiError(let m):
+            let l = m.lowercased()
+            return l.contains("authentication") || l.contains("api key") || l.contains("401") || l.contains("invalid")
+        default: return false
         }
     }
 
@@ -943,6 +947,27 @@ final class LibraryModel {
             }.value
             self.entries = result
             self.loading = false
+            self.loadTagOverlays(for: result)
+        }
+    }
+
+    /// Populate tile tag overlays + the "deep analyzed" badge from the index for the
+    /// photos now on screen — so analysis results show up on browse, not only right
+    /// after an Analyze run. Fixes results appearing to vanish on revisit.
+    private func loadTagOverlays(for entries: [LibraryEntry]) {
+        let paths = entries.map(\.id)
+        guard !paths.isEmpty else { return }
+        let index = photoIndex
+        Task { [weak self] in
+            let recs = await index.records(forPaths: paths)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                for (p, r) in recs {
+                    let tags = Array(r.tags.prefix(3))
+                    if !tags.isEmpty { self.tagsByPath[p] = tags }
+                    if r.aiDescription != nil { self.aiDonePaths.insert(p) }
+                }
+            }
         }
     }
 

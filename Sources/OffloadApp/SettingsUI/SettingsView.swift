@@ -10,6 +10,7 @@ struct SettingsView: View {
     // picked value is held here and only committed on confirm, so Cancel reverts.
     @State private var pendingThumbQuality: Int?
     @State private var confirmRecache = false
+    @State private var apiKey = ""   // mirrors the Keychain-stored Anthropic key
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -121,6 +122,25 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("AI photo analysis") {
+                Picker("Provider", selection: $settings.config.aiProvider) {
+                    ForEach(AIProvider.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                if settings.config.aiProvider == .api {
+                    SecureField("Anthropic API key", text: $apiKey)
+                        .onChange(of: apiKey) { _, v in
+                            let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if t.isEmpty { Keychain.delete(service: Keychain.aiAPIKeyService) }
+                            else { Keychain.set(t, service: Keychain.aiAPIKeyService) }
+                        }
+                    TextField("Model", text: $settings.config.aiModel, prompt: Text("claude-opus-4-8"))
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("Powers the viewer's “Identify” and the library “Analyze”. **CLI** uses your logged-in Claude session (no key, no extra billing). **API** uses your Anthropic key and is billed to your account. Your key is stored in the macOS Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Notifications") {
                 Toggle("Card detected", isOn: $settings.config.notifyCardDetected)
                 Toggle("Transfer complete (safe to remove)", isOn: $settings.config.notifyComplete)
@@ -153,7 +173,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 480)
         .frame(minHeight: 560)
-        .onAppear { app.refreshNASGlance() }
+        .onAppear { app.refreshNASGlance(); apiKey = Keychain.get(service: Keychain.aiAPIKeyService) ?? "" }
         .confirmationDialog("Rebuild thumbnails?", isPresented: $confirmRecache, presenting: pendingThumbQuality) { newQ in
             Button("Rebuild at \(ThumbnailQuality(rawValue: newQ)?.label ?? "New") quality") {
                 thumbQuality = newQ                       // commit the change

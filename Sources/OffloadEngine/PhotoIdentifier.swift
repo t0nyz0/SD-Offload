@@ -2,6 +2,7 @@ import Foundation
 import ImageIO
 import CoreGraphics
 import UniformTypeIdentifiers
+import OffloadCore
 
 /// Fine-grained photo identification via the local `claude` CLI (Claude Code). Uses
 /// your logged-in Claude session — no API key, no metered billing — the same way you
@@ -21,20 +22,32 @@ public struct PhotoIdentifier: Sendable {
         case cliFailed(String)
         case unparseable(String)
         case timedOut
+        case noAPIKey
+        case apiError(String)
         public var errorDescription: String? {
             switch self {
-            case .cliNotFound: return "Couldn't find the `claude` CLI. Install Claude Code and sign in, then try again."
+            case .cliNotFound: return "Couldn't find the `claude` CLI. Install Claude Code and sign in, or switch to API mode in Settings."
             case .previewFailed: return "Couldn't read the photo to analyze."
             case .cliFailed(let m): return "Claude couldn't analyze the photo: \(m)"
             case .unparseable(let m): return "Claude's answer wasn't in the expected form: \(m)"
             case .timedOut: return "Analysis timed out. Try again."
+            case .noAPIKey: return "No Anthropic API key set. Add one in Settings → AI, or switch to CLI mode."
+            case .apiError(let m): return "Anthropic API error: \(m)"
             }
         }
     }
 
+    let provider: AIProvider
+    let apiKey: String?
+    let model: String
     let binaryPath: String?
     let timeout: TimeInterval
-    public init(binaryPath: String? = nil, timeout: TimeInterval = 90) {
+    public init(provider: AIProvider = .cli, apiKey: String? = nil, model: String = "",
+                binaryPath: String? = nil, timeout: TimeInterval = 90) {
+        self.provider = provider
+        let k = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.apiKey = (k?.isEmpty == false) ? k : nil
+        self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let t = binaryPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.binaryPath = (t?.isEmpty == false) ? t : nil
         self.timeout = timeout
@@ -53,12 +66,58 @@ public struct PhotoIdentifier: Sendable {
     public func identify(imageURL: URL) async throws -> Identification {
         let temp = try Self.makeTempPreview(imageURL)
         defer { try? FileManager.default.removeItem(at: temp) }
+        let text: String
+        switch provider {
+        case .cli: text = try await identifyViaCLI(temp)
+        case .api: text = try await identifyViaAPI(temp)
+        }
+        return try Self.parse(text)
+    }
+
+    private func identifyViaCLI(_ temp: URL) async throws -> String {
         let exe = try resolveBinary()
         let full = Self.prompt + "\n\nRead the image at this absolute path with your Read tool, then answer: \(temp.path)"
         let dir = temp.deletingLastPathComponent().path
         let args = ["-p", full, "--output-format", "text", "--add-dir", dir, "--allowedTools", "Read"]
-        let out = try await runWithTimeout(exe, args)
-        return try Self.parse(out)
+        return try await runWithTimeout(exe, args)
+    }
+
+    /// Anthropic Messages API with an inline base64 image. Raw HTTP (no SDK) — one
+    /// request, plain JSON. Uses the user's own key; model defaults to Opus 4.8.
+    private func identifyViaAPI(_ temp: URL) async throws -> String {
+        guard let key = apiKey else { throw IDError.noAPIKey }
+        let b64 = try Data(contentsOf: temp).base64EncodedString()
+        let mdl = model.isEmpty ? "claude-opus-4-8" : model
+        let body: [String: Any] = [
+            "model": mdl,
+            "max_tokens": 500,
+            "messages": [[
+                "role": "user",
+                "content": [
+                    ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": b64]],
+                    ["type": "text", "text": Self.prompt],
+                ],
+            ]],
+        ]
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = timeout
+        req.setValue(key, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw IDError.apiError("no response") }
+        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard http.statusCode == 200 else {
+            let msg = ((obj?["error"] as? [String: Any])?["message"] as? String) ?? "HTTP \(http.statusCode)"
+            throw IDError.apiError(msg)
+        }
+        let content = obj?["content"] as? [[String: Any]] ?? []
+        let text = content.compactMap { ($0["type"] as? String) == "text" ? $0["text"] as? String : nil }.joined()
+        guard !text.isEmpty else { throw IDError.apiError("empty response") }
+        return text
     }
 
     // MARK: - Downsize (cheap to read + send; plenty for identification)

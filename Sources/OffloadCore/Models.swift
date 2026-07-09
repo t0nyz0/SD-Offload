@@ -12,6 +12,13 @@ public enum CardPolicy: String, Codable, Sendable {
     case alwaysIngest, ask, ignore
 }
 
+/// How AI photo analysis reaches Claude. `cli`: the local, logged-in `claude` CLI
+/// (uses your Claude session, no key). `api`: the Anthropic API with your own key.
+public enum AIProvider: String, Codable, Sendable, CaseIterable {
+    case cli, api
+    public var label: String { self == .cli ? "Claude CLI (your session)" : "Anthropic API (your key)" }
+}
+
 public enum IngestScope: String, Codable, Sendable {
     case mediaRootsOnly   // DCIM, PRIVATE, AVCHD, CLIP, MP_ROOT
     case wholeCard
