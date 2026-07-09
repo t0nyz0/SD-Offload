@@ -5,6 +5,33 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-09
+
+### Added
+- **AI photo identification.** Real, specific recognition — species, models, scene
+  types — where the on-device classifier only ever said "structure" or "plant".
+  - In the viewer's Info panel, **Identify with AI** describes the photo and adds
+    specific tags (e.g. *marble queen pothos, wood slat wall panel*).
+  - The library **Analyze** button is now AI-powered: at a folder it asks **scan all
+    vs the selected photos**, warns it uses your Claude usage, then runs in the
+    background (cancellable, skips already-analyzed, saves as it goes).
+  - **Settings → AI**: choose **Claude CLI** (your logged-in session, no key) or the
+    **Anthropic API** (your key, stored in the Keychain) + an optional model.
+  - AI tags fold into search + the "In your library" chips (specific tags first), and
+    a **sparkles badge** marks photos that have a deep analysis.
+- **Photo count + size on folder cards**, and **per-file sizes** (JPG and RAW listed
+  separately) on photo tiles.
+
+### Changed
+- **Richer histogram** in the viewer: a luminance curve, tone-zone gridlines, a
+  mean-tone marker, and bright edge bars when highlights/shadows clip, plus an
+  always-on clip readout.
+- **Dropped the local Vision tagging** (it could only produce generic labels).
+
+### Fixed
+- AI results no longer appear to vanish on revisit — browsing a folder reloads the
+  saved tags + analysis state from the index.
+
 ## [1.4.1] — 2026-07-08
 
 ### Changed
