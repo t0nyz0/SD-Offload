@@ -2,6 +2,21 @@ import SwiftUI
 import AppKit
 import OffloadCore
 
+private enum LibraryLayout {
+    /// Cap the content column so header, search, and the card grid share one column
+    /// that stays centered and readable instead of stranding a few cards in the
+    /// top-left of a very wide window.
+    static let contentMaxWidth: CGFloat = 1160
+}
+
+private extension View {
+    /// Cap this piece of Library content to the shared column width and center it.
+    func libraryColumn() -> some View {
+        frame(maxWidth: LibraryLayout.contentMaxWidth)
+            .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
 /// Browse the NAS (and an inserted card) at a glance: storage gauge, live photo
 /// count, and a date-folder thumbnail grid.
 struct LibraryWindow: View {
@@ -116,7 +131,7 @@ struct LibraryWindow: View {
             }
         } detail: {
             VStack(spacing: 0) {
-                LibraryHeader(model: model)
+                LibraryHeader(model: model).libraryColumn()
                 if model.source == .favorites {
                     Divider()
                     FavoritesTimeline(model: model, openViewer: { openInViewer($0, model) })
@@ -124,11 +139,12 @@ struct LibraryWindow: View {
                     Divider()
                     FacesGallery(model: model)
                 } else {
-                    SearchBar(model: model)
+                    SearchBar(model: model).libraryColumn()
                     if let label = model.faceFilterLabel {
                         FilterChip(label: label, count: model.photoItems.count) { model.clearFaceFilter() }
+                            .libraryColumn()
                     } else if !model.isSearching && !model.suggestions.isEmpty {
-                        SuggestionChips(model: model)
+                        SuggestionChips(model: model).libraryColumn()
                     }
                     Divider()
                     LibraryGrid(model: model, openViewer: { openInViewer($0, model) })
@@ -615,7 +631,7 @@ private struct LibraryGrid: View {
     }
     // Folders get their own, larger tiles so a date hierarchy is easy to scan.
     private var folderColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 220, maximum: 300), spacing: 14)]
+        [GridItem(.adaptive(minimum: 250, maximum: 330), spacing: 16)]
     }
 
     private var canDelete: Bool { model.source == .nas }
@@ -723,6 +739,7 @@ private struct LibraryGrid: View {
                     }
                 }
                 .padding(DS.Space.l)
+                .libraryColumn()   // cap + center so it doesn't sprawl on a wide window
             }
         }
         .onExitCommand { model.clearSelection() }
