@@ -668,13 +668,13 @@ final class LibraryModel {
 
     // MARK: - AI analysis
 
-    /// Count of photos under the current root not yet deep-analyzed (for the confirm
-    /// prompt). Best-effort/quick — the actual run re-checks per photo.
+    /// Deep-analyze every photo in the CURRENT folder (recursively, so a month/year
+    /// view covers what's inside) — not the whole library.
     func aiAnalyzeAll() {
-        guard let root = rootURL else { return }
+        guard let dir = currentDir else { return }
         let browser = self.browser
         Task { [weak self] in
-            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
+            let media = await Task.detached(priority: .utility) { browser.allMedia(root: dir) }.value
             let primaries = Self.primaryEntries(media)
             await MainActor.run { self?.startAIAnalysis(primaries) }
         }
