@@ -5,6 +5,18 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-07-08
+
+### Changed
+- **Library grid fills the window width.** Bigger folder cards, and the content grows
+  more columns as you widen the window instead of stranding a few cards or leaving
+  empty side margins.
+- **Sharper thumbnails.** Tiles now request a thumbnail scaled to their display size
+  (so a large tile no longer upscales a fixed small one), and at High/Maximum quality
+  NAS thumbnails fully decode the photo — skipping the tiny embedded JPEG thumbnail
+  that made them look soft. RAW keeps using its (already large) embedded preview to
+  avoid pulling whole RAW files per tile. Fast/Balanced stay quick over the NAS.
+
 ## [1.4.0] — 2026-07-08
 
 ### Added
