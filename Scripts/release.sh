@@ -14,11 +14,25 @@ bash Scripts/build-app.sh
 
 APP="build/SD Offload.app"
 ZIP="build/SD-Offload-$VERSION.zip"
+DMG="build/SD-Offload-$VERSION.dmg"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
+# Also build a drag-to-Applications .dmg (the friendlier download). A staging dir
+# holds the app + an /Applications alias, compressed into a read-only image.
+rm -f "$DMG"
+STAGING="$(mktemp -d)"
+cp -R "$APP" "$STAGING/"
+ln -s /Applications "$STAGING/Applications"
+hdiutil create -volname "SD Offload" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$STAGING"
+
 echo
-echo "==> packaged $ZIP"
-echo "    version: $VERSION"
-echo "    size:    $(du -h "$ZIP" | cut -f1 | tr -d ' ')"
-echo "    sha256:  $(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+echo "==> packaged for release $VERSION"
+for F in "$DMG" "$ZIP"; do
+    echo "    $F"
+    echo "      size:   $(du -h "$F" | cut -f1 | tr -d ' ')"
+    echo "      sha256: $(shasum -a 256 "$F" | cut -d' ' -f1)"
+done
+echo
+echo "    gh release create v$VERSION \"$DMG\" \"$ZIP\" --title \"SD Offload $VERSION\" --notes-file <notes>"
