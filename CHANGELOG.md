@@ -5,6 +5,23 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-07-08
+
+### Added
+- **Photo count and size on folder cards.** Each date-folder card in the Library now
+  shows how many photos it holds and its total size, loaded lazily and cached so it
+  doesn't slow down browsing.
+
+### Changed
+- **Changing thumbnail quality now rebuilds the cache — with a heads-up.** Picking a
+  new quality asks to confirm ("Rebuild at <quality>?"), then clears the old cached
+  thumbnails so photos regenerate at the new quality (the ones on screen update right
+  away, the rest as you browse) instead of the setting only affecting new thumbnails.
+
+### Note
+- The Library already has a **Refresh** button (the ↻ icon in the header, ⌘R) that
+  re-scans the current folder from the NAS and recounts the library.
+
 ## [1.3.0] — 2026-07-08
 
 ### Changed

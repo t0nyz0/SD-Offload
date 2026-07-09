@@ -949,6 +949,7 @@ private struct FolderTile: View {
     let rootPath: String?
     @State private var thumbs: [NSImage] = []
     @State private var loaded = false
+    @State private var stats: FolderStats?
 
     private var entry: LibraryEntry { item.primary }
     private var caption: DateFolders.Caption {
@@ -997,6 +998,9 @@ private struct FolderTile: View {
             thumbs = await FolderPreviewLoader.shared.preview(folder: entry.url, mtime: entry.modified)
             loaded = true
         }
+        .task(id: "\(entry.id)#stats") {
+            stats = await FolderStatsLoader.shared.stats(folder: entry.url, mtime: entry.modified)
+        }
     }
 
     @ViewBuilder private var collage: some View {
@@ -1030,7 +1034,17 @@ private struct FolderTile: View {
                     Text(sub).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
+            if let stats {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(stats.count) \(stats.count == 1 ? "photo" : "photos")")
+                        .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    Text(Fmt.bytes(stats.bytes))
+                        .font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit()
+                }
+                .lineLimit(1)
+                .fixedSize()
+            }
             Image(systemName: "chevron.right")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.tertiary)

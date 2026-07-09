@@ -91,6 +91,21 @@ final class ThumbnailLoader: @unchecked Sendable {
         Task.detached(priority: .background) { Self.trimCache(dir, maxBytes: 500 << 20) }
     }
 
+    /// Drop every cached thumbnail — the in-memory bitmaps and the on-disk JPEGs —
+    /// so thumbnails regenerate at the current quality. Called when the user changes
+    /// thumbnail quality. Cheap: clearing memory is instant and deleting the cache
+    /// files is a quick local operation; the (bounded, lazy) regeneration happens as
+    /// tiles come on screen, so it never storms the NAS.
+    func clearCaches() {
+        mem.removeAllObjects()
+        let dir = cacheDir
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+            for url in items { try? fm.removeItem(at: url) }
+        }
+    }
+
     /// Evict the oldest on-disk thumbnails so the cache can't grow forever.
     private static func trimCache(_ dir: URL, maxBytes: Int64) {
         let fm = FileManager.default

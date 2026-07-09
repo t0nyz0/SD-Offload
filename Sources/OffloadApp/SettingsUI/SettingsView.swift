@@ -6,6 +6,10 @@ import OffloadEngine
 struct SettingsView: View {
     @Environment(AppState.self) private var app
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQuality = ThumbnailQuality.defaultQuality.rawValue
+    // Changing quality is confirmed first (it rebuilds the thumbnail cache); the
+    // picked value is held here and only committed on confirm, so Cancel reverts.
+    @State private var pendingThumbQuality: Int?
+    @State private var confirmRecache = false
 
     var body: some View {
         @Bindable var settings = app.settings
@@ -99,13 +103,20 @@ struct SettingsView: View {
             }
 
             Section("Library") {
-                Picker("Thumbnail quality", selection: $thumbQuality) {
+                Picker("Thumbnail quality", selection: Binding(
+                    get: { thumbQuality },
+                    set: { newValue in
+                        guard newValue != thumbQuality else { return }
+                        pendingThumbQuality = newValue        // hold; commit in the confirm dialog
+                        confirmRecache = true
+                    }
+                )) {
                     ForEach(ThumbnailQuality.allCases, id: \.rawValue) { q in
                         Text(q.label).tag(q.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Higher quality decodes the full photo for sharper thumbnails; lower is faster, especially over a slow NAS connection. Applies to newly generated thumbnails.")
+                Text("Higher quality decodes the full photo for sharper thumbnails; lower is faster, especially over a slow NAS connection. Changing this rebuilds the thumbnail cache.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -143,6 +154,15 @@ struct SettingsView: View {
         .frame(width: 480)
         .frame(minHeight: 560)
         .onAppear { app.refreshNASGlance() }
+        .confirmationDialog("Rebuild thumbnails?", isPresented: $confirmRecache, presenting: pendingThumbQuality) { newQ in
+            Button("Rebuild at \(ThumbnailQuality(rawValue: newQ)?.label ?? "New") quality") {
+                thumbQuality = newQ                       // commit the change
+                ThumbnailLoader.shared.clearCaches()      // regenerate at the new quality
+            }
+            Button("Cancel", role: .cancel) { pendingThumbQuality = nil }
+        } message: { newQ in
+            Text("Existing thumbnails are cleared and rebuilt at \(ThumbnailQuality(rawValue: newQ)?.label ?? "the new") quality. Photos you're viewing update right away; the rest rebuild as you browse. For a large library over the NAS this can take a while.")
+        }
     }
 
     private func pickFolder(_ apply: @escaping (String) -> Void) {
