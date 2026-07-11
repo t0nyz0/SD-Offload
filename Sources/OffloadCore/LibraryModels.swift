@@ -100,3 +100,15 @@ public struct LibraryIndex: Codable, Sendable {
         try? FileManager.default.removeItem(at: Paths.libraryIndexFile)
     }
 }
+
+/// A culling verdict flag: keep (pick) or throw away (reject).
+public enum PhotoFlag: String, Codable, Sendable { case pick, reject }
+
+/// Persisted culling state, keyed by the shown photo's absolute path.
+public struct CullData: Codable, Sendable {
+    public var ratings: [String: Int]        // 0…5 (0 / absent = unrated)
+    public var flags: [String: PhotoFlag]
+    public init(ratings: [String: Int] = [:], flags: [String: PhotoFlag] = [:]) {
+        self.ratings = ratings; self.flags = flags
+    }
+}

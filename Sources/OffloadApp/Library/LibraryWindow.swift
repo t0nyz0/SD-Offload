@@ -445,6 +445,8 @@ private struct SearchBar: View {
             .keyboardShortcut("r", modifiers: .command)
             .help("Refresh — re-scan this folder and recount the library (⌘R)")
 
+            viewMenu
+
             if model.analyzing {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small).scaleEffect(0.8)
@@ -528,6 +530,49 @@ private struct SearchBar: View {
                 onCancel: { showFacesConsent = false })
         }
     }
+
+    // Sort + cull filters, plus the "delete all rejected" payoff of the culling flow.
+    @State private var confirmDeleteRejected = false
+    private var viewMenu: some View {
+        Menu {
+            Picker("Sort by", selection: $model.sortOrder) {
+                ForEach(SortOrder.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            Divider()
+            Menu("Filter by rating") {
+                Button("All") { model.minRating = 0 }
+                ForEach(1...5, id: \.self) { n in
+                    Button("\(String(repeating: "★", count: n)) & up") { model.minRating = n }
+                }
+            }
+            Picker("Flag", selection: $model.flagFilter) {
+                ForEach(FlagFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+            if model.source == .nas {
+                let rejected = model.rejectedInFolder.count
+                if rejected > 0 {
+                    Divider()
+                    Button(role: .destructive) { confirmDeleteRejected = true } label: {
+                        Label("Delete \(rejected) rejected…", systemImage: "trash")
+                    }
+                }
+            }
+        } label: {
+            Label("View", systemImage: cullActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Sort and filter — including by star rating and pick/reject flags.")
+        .confirmationDialog("Delete rejected photos?", isPresented: $confirmDeleteRejected, titleVisibility: .visible) {
+            Button("Delete \(model.rejectedInFolder.count) Rejected", role: .destructive) {
+                Task { await model.deleteRejected() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Permanently deletes every photo you flagged Reject in this folder (with their RAW/sidecar files) from your NAS. This can't be undone.")
+        }
+    }
+    private var cullActive: Bool { model.minRating > 0 || model.flagFilter != .all || model.sortOrder != .nameAsc }
 
     private func startFindFaces() {
         if facesConsented { model.findFaces() } else { showFacesConsent = true }
@@ -682,6 +727,19 @@ private struct LibraryGrid: View {
         HStack(spacing: DS.Space.m) {
             Text("\(model.selectedCount) selected")
                 .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+            // Rate / flag the whole selection at once.
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { n in
+                    Button { model.rateSelection(n) } label: {
+                        Image(systemName: "star").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain).help("\(n) star\(n == 1 ? "" : "s")")
+                }
+            }
+            Button { model.flagSelection(.pick) } label: { Image(systemName: "flag") }
+                .buttonStyle(.plain).help("Pick").foregroundStyle(.green)
+            Button { model.flagSelection(.reject) } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).help("Reject").foregroundStyle(.red)
             Spacer()
             Button("Select All") { model.selectAllPhotos() }
                 .controlSize(.small)
@@ -729,6 +787,7 @@ private struct LibraryGrid: View {
                                             isLocal: model.source == .card,
                                             isFavorite: model.isFavorite(item.primary.id),
                                             analyzed: model.aiDonePaths.contains(item.primary.id),
+                                            rating: model.rating(for: item), flag: model.flag(for: item),
                                             side: thumbSide)
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
@@ -783,6 +842,19 @@ private struct LibraryGrid: View {
             Button(model.isFavorite(item.primary.id) ? "Remove from Favorites" : "Add to Favorites") {
                 model.toggleFavorite(item)
             }
+            Divider()
+            Menu("Rating") {
+                Button("None") { model.setRating(0, for: item) }
+                ForEach(1...5, id: \.self) { n in
+                    Button(String(repeating: "★", count: n)) { model.setRating(n, for: item) }
+                }
+            }
+            Button(model.flag(for: item) == .pick ? "Clear Pick" : "Pick", systemImage: "flag") {
+                model.toggleFlag(.pick, for: item)
+            }
+            Button(model.flag(for: item) == .reject ? "Clear Reject" : "Reject", systemImage: "xmark") {
+                model.toggleFlag(.reject, for: item)
+            }
             // Delete manages the NAS archive only — never the card (its originals
             // are protected until the verified offload wipes them).
             if model.source == .nas {
@@ -828,15 +900,17 @@ struct LibraryTile: View {
     var isLocal: Bool = false
     var isFavorite: Bool = false
     var analyzed: Bool = false       // has a deep (AI) analysis → shows a sparkles badge
+    var rating: Int = 0              // 0…5 star rating
+    var flag: PhotoFlag? = nil       // pick / reject
     var side: CGFloat = 220          // requested thumbnail size — scales with the tile
     @State private var thumb: NSImage?
     @State private var exif: ExifInfo?
     @AppStorage(ThumbnailQuality.storageKey) private var thumbQualityRaw = ThumbnailQuality.defaultQuality.rawValue
 
     init(item: DisplayItem, tags: [String] = [], selected: Bool = false, isLocal: Bool = false,
-         isFavorite: Bool = false, analyzed: Bool = false, side: CGFloat = 220) {
+         isFavorite: Bool = false, analyzed: Bool = false, rating: Int = 0, flag: PhotoFlag? = nil, side: CGFloat = 220) {
         self.item = item; self.tags = tags; self.selected = selected; self.isLocal = isLocal
-        self.isFavorite = isFavorite; self.analyzed = analyzed; self.side = side
+        self.isFavorite = isFavorite; self.analyzed = analyzed; self.rating = rating; self.flag = flag; self.side = side
         // Seed from the warm in-memory cache so a reopened / scrolled-back tile paints
         // its cached bitmap on the first frame instead of flashing the placeholder.
         let warm = item.isFolder ? nil : ThumbnailLoader.shared.cached(
@@ -868,6 +942,7 @@ struct LibraryTile: View {
                         Image(nsImage: thumb)
                             .resizable()
                             .scaledToFill()
+                            .opacity(flag == .reject ? 0.4 : 1)   // rejected reads as dimmed
                     } else {
                         Image(systemName: placeholderSymbol)
                             .font(.system(size: 26))
@@ -897,6 +972,13 @@ struct LibraryTile: View {
                             .font(.system(size: 16))
                             .foregroundStyle(.white, Color.accentColor)
                             .padding(4)
+                    } else if let flag {
+                        Image(systemName: flag == .pick ? "flag.fill" : "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(flag == .pick ? Color.green : Color.red)
+                            .padding(4)
+                            .background(.black.opacity(0.45), in: Circle())
+                            .padding(4)
                     }
                 }
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.m)
@@ -908,6 +990,15 @@ struct LibraryTile: View {
                     .font(.system(size: 11))
                     .lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(.secondary)
+                if rating > 0 {
+                    HStack(spacing: 1) {
+                        ForEach(1...5, id: \.self) { i in
+                            Image(systemName: i <= rating ? "star.fill" : "star")
+                                .font(.system(size: 7))
+                                .foregroundStyle(i <= rating ? Color.yellow : .white.opacity(0.18))
+                        }
+                    }
+                }
                 if let info = infoLine {
                     Text(info)
                         .font(.system(size: 9))

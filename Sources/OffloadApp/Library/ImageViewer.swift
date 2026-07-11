@@ -15,6 +15,9 @@ struct ImageViewer: View {
     // Persisted + on by default, so the inspector stays open across photos and
     // launches until you close it.
     @AppStorage("offload.viewer.showInfo") private var showInfo = true
+    // Culling: after you rate or flag a photo, jump to the next one — the fast
+    // Lightroom-style flow. Persisted, on by default; toggled from the top bar.
+    @AppStorage("offload.viewer.autoAdvance") private var autoAdvance = true
     @State private var confirmingDelete = false
 
     private var current: DisplayItem? {
@@ -52,6 +55,11 @@ struct ImageViewer: View {
                 .padding(.top, 44)   // clear the top bar
 
                 topBar(item: item, position: i)
+
+                cullBar(item: item)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, DS.Space.l)
+                    .allowsHitTesting(true)
             }
             .background(shortcuts)
             .transition(.opacity)
@@ -113,6 +121,11 @@ struct ImageViewer: View {
             }
             .tint(model.isFavorite(item.primary.id) ? .pink : nil)
             .help("Favorite (F)")
+            Button { autoAdvance.toggle() } label: {
+                Label("Auto-advance", systemImage: autoAdvance ? "forward.fill" : "forward")
+            }
+            .tint(autoAdvance ? Color.accentColor : nil)
+            .help("Auto-advance to the next photo after you rate or flag it")
             Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
                 Label("Info", systemImage: "info.circle")
             }
@@ -140,6 +153,61 @@ struct ImageViewer: View {
         .foregroundStyle(.white)
     }
 
+    // Floating rating + flag strip: the primary culling surface. Click a star to
+    // rate (click the current rating again to clear), or Pick/Reject. Keyboard 0–5,
+    // P, X do the same. Reject dims the photo; picks read green.
+    private func cullBar(item: DisplayItem) -> some View {
+        let stars = model.rating(for: item)
+        let flag = model.flag(for: item)
+        return HStack(spacing: DS.Space.m) {
+            HStack(spacing: 3) {
+                ForEach(1...5, id: \.self) { n in
+                    Button { rate(n == stars ? 0 : n, for: item) } label: {
+                        Image(systemName: n <= stars ? "star.fill" : "star")
+                            .font(.system(size: 15))
+                            .foregroundStyle(n <= stars ? Color.yellow : .white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(n) star\(n == 1 ? "" : "s") (\(n))")
+                }
+            }
+            Divider().frame(height: 18).overlay(.white.opacity(0.2))
+            Button { setFlag(.pick, for: item) } label: {
+                Label("Pick", systemImage: "flag.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 14))
+                    .foregroundStyle(flag == .pick ? Color.green : .white.opacity(0.45))
+            }
+            .buttonStyle(.plain).help("Pick (P)")
+            Button { setFlag(.reject, for: item) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(flag == .reject ? Color.red : .white.opacity(0.45))
+            }
+            .buttonStyle(.plain).help("Reject (X)")
+        }
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.1)))
+    }
+
+    private func rate(_ n: Int, for item: DisplayItem) {
+        model.setRating(n, for: item)
+        if autoAdvance && n > 0 { advanceAfterCull() }
+    }
+    private func setFlag(_ f: PhotoFlag, for item: DisplayItem) {
+        let wasSet = model.flag(for: item) == f
+        model.toggleFlag(f, for: item)
+        if autoAdvance && !wasSet { advanceAfterCull() }
+    }
+    // Advance to the next photo, but stop at the end rather than wrapping or closing —
+    // culling shouldn't dump you out of the viewer.
+    private func advanceAfterCull() {
+        guard let i = index, i < items.count - 1 else { return }
+        step(1)
+    }
+
     private func navButton(_ symbol: String, enabled: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -165,6 +233,15 @@ struct ImageViewer: View {
                 .keyboardShortcut(.delete, modifiers: [])
             Button("") { if let c = current { model.toggleFavorite(c) } }
                 .keyboardShortcut("f", modifiers: [])
+            // Culling keys: 0–5 rate, P pick, X reject (Lightroom-style).
+            ForEach(0...5, id: \.self) { n in
+                Button("") { if let c = current { rate(n, for: c) } }
+                    .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: [])
+            }
+            Button("") { if let c = current { setFlag(.pick, for: c) } }
+                .keyboardShortcut("p", modifiers: [])
+            Button("") { if let c = current { setFlag(.reject, for: c) } }
+                .keyboardShortcut("x", modifiers: [])
         }
         .opacity(0)
     }

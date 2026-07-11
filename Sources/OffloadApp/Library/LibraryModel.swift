@@ -6,6 +6,26 @@ import OffloadEngine
 /// Which parts of a RAW+JPEG item a delete should remove.
 enum DeleteScope: Sendable { case all, rawOnly, jpegOnly }
 
+/// Grid sort order (culling).
+enum SortOrder: String, CaseIterable, Sendable {
+    case nameAsc, nameDesc, dateNewest, dateOldest, sizeDesc, ratingDesc
+    var label: String {
+        switch self {
+        case .nameAsc: "Name (A–Z)"; case .nameDesc: "Name (Z–A)"
+        case .dateNewest: "Newest first"; case .dateOldest: "Oldest first"
+        case .sizeDesc: "Largest first"; case .ratingDesc: "Highest rated"
+        }
+    }
+}
+
+/// Grid flag filter (culling).
+enum FlagFilter: String, CaseIterable, Sendable {
+    case all, picks, unrejected
+    var label: String {
+        switch self { case .all: "All"; case .picks: "Picks only"; case .unrejected: "Hide rejected" }
+    }
+}
+
 /// One tile in the grid. A RAW+JPEG pair collapses into a single item: the JPEG
 /// is shown, the RAW rides along (openable via right-click, deleted with it).
 struct DisplayItem: Identifiable, Sendable {
@@ -62,6 +82,14 @@ final class LibraryModel {
     // date-sorted photos shown in the Favorites timeline.
     private(set) var favoritePaths: Set<String> = []
     private(set) var favoriteItems: [DisplayItem] = []
+
+    // Culling: per-photo star ratings + pick/reject flags (persisted), plus the
+    // current sort + filter for the grid.
+    private(set) var ratings: [String: Int] = [:]      // path → 1…5
+    private(set) var flags: [String: PhotoFlag] = [:]  // path → pick/reject
+    var sortOrder: SortOrder = .nameAsc { didSet { if sortOrder != oldValue { rebuildDisplayed() } } }
+    var minRating: Int = 0 { didSet { if minRating != oldValue { rebuildDisplayed() } } }
+    var flagFilter: FlagFilter = .all { didSet { if flagFilter != oldValue { rebuildDisplayed() } } }
     // Pinned folders (absolute paths, ordered) shown in the sidebar for quick access.
     private(set) var pinnedFolders: [String] = []
     // Per-identity photo counts for the Faces gallery.
@@ -137,6 +165,9 @@ final class LibraryModel {
         self.hasCard = cardRootPath != nil
         favoritePaths = Set(JSONIO.loadGuarded([String].self, from: Paths.favoritesFile) ?? [])
         pinnedFolders = JSONIO.loadGuarded([String].self, from: Paths.pinnedFoldersFile) ?? []
+        let cull = JSONIO.loadGuarded(CullData.self, from: Paths.cullFile)
+        ratings = cull?.ratings ?? [:]
+        flags = cull?.flags ?? [:]
     }
 
     /// Whether a card is mounted. Stored (not computed off the @ObservationIgnored
@@ -223,6 +254,79 @@ final class LibraryModel {
     private func saveFavorites() {
         let arr = Array(favoritePaths)
         Task.detached(priority: .utility) { try? JSONIO.save(arr, to: Paths.favoritesFile) }
+    }
+
+    // MARK: - Culling (ratings + flags)
+
+    func rating(for item: DisplayItem) -> Int { ratings[item.primary.id] ?? 0 }
+    func flag(for item: DisplayItem) -> PhotoFlag? { flags[item.primary.id] }
+
+    /// Set a star rating (0 clears). If the active filter would now hide it, the grid
+    /// re-filters. Applies to the current selection if the item is part of it.
+    func setRating(_ stars: Int, for item: DisplayItem) {
+        let targets = selection.contains(item.id) && selection.count > 1
+            ? photoItems.filter { selection.contains($0.id) } : [item]
+        let clamped = max(0, min(5, stars))
+        for t in targets {
+            if clamped == 0 { ratings.removeValue(forKey: t.primary.id) } else { ratings[t.primary.id] = clamped }
+        }
+        saveCull()
+        if minRating > 0 { rebuildDisplayed() }
+    }
+
+    /// Toggle a pick/reject flag (tapping the same flag clears it).
+    func toggleFlag(_ flag: PhotoFlag, for item: DisplayItem) {
+        let targets = selection.contains(item.id) && selection.count > 1
+            ? photoItems.filter { selection.contains($0.id) } : [item]
+        // If any target lacks this flag, set it on all; else clear it on all.
+        let shouldSet = targets.contains { flags[$0.primary.id] != flag }
+        for t in targets {
+            if shouldSet { flags[t.primary.id] = flag } else { flags.removeValue(forKey: t.primary.id) }
+        }
+        saveCull()
+        if flagFilter != .all { rebuildDisplayed() }
+    }
+
+    /// Rejected photos in the current folder (ignores the active filter, so you can
+    /// still purge them even while "Hide rejected" is on).
+    var rejectedInFolder: [DisplayItem] {
+        Self.groupPhotos(displayedEntries.filter { !$0.isFolder }).filter { flags[$0.primary.id] == .reject }
+    }
+
+    func deleteRejected() async {
+        let rejected = rejectedInFolder
+        for item in rejected {
+            await delete(item, scope: .all)
+            flags.removeValue(forKey: item.primary.id)
+            ratings.removeValue(forKey: item.primary.id)
+        }
+        saveCull()
+    }
+
+    /// Apply a rating to the whole current selection (for the selection bar / grid).
+    func rateSelection(_ stars: Int) {
+        let targets = photoItems.filter { selection.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        let clamped = max(0, min(5, stars))
+        for t in targets {
+            if clamped == 0 { ratings.removeValue(forKey: t.primary.id) } else { ratings[t.primary.id] = clamped }
+        }
+        saveCull()
+        if minRating > 0 { rebuildDisplayed() }
+    }
+
+    func flagSelection(_ flag: PhotoFlag) {
+        let targets = photoItems.filter { selection.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        let shouldSet = targets.contains { flags[$0.primary.id] != flag }
+        for t in targets { if shouldSet { flags[t.primary.id] = flag } else { flags.removeValue(forKey: t.primary.id) } }
+        saveCull()
+        if flagFilter != .all { rebuildDisplayed() }
+    }
+
+    private func saveCull() {
+        let data = CullData(ratings: ratings, flags: flags)
+        Task.detached(priority: .utility) { try? JSONIO.save(data, to: Paths.cullFile) }
     }
 
     /// Capture date for timeline grouping — parsed from the YYYY/MM/DD folder path,
@@ -376,10 +480,34 @@ final class LibraryModel {
         for e in displayedEntries {
             if e.isFolder { folders.append(DisplayItem(folder: e)) } else { media.append(e) }
         }
-        let photos = Self.groupPhotos(media)
+        let photos = applySort(applyCullFilter(Self.groupPhotos(media)))
         folderItems = folders
         photoItems = photos
         displayedItems = folders + photos
+    }
+
+    private func applyCullFilter(_ items: [DisplayItem]) -> [DisplayItem] {
+        guard minRating > 0 || flagFilter != .all else { return items }
+        return items.filter { item in
+            let p = item.primary.id
+            if minRating > 0, (ratings[p] ?? 0) < minRating { return false }
+            switch flagFilter {
+            case .all: return true
+            case .picks: return flags[p] == .pick
+            case .unrejected: return flags[p] != .reject
+            }
+        }
+    }
+
+    private func applySort(_ items: [DisplayItem]) -> [DisplayItem] {
+        switch sortOrder {
+        case .nameAsc:  return items.sorted { $0.primary.name.localizedStandardCompare($1.primary.name) == .orderedAscending }
+        case .nameDesc: return items.sorted { $0.primary.name.localizedStandardCompare($1.primary.name) == .orderedDescending }
+        case .dateNewest: return items.sorted { $0.primary.modified > $1.primary.modified }
+        case .dateOldest: return items.sorted { $0.primary.modified < $1.primary.modified }
+        case .sizeDesc:   return items.sorted { $0.primary.size > $1.primary.size }
+        case .ratingDesc: return items.sorted { (ratings[$0.primary.id] ?? 0) > (ratings[$1.primary.id] ?? 0) }
+        }
     }
 
     /// Group a flat media list into photo DisplayItems (RAW+JPEG paired), preserving

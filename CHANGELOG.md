@@ -5,6 +5,25 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-07-11
+
+### Added — Culling workflow
+A Lightroom-style pass for picking keepers and clearing the rejects:
+
+- **Star ratings (0–5) and Pick / Reject flags** on every photo, saved to disk
+  (`cull.json`) and shown right on the tile — stars under the thumbnail, a green
+  Pick flag or red Reject mark in the corner, and rejected shots dimmed.
+- **The image viewer is the fast culling surface.** A floating rating + flag strip
+  sits at the bottom, and keyboard keys do it all: **0–5** to rate, **P** to pick,
+  **X** to reject, arrows to move. With **Auto-advance** on (default), rating or
+  flagging jumps you straight to the next photo, so you can rip through a shoot.
+- **Rate or flag a whole selection at once** from the selection bar, or a single
+  photo from its right-click menu.
+- **Sort** by name, date, size, or rating; **filter** to a minimum star rating and
+  to Picks / hide-Rejected — all from the new **View** menu in the toolbar.
+- **Delete all rejected** in one action (View menu) once you've flagged the throwaways
+  — with a confirmation, NAS-only, RAW + sidecars included.
+
 ## [1.5.2] — 2026-07-09
 
 ### Performance
