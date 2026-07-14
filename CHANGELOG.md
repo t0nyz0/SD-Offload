@@ -5,6 +5,18 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-07-14
+
+### Changed
+- **Settings redesigned.** The old page was a single ~10-section scroll —
+  wipe policy, staging, thumbnails, AI, notifications, sound, login all in one
+  column. Reorganized into a **macOS System Settings-style sidebar** with five
+  grouped panes: **General** (startup / sound / about), **Destination**
+  (NAS + optional second drive), **Card & Offload** (insert policy / files to
+  copy / wipe / staging / parallel workers / NAS prewarm), **Library**
+  (thumbnails + AI photo analysis), and **Notifications**. Window is wider so
+  each pane breathes.
+
 ## [1.6.1] — 2026-07-14
 
 ### Performance

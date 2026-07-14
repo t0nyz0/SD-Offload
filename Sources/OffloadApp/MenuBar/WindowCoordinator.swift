@@ -186,7 +186,7 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
         }
         let window = makeWindow(
             title: "SD Offload Settings",
-            size: NSSize(width: 480, height: 640),
+            size: NSSize(width: 760, height: 580),
             autosaveName: "OffloadSettingsWindow",
             content: SettingsView().environment(app)
         )
