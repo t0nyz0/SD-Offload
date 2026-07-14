@@ -38,7 +38,7 @@ final class FolderStatsLoader: @unchecked Sendable {
         let browser = self.browser
         let result: FolderStats = await Task.detached(priority: .utility) {
             var count = 0; var bytes: Int64 = 0
-            browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { c, b, _ in count = c; bytes = b }
+            browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { c, b in count = c; bytes = b }
             return FolderStats(count: count, bytes: bytes)
         }.value
         if Task.isCancelled { return nil }

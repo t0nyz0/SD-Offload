@@ -111,6 +111,35 @@ public actor FaceIndex {
         return (total, named, total - named)
     }
 
+    /// One-pass identity → photo-count map. Beats calling photos(withIdentity:)
+    /// per identity — the naive loop is O(identities · photos) with one actor
+    /// round-trip per identity; this is O(photos).
+    public func identityCounts(underPrefix prefix: String? = nil) -> [UUID: Int] {
+        var byID: [UUID: Set<String>] = [:]
+        for (path, dets) in byPath {
+            if let prefix, !Self.isUnder(path, prefix) { continue }
+            for d in dets where d.assignedID != nil {
+                byID[d.assignedID!, default: []].insert(path)
+            }
+        }
+        return byID.mapValues { $0.count }
+    }
+
+    /// Union of photos containing any of the given identities, in a single walk.
+    /// Replaces N sequential photos(withIdentity:) calls when filtering by a
+    /// whole kind ("all people" / "all pets").
+    public func photos(withIdentities ids: Set<UUID>, underPrefix prefix: String? = nil) -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+        var out = Set<String>()
+        for (path, dets) in byPath {
+            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if dets.contains(where: { $0.assignedID.map(ids.contains) ?? false }) {
+                out.insert(path)
+            }
+        }
+        return out
+    }
+
     private static func isUnder(_ path: String, _ prefix: String) -> Bool {
         if path == prefix { return true }
         let p = prefix.hasSuffix("/") ? prefix : prefix + "/"

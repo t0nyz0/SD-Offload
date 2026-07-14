@@ -93,7 +93,7 @@ struct NASGlanceRow: View {
     }
 
     private func nasSubtitle(_ g: NASGlance) -> String {
-        guard g.mounted else { return "Insert happens anyway — uploads queue until it returns" }
+        guard g.mounted else { return "You can still insert a card — uploads queue until it's back" }
         if let count = g.photoCount {
             var s = "\(count.formatted()) photos on the NAS"
             if let bytes = g.photoBytes { s += " · \(Fmt.bytes(bytes))" }

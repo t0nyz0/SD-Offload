@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 import OffloadCore
 import OffloadEngine
 
@@ -36,7 +37,7 @@ struct ImageViewer: View {
                 // the photo — the image fits into the width left of the panel.
                 HStack(spacing: 0) {
                     ZStack {
-                        ZoomableImage(url: item.primary.url)
+                        ZoomableImage(url: item.primary.url, mtime: item.primary.modified)
                             .id(item.id)
                         HStack {
                             navButton("chevron.left", enabled: i > 0) { step(-1) }
@@ -253,11 +254,42 @@ struct ImageViewer: View {
     }
 }
 
-/// Loads the full image off-main (NAS reads can be slow → spinner), then hands it to
-/// an AppKit-backed zoom/pan surface. The parent's `.id(item.id)` remounts this view
-/// per photo, so zoom/pan reset for free — we never carry state between photos.
+/// A tiny LRU of already-decoded full-resolution images, keyed by url + mtime.
+/// Culling a shoot with arrow keys used to re-fetch every JPEG from SMB and then
+/// re-decode it on the main thread on first draw — now the previous/next stay
+/// warm in memory and re-visiting is instant.
+@MainActor
+final class FullImageCache {
+    static let shared = FullImageCache()
+    private struct Key: Hashable { let path: String; let mtime: TimeInterval }
+    private var order: [Key] = []            // most-recent-last
+    private var store: [Key: NSImage] = [:]
+    private let capacity = 8
+
+    func get(url: URL, mtime: Date) -> NSImage? {
+        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate)
+        guard let img = store[k] else { return nil }
+        if let i = order.firstIndex(of: k) { order.remove(at: i); order.append(k) }
+        return img
+    }
+    func put(url: URL, mtime: Date, image: NSImage) {
+        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate)
+        if store[k] == nil { order.append(k); store[k] = image }
+        while order.count > capacity, let victim = order.first {
+            order.removeFirst(); store.removeValue(forKey: victim)
+        }
+    }
+    func clear() { order.removeAll(); store.removeAll() }
+}
+
+/// Loads the full image off-main and force-decodes it (NSImage(contentsOf:) is
+/// lazy — actual decode happens on the main thread the first time it draws,
+/// which stalls arrow-key nav). ImageIO with `kCGImageSourceShouldCacheImmediately`
+/// pushes the decode to the background task. Result is cached in FullImageCache
+/// so bouncing between photos doesn't re-fetch or re-decode.
 private struct ZoomableImage: View {
     let url: URL
+    let mtime: Date
     @State private var image: NSImage?
     @State private var failed = false
 
@@ -280,10 +312,30 @@ private struct ZoomableImage: View {
     }
 
     private func load() async {
+        if let cached = FullImageCache.shared.get(url: url, mtime: mtime) {
+            image = cached; failed = false
+            return
+        }
         image = nil; failed = false
         let u = url
-        let loaded = await Task.detached(priority: .userInitiated) { NSImage(contentsOf: u) }.value
-        if let loaded { image = loaded } else { failed = true }
+        let loaded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            // Force ImageIO to decode into a cached pixel buffer here — otherwise
+            // the first draw on the main thread does it and the UI stalls.
+            guard let src = CGImageSourceCreateWithURL(u as CFURL, nil) else { return nil }
+            let opts: CFDictionary = [
+                kCGImageSourceShouldCache: true,
+                kCGImageSourceShouldCacheImmediately: true,
+            ] as CFDictionary
+            guard let cg = CGImageSourceCreateImageAtIndex(src, 0, opts) else { return nil }
+            let size = NSSize(width: cg.width, height: cg.height)
+            return NSImage(cgImage: cg, size: size)
+        }.value
+        if let loaded {
+            image = loaded
+            FullImageCache.shared.put(url: url, mtime: mtime, image: loaded)
+        } else {
+            failed = true
+        }
     }
 }
 

@@ -119,15 +119,6 @@ final class LibraryModel {
     private(set) var suggestions: [(tag: String, count: Int)] = []
     private(set) var tagsByPath: [String: [String]] = [:]   // for tile overlays
 
-    // GPS coverage for the current root (populated after Analyze). Answers
-    // "how many of my photos even have location" before we build place-names.
-    private(set) var geoWithGPS = 0
-    private(set) var geoChecked = 0
-    var geoSummary: String? {
-        guard geoChecked > 0 else { return nil }
-        return "\(geoWithGPS.formatted()) of \(geoChecked.formatted()) photos have GPS"
-    }
-
     // Faces & pets (opt-in "Find Faces" pass; embeddings + names stay on this Mac).
     private(set) var findingFaces = false
     private(set) var facesDone = 0
@@ -379,11 +370,8 @@ final class LibraryModel {
         Task { [weak self] in
             guard let self else { return }
             await self.refreshFaceState()
-            var counts: [UUID: Int] = [:]
-            for idn in self.identities {
-                counts[idn.id] = await self.faceIndex.photos(withIdentity: idn.id).count
-            }
-            self.identityCounts = counts
+            // One pass over byPath, not one per identity.
+            self.identityCounts = await self.faceIndex.identityCounts()
         }
     }
 
@@ -704,14 +692,16 @@ final class LibraryModel {
         // Named people/pets whose name matches a query term (computed on the main
         // actor from the published list, then unioned into the content results).
         let terms = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
-        let namedMatches = identities
+        let namedMatches = Set(identities
             .filter { idn in terms.contains { idn.name.lowercased().contains($0) } }
-            .map(\.id)
+            .map(\.id))
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))   // debounce typing
             guard !Task.isCancelled else { return }
             var paths = await index.search(query, underPrefix: prefix)
-            for id in namedMatches { paths.formUnion(await faces.photos(withIdentity: id, underPrefix: prefix)) }
+            if !namedMatches.isEmpty {
+                paths.formUnion(await faces.photos(withIdentities: namedMatches, underPrefix: prefix))
+            }
             guard let self, !Task.isCancelled else { return }
             self.searchResults = await self.entries(forPaths: Array(paths))
         }
@@ -754,11 +744,9 @@ final class LibraryModel {
 
     /// Show every photo containing any named identity of a kind (all people / all pets).
     func filterByKind(_ kind: Identity.Kind) {
-        let ids = identities.filter { $0.kind == kind }.map(\.id)
+        let ids = Set(identities.filter { $0.kind == kind }.map(\.id))
         applyFaceFilter(label: kind == .pet ? "All pets" : "All people") { faces, prefix in
-            var paths = Set<String>()
-            for id in ids { paths.formUnion(await faces.photos(withIdentity: id, underPrefix: prefix)) }
-            return paths
+            await faces.photos(withIdentities: ids, underPrefix: prefix)
         }
     }
 
@@ -786,11 +774,8 @@ final class LibraryModel {
         let index = photoIndex
         Task { [weak self] in
             let tags = await index.topTags(underPrefix: prefix)
-            let stats = await index.geoStats(underPrefix: prefix)
             guard let self else { return }
             self.suggestions = tags
-            self.geoWithGPS = stats.withGPS
-            self.geoChecked = stats.checked
         }
     }
 
@@ -1144,7 +1129,7 @@ final class LibraryModel {
             // actor through a stream — no shared mutable state to race on.
             let stream = AsyncStream<(Int, Int64)> { continuation in
                 Task.detached(priority: .utility) {
-                    browser.countMedia(root: root, isCancelled: { Task.isCancelled }) { count, bytes, _ in
+                    browser.countMedia(root: root, isCancelled: { Task.isCancelled }) { count, bytes in
                         continuation.yield((count, bytes))
                     }
                     continuation.finish()

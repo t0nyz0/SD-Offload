@@ -5,6 +5,50 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-07-14
+
+### Performance
+- **Image viewer no longer stalls on paging.** `NSImage(contentsOf:)` is lazy —
+  actual JPEG decode was happening on the main thread the first time each photo
+  drew, which made arrow-key nav feel sticky. It now force-decodes in a
+  background task via `CGImageSourceCreateImageAtIndex` with
+  `kCGImageSourceShouldCacheImmediately`, and the last 8 decoded images stay in
+  memory so bouncing between recent photos is instant.
+- **Search doesn't rebuild the haystack per keystroke.** `PhotoIndex.search`
+  now caches the lowercased tag+filename haystack per record, invalidating only
+  on record mutation. First keystroke is unchanged; every keystroke after is
+  ~10× faster on a large library.
+- **Faces gallery loads in one pass.** `identityCounts` now walks `byPath`
+  once and tallies per identity (O(photos)) instead of a per-identity actor
+  round-trip that was O(identities × photos). "All people" / "All pets"
+  filters also go through a single-walk union.
+
+### Fixed
+- **History detail no longer lies about wiped-vs-kept.** The detail hard-coded
+  "Completed — card wiped and ejected" for every `.done` session, but the
+  ask-each-time "Keep contents" path also lands in `.done`. It now reads the
+  actual `WipeReport.ran` and says "card kept (contents untouched)" when the
+  user chose Keep.
+- **NAS-unmounted copy fixed** — was "Insert happens anyway…" (parses as a
+  noun-verb sentence about the act of insertion), now "You can still insert a
+  card — uploads queue until it's back."
+- **Real AI model ID placeholder** — the Settings API-mode Model field
+  suggested `claude-opus-4-8`, which is not an Anthropic model ID and 404s.
+  Placeholder is now `claude-opus-4-5` and the CLI default matches.
+
+### Changed
+- **`autoShowLibrary` defaults to `false`.** Auto-ingest was yanking the
+  Library window to the front on every card completion, which fought the
+  quiet-auto-offload preference. You can still open Library from the tray.
+
+### Removed
+- The unused on-device `PhotoAnalyzer` (Vision-based tagger) and its dead
+  GPS-backfill pipeline (`setGPS`, `needsGPSCheck`, `geoStats`, the "N of M
+  photos have GPS" badge that never rendered, and the `byYear` field on
+  `LibraryIndex` that was persisted but never populated). Live AI tagging
+  goes through `PhotoIdentifier` (CLI or API) as before; the viewer's info
+  panel still displays EXIF GPS when present.
+
 ## [1.6.0] — 2026-07-11
 
 ### Added — Culling workflow

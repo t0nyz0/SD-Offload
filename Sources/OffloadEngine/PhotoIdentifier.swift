@@ -83,11 +83,11 @@ public struct PhotoIdentifier: Sendable {
     }
 
     /// Anthropic Messages API with an inline base64 image. Raw HTTP (no SDK) — one
-    /// request, plain JSON. Uses the user's own key; model defaults to Opus 4.8.
+    /// request, plain JSON. Uses the user's own key.
     private func identifyViaAPI(_ temp: URL) async throws -> String {
         guard let key = apiKey else { throw IDError.noAPIKey }
         let b64 = try Data(contentsOf: temp).base64EncodedString()
-        let mdl = model.isEmpty ? "claude-opus-4-8" : model
+        let mdl = model.isEmpty ? "claude-opus-4-5" : model
         let body: [String: Any] = [
             "model": mdl,
             "max_tokens": 500,

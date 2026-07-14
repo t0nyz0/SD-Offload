@@ -282,13 +282,6 @@ private struct LibraryHeader: View {
                     Text(model.sourceTitle)
                         .font(.system(size: 17, weight: .bold))
                     countLine
-                    if model.source == .nas, let geo = model.geoSummary {
-                        HStack(spacing: 4) {
-                            Image(systemName: "location.fill").font(.system(size: 9))
-                            Text(geo).font(.system(size: 10.5)).monospacedDigit()
-                        }
-                        .foregroundStyle(.tertiary)
-                    }
                     if model.source == .nas, let faces = model.facesSummary {
                         Button { if model.faceUnnamed > 0 { model.reviewUnnamedFaces() } } label: {
                             HStack(spacing: 4) {

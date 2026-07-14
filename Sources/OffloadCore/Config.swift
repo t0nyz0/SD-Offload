@@ -60,7 +60,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var launchAtLogin: Bool = false
     /// Reveal the uploaded batch in the Library window when an offload finishes
     /// (jumps to the folder that received the photos).
-    public var autoShowLibrary: Bool = true
+    public var autoShowLibrary: Bool = false
     /// Pop the menu-bar tray open on card insert so progress is visible without
     /// clicking the status item.
     public var autoOpenTrayOnInsert: Bool = true

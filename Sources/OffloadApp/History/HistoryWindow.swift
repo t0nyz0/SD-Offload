@@ -120,11 +120,16 @@ struct SessionDetailView: View {
 
     private var statusLine: String {
         switch record.state {
-        case .done: "Completed — card wiped and ejected"
-        case .doneWipeBlocked: "Files safe on NAS — card NOT wiped"
-        case .cancelled: "Cancelled — nothing deleted"
-        case .failed: "Failed — card NOT wiped"
-        default: "In progress"
+        case .done:
+            // `.done` covers both wipe-ran and user-picked-Keep. Distinguish so the
+            // detail doesn't lie to the reader about what happened to the card.
+            return record.wipeReport?.ran == true
+                ? "Completed — card wiped and ejected"
+                : "Completed — card kept (contents untouched)"
+        case .doneWipeBlocked: return "Files safe on NAS — card NOT wiped"
+        case .cancelled: return "Cancelled — nothing deleted"
+        case .failed: return "Failed — card NOT wiped"
+        default: return "In progress"
         }
     }
 

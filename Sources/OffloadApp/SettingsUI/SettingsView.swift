@@ -133,7 +133,8 @@ struct SettingsView: View {
                             if t.isEmpty { Keychain.delete(service: Keychain.aiAPIKeyService) }
                             else { Keychain.set(t, service: Keychain.aiAPIKeyService) }
                         }
-                    TextField("Model", text: $settings.config.aiModel, prompt: Text("claude-opus-4-8"))
+                    TextField("Model", text: $settings.config.aiModel,
+                              prompt: Text("e.g. claude-opus-4-5 — leave blank for default"))
                         .textFieldStyle(.roundedBorder)
                 }
                 Text("Powers the viewer's “Identify” and the library “Analyze”. **CLI** uses your logged-in Claude session (no key, no extra billing). **API** uses your Anthropic key and is billed to your account. Your key is stored in the macOS Keychain.")

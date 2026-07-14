@@ -85,18 +85,16 @@ public struct LibraryBrowser: Sendable {
     /// Count media under a root, reporting partial progress as it walks. Cheap
     /// per-file (no hashing); one callback per ~250 files keeps the UI live.
     public func countMedia(root: URL, isCancelled: @Sendable () -> Bool = { false },
-                           progress: @Sendable (_ count: Int, _ bytes: Int64, _ byYear: [String: Int]) -> Void) {
+                           progress: @Sendable (_ count: Int, _ bytes: Int64) -> Void) {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
         guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles]) else {
-            progress(0, 0, [:]); return
+            progress(0, 0); return
         }
         var count = 0
         var bytes: Int64 = 0
-        var byYear: [String: Int] = [:]
         var sinceReport = 0
-        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         for case let url as URL in enumerator {
             if isCancelled() { break }
             guard MediaKind.isMedia(url.pathExtension) else { continue }
@@ -104,17 +102,12 @@ public struct LibraryBrowser: Sendable {
             guard vals?.isRegularFile == true else { continue }
             count += 1
             bytes += Int64(vals?.fileSize ?? 0)
-            // First path component under root that looks like a year.
-            let rel = url.path.hasPrefix(rootPrefix) ? String(url.path.dropFirst(rootPrefix.count)) : url.path
-            if let first = rel.split(separator: "/").first, first.count == 4, Int(first) != nil {
-                byYear[String(first), default: 0] += 1
-            }
             sinceReport += 1
             if sinceReport >= 250 {
                 sinceReport = 0
-                progress(count, bytes, byYear)
+                progress(count, bytes)
             }
         }
-        progress(count, bytes, byYear)
+        progress(count, bytes)
     }
 }

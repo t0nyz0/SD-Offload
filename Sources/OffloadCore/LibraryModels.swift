@@ -70,16 +70,14 @@ public struct LibraryIndex: Codable, Sendable {
     public var rootPath: String
     public var totalMedia: Int
     public var totalBytes: Int64
-    public var byYear: [String: Int]
     public var updatedAt: Date
     public var complete: Bool
 
     public init(rootPath: String, totalMedia: Int = 0, totalBytes: Int64 = 0,
-                byYear: [String: Int] = [:], updatedAt: Date = Date(), complete: Bool = false) {
+                updatedAt: Date = Date(), complete: Bool = false) {
         self.rootPath = rootPath
         self.totalMedia = totalMedia
         self.totalBytes = totalBytes
-        self.byYear = byYear
         self.updatedAt = updatedAt
         self.complete = complete
     }
