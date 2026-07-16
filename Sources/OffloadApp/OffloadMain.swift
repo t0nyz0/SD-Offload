@@ -49,6 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // The status item keeps the process alive; closing the last aux window must not quit.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    // Clicking the Dock icon (present while a window is open) re-surfaces the app —
+    // the escape hatch when the menu-bar item is hidden behind the camera notch.
+    // Fires whether or not a window is currently visible (e.g. minimized).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        coordinator?.handleReopen()
+        return true
+    }
 }
 
 @main

@@ -5,6 +5,22 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.6.3] — 2026-07-15
+
+### Added
+- **Library opens to the current month.** The NAS view now lands in this
+  month's `YYYY/MM` folder when it exists (where your most recent shoots are),
+  falling back to the library root when it doesn't. Breadcrumbs, the library
+  total, and search still key off the real root — only the folder you land on
+  is deeper.
+
+### Fixed
+- **Clicking the Dock icon re-surfaces the app.** When a window is open the app
+  shows a Dock icon; clicking it now reliably brings the window forward
+  (deminiaturizing it if minimized), or pops the tray if nothing's open. This
+  is the escape hatch for when the menu-bar item is hidden behind the camera
+  notch and can't be clicked.
+
 ## [1.6.2] — 2026-07-14
 
 ### Changed

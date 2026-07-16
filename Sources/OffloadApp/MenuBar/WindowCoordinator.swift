@@ -92,6 +92,22 @@ final class WindowCoordinator: NSObject, WindowRouting, NSWindowDelegate {
         popover.performClose(nil)
     }
 
+    /// Dock-icon click / app reopen. Brings any managed window forward
+    /// (deminiaturizing a minimized one); if none are open, pops the tray. This is
+    /// the escape hatch for when the status item is hidden behind the camera notch
+    /// and can't be clicked — the Dock icon (present whenever a window is open)
+    /// becomes a reliable way to surface the app again.
+    func handleReopen() {
+        NSApp.activate(ignoringOtherApps: true)
+        let windows = [libraryWindow, historyWindow, settingsWindow].compactMap { $0 }
+        guard !windows.isEmpty else {
+            presentPopover()             // no window to raise — best-effort tray
+            return
+        }
+        for w in windows where w.isMiniaturized { w.deminiaturize(nil) }
+        windows.last?.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: - Menu-bar label (mirrors MenuBarState)
 
     /// Renders the current `MenuBarState`, then re-arms Observation so the next

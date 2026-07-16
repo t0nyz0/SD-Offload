@@ -214,7 +214,8 @@ final class LibraryModel {
         source = newSource
         switch newSource {
         case .nas:
-            openRoot(URL(fileURLWithPath: nasRootPath, isDirectory: true))
+            let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
+            openRoot(root, drillTo: nasHomeFolder(root: root))   // land on this month if it exists
         case .card:
             guard let card = cardRootPath else { return }
             // Prefer DCIM if present, else the mount root.
@@ -445,8 +446,12 @@ final class LibraryModel {
         return stack
     }
 
-    private func openRoot(_ root: URL) {
-        pathStack = [root]
+    /// Open a source root. `drillTo`, when given and under `root`, lands the view
+    /// deeper in the tree while keeping `root` as the true root — so breadcrumbs,
+    /// the library total, volume stats, and search prefixes all still key off the
+    /// real root, only the *displayed* folder is the deeper one.
+    private func openRoot(_ root: URL, drillTo target: URL? = nil) {
+        pathStack = target.map { Self.pathStack(from: root, to: $0) } ?? [root]
         searchText = ""
         searchResults = nil
         refreshVolumeStats(root)
@@ -454,6 +459,21 @@ final class LibraryModel {
         startCount(root)
         refreshSuggestions()
         Task { await refreshFaceState() }
+    }
+
+    /// Where the NAS view opens by default: the current month's `YYYY/MM` folder
+    /// when it already exists on the NAS (the daily driver's most-recent shoots),
+    /// falling back to the root when it doesn't. Checked against the live
+    /// filesystem so a not-yet-created month simply lands on root.
+    private func nasHomeFolder(root: URL) -> URL {
+        let comps = Calendar.current.dateComponents([.year, .month], from: Date())
+        guard let y = comps.year, let m = comps.month else { return root }
+        let month = root
+            .appendingPathComponent(String(format: "%04d", y), isDirectory: true)
+            .appendingPathComponent(String(format: "%02d", m), isDirectory: true)
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: month.path, isDirectory: &isDir)
+        return (exists && isDir.boolValue) ? month : root
     }
 
     /// What the grid shows: content-search results when searching, else the
