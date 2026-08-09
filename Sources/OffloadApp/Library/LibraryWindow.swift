@@ -31,9 +31,12 @@ struct LibraryWindow: View {
         }
         .onAppear {
             Activate.front()
+            app.setLibraryVisible(true)
             if model == nil {
                 let m = LibraryModel(nasRootPath: app.settings.config.nasRootPath,
-                                     cardRootPath: app.cardMountPath)
+                                     cardRootPath: app.cardMountPath,
+                                     dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
+                                     activeDateFolderLayout: app.settings.config.dateFolderLayout)
                 if let folder = app.pendingLibraryFolder {
                     m.openPinned(folder)                // land on the just-uploaded batch
                     app.pendingLibraryFolder = nil
@@ -42,15 +45,23 @@ struct LibraryWindow: View {
                 }
                 model = m
             } else {
-                model?.update(nasRootPath: app.settings.config.nasRootPath, cardRootPath: app.cardMountPath)
+                model?.update(nasRootPath: app.settings.config.nasRootPath,
+                              cardRootPath: app.cardMountPath,
+                              dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
+                              activeDateFolderLayout: app.settings.config.dateFolderLayout)
                 if let folder = app.pendingLibraryFolder {
                     model?.openPinned(folder)
                     app.pendingLibraryFolder = nil
                 }
             }
+            model?.setNASAvailable(app.nasGlance.healthy)
         }
+        .onDisappear { app.setLibraryVisible(false) }
         .onChange(of: app.cardMountPath) { _, newValue in
-            model?.update(nasRootPath: app.settings.config.nasRootPath, cardRootPath: newValue)
+            model?.update(nasRootPath: app.settings.config.nasRootPath,
+                          cardRootPath: newValue,
+                          dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
+                          activeDateFolderLayout: app.settings.config.dateFolderLayout)
         }
         // Window already open when a later offload finishes → jump to its folder.
         .onChange(of: app.pendingLibraryFolder) { _, newValue in
@@ -61,7 +72,23 @@ struct LibraryWindow: View {
         // Coming back to the app (e.g. after deleting files in Finder) re-scans the
         // current folder so external changes show up without a manual refresh.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            app.refreshNASGlance()
             model?.reloadOnFocus()
+        }
+        .onChange(of: app.nasGlance.healthy) { _, healthy in
+            model?.setNASAvailable(healthy)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .offloadLibraryMigrationStarted)) { _ in
+            viewerIndex = nil
+            model = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .offloadLibraryMigrated)) { _ in
+            let m = LibraryModel(nasRootPath: app.settings.config.nasRootPath,
+                                 cardRootPath: app.cardMountPath,
+                                 dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
+                                 activeDateFolderLayout: app.settings.config.dateFolderLayout)
+            m.select(.nas)
+            model = m
         }
     }
 
@@ -144,7 +171,10 @@ struct LibraryWindow: View {
                 }
             }
         }
-        .onChange(of: model.source) { viewerIndex = nil }   // switching source closes the viewer
+        .onChange(of: model.source) { _, source in
+            viewerIndex = nil   // switching source closes the viewer
+            if source == .nas { model.setNASAvailable(app.nasGlance.healthy) }
+        }
         .alert("Delete failed", isPresented: Binding(
             get: { model.deleteError != nil },
             set: { if !$0 { model.deleteError = nil } }
@@ -401,6 +431,7 @@ private struct Breadcrumb: View {
 }
 
 private struct SearchBar: View {
+    @Environment(AppState.self) private var app
     @Bindable var model: LibraryModel
     @AppStorage("offload.library.tileSize") private var tileSize = 150.0
     @AppStorage("offload.faces.consented") private var facesConsented = false
@@ -432,7 +463,7 @@ private struct SearchBar: View {
             }
             .help("Thumbnail size")
 
-            Button { model.refresh() } label: {
+            Button { app.refreshNASGlance(); model.refresh() } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .keyboardShortcut("r", modifiers: .command)
@@ -757,7 +788,7 @@ private struct LibraryGrid: View {
             let photos = model.photoItems
             if folders.isEmpty && photos.isEmpty {
                 ContentUnavailableView(emptyTitle,
-                                       systemImage: model.isSearching ? "magnifyingglass" : "photo.on.rectangle",
+                                       systemImage: emptySystemImage,
                                        description: Text(emptyDetail))
                     .padding(.top, 60)
             } else {
@@ -765,7 +796,8 @@ private struct LibraryGrid: View {
                     if !folders.isEmpty {
                         LazyVGrid(columns: folderColumns, spacing: 14) {
                             ForEach(folders) { item in
-                                FolderTile(item: item, rootPath: model.rootURL?.path)
+                                FolderTile(item: item, rootPath: model.rootURL?.path,
+                                           layouts: model.dateFolderLayouts)
                                     .onTapGesture(count: 2) { model.enter(item.primary) }
                                     .onTapGesture { model.clearSelection() }
                                     .contextMenu { menu(for: item) }
@@ -872,9 +904,17 @@ private struct LibraryGrid: View {
     }
 
     private var emptyTitle: String {
-        (model.isSearching || model.faceFilterLabel != nil) ? "No matches" : "Nothing here"
+        if model.source == .nas && !model.mounted { return "NAS unavailable" }
+        return (model.isSearching || model.faceFilterLabel != nil) ? "No matches" : "Nothing here"
+    }
+    private var emptySystemImage: String {
+        if model.source == .nas && !model.mounted { return "externaldrive.badge.exclamationmark" }
+        return model.isSearching ? "magnifyingglass" : "photo.on.rectangle"
     }
     private var emptyDetail: String {
+        if model.source == .nas && !model.mounted {
+            return "Trying to reconnect to the configured destination…"
+        }
         if let f = model.faceFilterLabel { return "No photos for “\(f)”." }
         if model.isSearching { return "No analyzed photos match “\(model.searchText)”. Try Analyze first, or a different word." }
         return model.loading ? "Loading…" : "This folder has no photos or subfolders."
@@ -1089,13 +1129,15 @@ struct LibraryTile: View {
 private struct FolderTile: View {
     let item: DisplayItem
     let rootPath: String?
+    let layouts: [DateFolderLayout]
     @State private var thumbs: [NSImage] = []
     @State private var loaded = false
     @State private var stats: FolderStats?
 
     private var entry: LibraryEntry { item.primary }
     private var caption: DateFolders.Caption {
-        DateFolders.caption(folderPath: entry.id, rootPath: rootPath ?? "", rawName: entry.name)
+        DateFolders.caption(folderPath: entry.id, rootPath: rootPath ?? "", rawName: entry.name,
+                            layouts: layouts)
     }
 
     // The folder body silhouette: a square top-left corner so the tab flows into

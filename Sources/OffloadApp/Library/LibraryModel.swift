@@ -149,10 +149,16 @@ final class LibraryModel {
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var nasRootPath: String
     @ObservationIgnored private var cardRootPath: String?
+    @ObservationIgnored private(set) var dateFolderLayouts: [DateFolderLayout]
+    @ObservationIgnored private var activeDateFolderLayout: DateFolderLayout
 
-    init(nasRootPath: String, cardRootPath: String?) {
+    init(nasRootPath: String, cardRootPath: String?,
+         dateFolderLayouts: [DateFolderLayout] = DateFolderLayout.presets,
+         activeDateFolderLayout: DateFolderLayout = .nestedNumeric) {
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
+        self.dateFolderLayouts = dateFolderLayouts
+        self.activeDateFolderLayout = activeDateFolderLayout
         self.hasCard = cardRootPath != nil
         favoritePaths = Set(JSONIO.loadGuarded([String].self, from: Paths.favoritesFile) ?? [])
         pinnedFolders = JSONIO.loadGuarded([String].self, from: Paths.pinnedFoldersFile) ?? []
@@ -194,19 +200,44 @@ final class LibraryModel {
     /// "2026" for a year — nil at the root or in a non-date folder (e.g. a card).
     var currentDateLabel: String? {
         guard source == .nas, let root = rootURL, let dir = currentDir, dir.path != root.path else { return nil }
-        return DateFolders.headerLabel(folderPath: dir.path, rootPath: root.path)
+        return DateFolders.headerLabel(folderPath: dir.path, rootPath: root.path, layouts: dateFolderLayouts)
     }
 
-    func update(nasRootPath: String, cardRootPath: String?) {
+    func update(nasRootPath: String, cardRootPath: String?, dateFolderLayouts: [DateFolderLayout]? = nil,
+                activeDateFolderLayout: DateFolderLayout? = nil) {
         let cardChanged = self.cardRootPath != cardRootPath
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
+        if let dateFolderLayouts { self.dateFolderLayouts = dateFolderLayouts }
+        if let activeDateFolderLayout { self.activeDateFolderLayout = activeDateFolderLayout }
         self.hasCard = cardRootPath != nil
         if source == .card && cardRootPath == nil {
             select(.nas)               // card ejected while viewing it
         } else if cardChanged && source == .card, let root = cardRootPath {
             openRoot(URL(fileURLWithPath: root))
         }
+    }
+
+    /// Apply the engine's identity-aware NAS verdict. A plain `statfs` is not
+    /// enough here because a ghost local folder or the wrong mounted share must
+    /// remain unavailable. When the expected share returns, reload the visible
+    /// folder automatically instead of requiring a manual Refresh.
+    func setNASAvailable(_ available: Bool) {
+        guard source == .nas, let root = rootURL else { return }
+        if !available {
+            countTask?.cancel()
+            mounted = false
+            freeBytes = 0
+            totalVolumeBytes = 0
+            loading = false
+            entries = []
+            return
+        }
+        let wasMounted = mounted
+        refreshVolumeStats(root)
+        guard mounted, !wasMounted else { return }
+        loadEntries()
+        startCount(root)
     }
 
     func select(_ newSource: Source) {
@@ -321,12 +352,14 @@ final class LibraryModel {
         Task.detached(priority: .utility) { try? JSONIO.save(data, to: Paths.cullFile) }
     }
 
-    /// Capture date for timeline grouping — parsed from the YYYY/MM/DD folder path,
-    /// falling back to the file's modified date.
+    /// Capture date for timeline grouping — parsed from any recognized date-folder
+    /// layout, falling back to the file's modified date.
     func timelineDate(_ item: DisplayItem) -> Date {
-        let comps = (item.primary.id as NSString).deletingLastPathComponent
-            .split(separator: "/").suffix(3).map(String.init)
-        return DateFolders.date(from: comps) ?? item.primary.modified
+        let folder = (item.primary.id as NSString).deletingLastPathComponent
+        let comps = DateFolders.relComponents(folder, root: nasRootPath)
+        return DateFolderLayout.firstParse(folderPath: comps.joined(separator: "/"), layouts: dateFolderLayouts)?.date
+            ?? DateFolders.date(from: comps)
+            ?? item.primary.modified
     }
 
     /// Build the Favorites timeline: resolve favorite paths to entries (dropping any
@@ -408,12 +441,13 @@ final class LibraryModel {
     /// else the folder's own name.
     func pinLabel(_ path: String) -> String {
         let comps = DateFolders.relComponents(path, root: nasRootPath)
-        if let d = DateFolders.date(from: comps) {
+        if let parsed = DateFolderLayout.firstParse(folderPath: comps.joined(separator: "/"), layouts: dateFolderLayouts) {
+            let d = parsed.date
             let f = DateFormatter(); f.locale = .current
-            switch comps.count {
-            case 1: return comps[0]                                          // "2026"
-            case 2: f.setLocalizedDateFormatFromTemplate("LLLyyyy")          // "Jul 2026"
-            default: f.setLocalizedDateFormatFromTemplate("MMMdyyyy")        // "Jul 4, 2026"
+            switch parsed.precision {
+            case .year: f.setLocalizedDateFormatFromTemplate("yyyy")
+            case .month: f.setLocalizedDateFormatFromTemplate("LLLyyyy")
+            case .day: f.setLocalizedDateFormatFromTemplate("MMMdyyyy")
             }
             return f.string(from: d)
         }
@@ -461,19 +495,23 @@ final class LibraryModel {
         Task { await refreshFaceState() }
     }
 
-    /// Where the NAS view opens by default: the current month's `YYYY/MM` folder
+    /// Where the NAS view opens by default: the closest current-date parent folder
     /// when it already exists on the NAS (the daily driver's most-recent shoots),
     /// falling back to the root when it doesn't. Checked against the live
     /// filesystem so a not-yet-created month simply lands on root.
     private func nasHomeFolder(root: URL) -> URL {
-        let comps = Calendar.current.dateComponents([.year, .month], from: Date())
-        guard let y = comps.year, let m = comps.month else { return root }
-        let month = root
-            .appendingPathComponent(String(format: "%04d", y), isDirectory: true)
-            .appendingPathComponent(String(format: "%02d", m), isDirectory: true)
-        var isDir: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: month.path, isDirectory: &isDir)
-        return (exists && isDir.boolValue) ? month : root
+        var comps = activeDateFolderLayout.folderPath(for: Date()).split(separator: "/").map(String.init)
+        if comps.count <= 1 { return root }
+        comps.removeLast()   // land at the closest stable parent, never a single day
+        while !comps.isEmpty {
+            let candidate = comps.reduce(root) { $0.appendingPathComponent($1, isDirectory: true) }
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                return candidate
+            }
+            comps.removeLast()
+        }
+        return root
     }
 
     /// What the grid shows: content-search results when searching, else the
@@ -1057,6 +1095,7 @@ final class LibraryModel {
     /// Full refresh: re-scan the current folder, re-check free space, and recount
     /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
+        guard source != .nas || mounted else { return }
         FolderStatsLoader.shared.invalidateAll()   // rebuild folder counts (catches deep-added photos)
         if let root = rootURL { refreshVolumeStats(root); startCount(root, force: true) }
         loadEntries()
@@ -1067,6 +1106,7 @@ final class LibraryModel {
     /// without paying for a full library recount.
     func reloadCurrentFolder() {
         guard currentDir != nil else { return }
+        guard source != .nas || mounted else { return }
         loadEntries()
     }
 
@@ -1148,12 +1188,13 @@ final class LibraryModel {
             // Bridge the synchronous walk (on a utility thread) to the main
             // actor through a stream — no shared mutable state to race on.
             let stream = AsyncStream<(Int, Int64)> { continuation in
-                Task.detached(priority: .utility) {
+                let worker = Task.detached(priority: .utility) {
                     browser.countMedia(root: root, isCancelled: { Task.isCancelled }) { count, bytes in
                         continuation.yield((count, bytes))
                     }
                     continuation.finish()
                 }
+                continuation.onTermination = { _ in worker.cancel() }
             }
             var final: (count: Int, bytes: Int64) = (0, 0)
             for await (count, bytes) in stream {

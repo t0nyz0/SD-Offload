@@ -5,6 +5,32 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-08-09
+
+### Added
+- **Flexible date-folder layouts.** Choose from seven reversible presets —
+  nested numeric, ISO, compact, underscored, and named-month styles — or make a
+  custom hierarchy with `{YYYY}`, `{MM}`, `{MMM}`, `{MMMM}`, and `{DD}`. A live
+  preview shows the exact destination path before the next import.
+- **Safe existing-library conversion.** A read-only preflight inventories every
+  recognized day folder before moving anything. Conversion uses same-volume
+  renames, preserves filename conflicts with suffixes, includes the configured
+  second destination, updates favorites, pins, culling, face/photo indexes, and
+  history, and never touches unrecognized folders or overwrites a file.
+- **Resume and rollback for folder conversion.** Durable per-file migration state
+  and local metadata backups let an interrupted conversion reconcile the real
+  filesystem, resume, or restore the original folder names and saved Library data.
+
+### Fixed
+- **NAS recovery is now visible and repeatable.** After an interrupted upload
+  reconnects, the session returns from “waiting for NAS” to its real phase,
+  clears the stale warning, and can report/recover from another outage in the
+  same run. Concurrent workers share one NetFS remount attempt.
+- **The NAS Library reconnects while it is open.** The Library and menu popover
+  check the configured destination every 15 seconds while visible, safely try
+  the saved SMB mount when it is absent, show a specific unavailable state, and
+  reload the current folder automatically when the expected share returns.
+
 ## [1.6.3] — 2026-07-15
 
 ### Added

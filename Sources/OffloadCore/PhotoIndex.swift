@@ -17,7 +17,7 @@ public struct GeoPoint: Codable, Sendable, Hashable {
 
 /// What we know about one photo's contents — the row in the searchable database.
 public struct PhotoRecord: Codable, Sendable {
-    public let path: String
+    public var path: String
     public let size: Int64
     public let mtime: Date
     public var labels: [PhotoLabel]    // scene/object classifications
@@ -98,6 +98,18 @@ public actor PhotoIndex {
         for p in paths where records[p] != nil {
             records.removeValue(forKey: p)
             haystack.removeValue(forKey: p)
+            dirty = true
+        }
+    }
+
+    public func remapPaths(_ mapping: [String: String]) {
+        guard !mapping.isEmpty else { return }
+        for (old, new) in mapping where old != new {
+            guard var record = records.removeValue(forKey: old) else { continue }
+            record.path = new
+            records[new] = record
+            haystack.removeValue(forKey: old)
+            haystack.removeValue(forKey: new)
             dirty = true
         }
     }

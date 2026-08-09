@@ -79,6 +79,9 @@ public enum EngineEvent: Sendable {
     case completed(SessionRecord)
     case sessionFailed(SessionRecord, AttentionItem)
     case nasGlance(NASGlance)
+    /// A live transfer was parked for an unavailable NAS and can upload again.
+    /// Kept separate from `.attention` so the UI can clear the stale warning.
+    case nasRecovered
 }
 
 // MARK: - Control (UI → engine)

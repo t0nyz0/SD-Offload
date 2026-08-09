@@ -15,6 +15,9 @@ struct SettingsView: View {
     @State private var confirmRecache = false
     @State private var apiKey = ""              // mirrors the Keychain-stored Anthropic key
     @State private var pane: Pane = .general
+    @State private var showCustomDateLayout = false
+    @State private var customDatePattern = "{YYYY}/{MM}/{DD}"
+    @State private var showLibraryMigration = false
 
     enum Pane: String, CaseIterable, Identifiable, Hashable {
         case general, destination, offload, library, notifications
@@ -70,6 +73,11 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) { pendingThumbQuality = nil }
         } message: { newQ in
             Text("Existing thumbnails are cleared and rebuilt at \(ThumbnailQuality(rawValue: newQ)?.label ?? "the new") quality. Photos you're viewing update right away; the rest rebuild as you browse. For a large library over the NAS this can take a while.")
+        }
+        .sheet(isPresented: $showCustomDateLayout) { customDateLayoutSheet(settings: settings) }
+        .sheet(isPresented: $showLibraryMigration) {
+            LibraryMigrationSheet(settings: settings)
+                .environment(app)
         }
     }
 
@@ -137,11 +145,46 @@ struct SettingsView: View {
                         .controlSize(.small)
                     }
                 }
-                Text("Photos are organized into YYYY/MM/DD folders by capture date.")
+                Text("Photos are organized into your selected date-folder layout using capture metadata.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
                 Text("Primary")
+            }
+
+            Section {
+                Picker("Folder organization", selection: Binding(
+                    get: { s.config.dateFolderLayout.pattern },
+                    set: { pattern in
+                        guard let layout = DateFolderLayout.presets.first(where: { $0.pattern == pattern }) else { return }
+                        applyDateLayout(layout, settings: s)
+                    }
+                )) {
+                    ForEach(DateFolderLayout.presets) { layout in
+                        Text(layout.name).tag(layout.pattern)
+                    }
+                    if !s.config.dateFolderLayout.isPreset {
+                        Text("Custom").tag(s.config.dateFolderLayout.pattern)
+                    }
+                }
+                LabeledContent("Preview") {
+                    Text(dateLayoutPreview(s.config.dateFolderLayout))
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Custom…") {
+                        customDatePattern = s.config.dateFolderLayout.pattern
+                        showCustomDateLayout = true
+                    }
+                    Button("Reorganize Existing Library…") { showLibraryMigration = true }
+                        .disabled(app.session != nil)
+                }
+                Text("Changing the layout affects new imports immediately. Reorganize Existing Library safely renames recognized date folders, updates saved Library data, and can resume or roll back after interruption.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Date folders")
             }
 
             Section {
@@ -315,6 +358,241 @@ struct SettingsView: View {
             apply(url.path)
         }
     }
+
+    private func applyDateLayout(_ layout: DateFolderLayout, settings: SettingsStore) {
+        let old = settings.config.dateFolderLayout
+        if !settings.config.recognizedDateFolderLayouts.contains(old) {
+            settings.config.recognizedDateFolderLayouts.append(old)
+        }
+        settings.config.dateFolderLayout = layout
+        if !settings.config.recognizedDateFolderLayouts.contains(layout) {
+            settings.config.recognizedDateFolderLayouts.append(layout)
+        }
+    }
+
+    private func dateLayoutPreview(_ layout: DateFolderLayout) -> String {
+        var dc = DateComponents(); dc.year = 2026; dc.month = 7; dc.day = 4
+        let sample = Calendar.current.date(from: dc) ?? Date()
+        return layout.destinationRelPath(fileName: "IMG_1234.RAF", captureDate: sample)
+    }
+
+    @ViewBuilder
+    private func customDateLayoutSheet(settings: SettingsStore) -> some View {
+        let candidate = DateFolderLayout(id: "custom", name: "Custom", pattern: customDatePattern)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Custom Date Layout").font(.title2.bold())
+            Text("Use {YYYY}, {MM}, {MMM}, {MMMM}, and {DD}. A slash creates another folder level.")
+                .foregroundStyle(.secondary)
+            TextField("Pattern", text: $customDatePattern)
+                .font(.system(.body, design: .monospaced))
+                .textFieldStyle(.roundedBorder)
+            LabeledContent("Preview", value: dateLayoutPreview(candidate))
+                .font(.system(.body, design: .monospaced))
+            if let error = candidate.validationError {
+                Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { showCustomDateLayout = false }
+                Button("Use Layout") {
+                    let selected = DateFolderLayout.presets.first { $0.pattern == candidate.pattern } ?? candidate
+                    applyDateLayout(selected, settings: settings)
+                    showCustomDateLayout = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(candidate.validationError != nil)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+    }
+}
+
+private struct LibraryMigrationSheet: View {
+    @Environment(AppState.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var settings: SettingsStore
+    @State private var plan: LibraryMigrationPlan?
+    @State private var state: LibraryMigrationState?
+    @State private var busy = false
+    @State private var error: String?
+    private let migrator = LibraryMigrator()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Reorganize Existing Library").font(.title2.bold())
+            Text("Convert recognized date folders to **\(settings.config.dateFolderLayout.name)** without rewriting photo data.")
+                .foregroundStyle(.secondary)
+
+            if let state {
+                migrationStateView(state)
+            } else if let plan {
+                planView(plan)
+            } else {
+                Text("SD Offload will perform a read-only scan first. Unrecognized folders are left untouched, existing files are never overwritten, and a configured second destination must match.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Scan Library") { scan() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || app.session != nil)
+            }
+
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if busy { ProgressView().controlSize(.small) }
+            Spacer()
+            HStack {
+                Spacer()
+                Button(state?.status == .completed || state?.status == .rolledBack ? "Done" : "Close") {
+                    if state?.status == .completed || state?.status == .rolledBack {
+                        Task { await migrator.acknowledge() }
+                    }
+                    dismiss()
+                }
+                .disabled(busy)
+            }
+        }
+        .padding(24)
+        .frame(width: 590, height: 460)
+        .task { await loadPending() }
+    }
+
+    @ViewBuilder
+    private func planView(_ plan: LibraryMigrationPlan) -> some View {
+        GroupBox("Preflight Summary") {
+            VStack(alignment: .leading, spacing: 7) {
+                LabeledContent("Files", value: plan.moves.count.formatted())
+                LabeledContent("Data", value: ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))
+                LabeledContent("Date folders", value: plan.folders.count.formatted())
+                LabeledContent("Filename conflicts preserved with suffixes", value: plan.collisionCount.formatted())
+                LabeledContent("Unrecognized top-level folders left untouched", value: plan.ignoredFolderCount.formatted())
+                LabeledContent("Second destination", value: plan.secondaryRoot == nil ? "Not configured" : "Included")
+            }.padding(6)
+        }
+        HStack {
+            Button("Scan Again") { self.plan = nil; scan() }
+            Spacer()
+            Button("Convert \(plan.moves.count) Files") { start(plan) }
+                .buttonStyle(.borderedProminent)
+                .disabled(busy || app.session != nil)
+        }
+    }
+
+    @ViewBuilder
+    private func migrationStateView(_ state: LibraryMigrationState) -> some View {
+        let total = max(1, state.plan.moves.count)
+        GroupBox {
+            VStack(alignment: .leading, spacing: 9) {
+                Text(statusTitle(state.status)).font(.headline)
+                ProgressView(value: Double(state.completedMoves), total: Double(total))
+                Text("\(state.completedMoves.formatted()) of \(state.plan.moves.count.formatted()) files")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let last = state.lastError { Text(last).font(.caption).foregroundStyle(.orange) }
+            }.padding(6)
+        }
+        if state.status == .rollingBack {
+            HStack {
+                Spacer()
+                Button("Continue Rollback") { resume() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || app.session != nil)
+            }
+        } else if state.status == .planned || state.status == .failed
+                    || state.status == .moving || state.status == .updatingMetadata {
+            HStack {
+                Button("Roll Back", role: .destructive) { rollback() }
+                    .disabled(busy || app.session != nil)
+                Spacer()
+                Button("Resume") { resume() }.buttonStyle(.borderedProminent)
+                    .disabled(busy || app.session != nil)
+            }
+        } else if state.status == .completed {
+            Label("Library converted successfully. Saved paths and both destinations are synchronized.",
+                  systemImage: "checkmark.circle.fill").foregroundStyle(Theme.safe)
+        } else if state.status == .rolledBack {
+            Label("The original folder layout and saved Library data were restored.",
+                  systemImage: "arrow.uturn.backward.circle.fill")
+        }
+    }
+
+    private func statusTitle(_ status: LibraryMigrationState.Status) -> String {
+        switch status {
+        case .planned: "Ready to resume"
+        case .moving: "Moving folders safely…"
+        case .updatingMetadata: "Updating saved Library paths…"
+        case .completed: "Conversion complete"
+        case .rollingBack: "Restoring the original layout…"
+        case .rolledBack: "Rollback complete"
+        case .failed: "Conversion interrupted"
+        }
+    }
+
+    private func scan() {
+        busy = true; error = nil
+        let config = settings.config, target = config.dateFolderLayout
+        Task {
+            do { plan = try await migrator.makePlan(config: config, target: target) }
+            catch { self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
+            busy = false
+        }
+    }
+
+    private func start(_ plan: LibraryMigrationPlan) {
+        busy = true; error = nil
+        NotificationCenter.default.post(name: .offloadLibraryMigrationStarted, object: nil)
+        Task {
+            do {
+                try await migrator.start(plan, onProgress: progressHandler)
+                await finishedFilesystemChange()
+            } catch { self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
+            busy = false
+        }
+    }
+
+    private func resume() {
+        busy = true; error = nil
+        NotificationCenter.default.post(name: .offloadLibraryMigrationStarted, object: nil)
+        Task {
+            do { try await migrator.resume(onProgress: progressHandler); await finishedFilesystemChange() }
+            catch { self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
+            busy = false
+        }
+    }
+
+    private func rollback() {
+        busy = true; error = nil
+        Task {
+            do { try await migrator.rollback(onProgress: progressHandler); await finishedFilesystemChange() }
+            catch { self.error = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
+            busy = false
+        }
+    }
+
+    private var progressHandler: @Sendable (LibraryMigrationState) -> Void {
+        { update in Task { @MainActor in self.state = update } }
+    }
+
+    private func loadPending() async {
+        if let pending = await migrator.pendingState() { state = pending }
+    }
+
+    @MainActor
+    private func finishedFilesystemChange() async {
+        settings.reload()
+        LibraryIndex.invalidate()
+        FolderStatsLoader.shared.invalidateAll()
+        ThumbnailLoader.shared.clearCaches()
+        NotificationCenter.default.post(name: .offloadLibraryMigrated, object: nil)
+        app.rescanTapped()
+        state = await migrator.pendingState()
+    }
+}
+
+extension Notification.Name {
+    static let offloadLibraryMigrationStarted = Notification.Name("offload.libraryMigrationStarted")
+    static let offloadLibraryMigrated = Notification.Name("offload.libraryMigrated")
 }
 
 enum AppInfo {

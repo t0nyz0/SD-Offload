@@ -33,7 +33,7 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     public func cancelWipe() { Task { await coordinator.runner?.cancelWipe() } }
     public func eject() { Task { await coordinator.eject() } }
     public func retry() { Task { await coordinator.retry() } }
-    public func refreshNASGlance() { Task { await coordinator.emitGlance() } }
+    public func refreshNASGlance() { Task { await coordinator.refreshNASGlance() } }
     public func rescan() { Task { await coordinator.rescan() } }
 }
 
@@ -43,7 +43,6 @@ private actor Coordinator {
     let journal: Journal
     let emit: @Sendable (EngineEvent) -> Void
     let watcher = CardWatcher()
-    let planner = IngestPlanner()
     let nas: NASLocator
 
     private(set) var runner: SessionRunner?
@@ -97,6 +96,14 @@ private actor Coordinator {
         emit(.nasGlance(EngineGlance.quickNASGlance(config: config)))
     }
 
+    /// A user-visible refresh doubles as one safe reconnect attempt. It never
+    /// writes to the destination and NASLocator refuses ghost/wrong/read-only
+    /// mounts; active sessions still own the persistent retry loop.
+    func refreshNASGlance() async {
+        _ = await nas.reconnectIfNeeded()
+        await emitGlance()
+    }
+
     // Per-card session marker (hidden file on the card). See Paths.cardSessionMarkerName.
     private func markerURL(_ mountPath: String) -> URL {
         URL(fileURLWithPath: mountPath).appendingPathComponent(Paths.cardSessionMarkerName)
@@ -128,6 +135,14 @@ private actor Coordinator {
             // Same card back mid-session → resume, regardless of policy.
             if let runner, runner.card.volumeUUID == volume.info.volumeUUID {
                 await resumeAfterReinsert(volume)
+                return
+            }
+            if libraryMigrationBlocksIngest() {
+                emit(.cardMounted(volume.info))
+                emit(.attention(AttentionItem(
+                    severity: .info,
+                    title: "Library reorganization in progress",
+                    detail: "The card was left untouched. Finish or roll back the folder conversion, then it will be checked again.")))
                 return
             }
             // Unfinished work for this card resumes even if its policy is now
@@ -214,6 +229,13 @@ private actor Coordinator {
     }
 
     private func startSession(_ volume: CandidateVolume) async {
+        guard !libraryMigrationBlocksIngest() else {
+            emit(.attention(AttentionItem(
+                severity: .info,
+                title: "Library reorganization in progress",
+                detail: "The card was left untouched. Finish or roll back the folder conversion, then it will be checked again.")))
+            return
+        }
         guard runner == nil, !startingSession else {
             // Busy (a session is running, or a start is already in flight) — queue
             // this card and start it automatically when the current one finishes
@@ -248,7 +270,7 @@ private actor Coordinator {
             emit(.sessionStarted(sessionID: incomplete.id, card: volume.info, resumed: true))
             emit(.phase(.scanning))
             staging.removePartials(incomplete.id)
-            let planner = self.planner
+            let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
             let scope = config.ingestScope
             let scanned = await Task.detached(priority: .userInitiated) {
                 planner.scan(cardRoot: cardRoot, scope: scope)
@@ -272,7 +294,7 @@ private actor Coordinator {
         let sessionID = UUID()
         emit(.sessionStarted(sessionID: sessionID, card: volume.info, resumed: false))
         emit(.phase(.scanning))
-        let planner = self.planner
+        let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
         let scope = config.ingestScope
         let scanned = await Task.detached(priority: .userInitiated) {
             planner.scan(cardRoot: cardRoot, scope: scope)
@@ -311,6 +333,13 @@ private actor Coordinator {
         launchRunner(sessionID: sessionID, card: volume.info, config: config, staging: staging)
     }
 
+    private func libraryMigrationBlocksIngest() -> Bool {
+        guard let state = JSONIO.loadGuarded(LibraryMigrationState.self, from: Paths.migrationStateFile) else {
+            return false
+        }
+        return state.status != .completed && state.status != .rolledBack
+    }
+
     private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore) {
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
@@ -347,7 +376,7 @@ private actor Coordinator {
         let config = await configProvider()
         emit(.phase(.scanning))
         guard let record = await journal.session(id: runner.sessionID) else { return }
-        let planner = self.planner
+        let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
         let scope = config.ingestScope
         let cardRoot = URL(fileURLWithPath: volume.info.mountPath, isDirectory: true)
         let scanned = await Task.detached(priority: .userInitiated) {

@@ -8,11 +8,11 @@ public protocol DestinationRouting: Sendable {
 }
 
 public struct DateFolderRouter: DestinationRouting {
-    public init() {}
+    public let layout: DateFolderLayout
+    public init(layout: DateFolderLayout = .nestedNumeric) { self.layout = layout }
 
     public func destinationRelPath(fileName: String, captureDate: Date) -> String {
-        let c = Calendar.current.dateComponents([.year, .month, .day], from: captureDate)
-        return String(format: "%04d/%02d/%02d/%@", c.year ?? 0, c.month ?? 0, c.day ?? 0, fileName)
+        layout.destinationRelPath(fileName: fileName, captureDate: captureDate)
     }
 }
 

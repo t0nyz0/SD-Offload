@@ -14,6 +14,10 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// set, each file is mirrored here and read back before the card is wipe-eligible,
     /// so the card is never reduced to a single copy at wipe time. nil = off.
     public var secondaryDestPath: String?
+    /// Layout used for new imports. Recognized layouts are retained so a library
+    /// remains browsable when the user changes formats without migrating old days.
+    public var dateFolderLayout: DateFolderLayout = .nestedNumeric
+    public var recognizedDateFolderLayouts: [DateFolderLayout] = [.nestedNumeric]
 
     // Wipe. Default to asking before erasing a card — a new user should opt in to
     // unattended wipes, not discover them. (Existing configs keep their setting.)
@@ -82,6 +86,11 @@ public struct AppConfig: Codable, Sendable, Equatable {
         nasExpectedMntFromName = try c.decodeIfPresent(String.self, forKey: .nasExpectedMntFromName)
         nasSMBURL = try c.decodeIfPresent(String.self, forKey: .nasSMBURL)
         secondaryDestPath = try c.decodeIfPresent(String.self, forKey: .secondaryDestPath)
+        let decodedLayout = try c.decodeIfPresent(DateFolderLayout.self, forKey: .dateFolderLayout) ?? d.dateFolderLayout
+        dateFolderLayout = decodedLayout.validationError == nil ? decodedLayout : d.dateFolderLayout
+        recognizedDateFolderLayouts = (try c.decodeIfPresent([DateFolderLayout].self, forKey: .recognizedDateFolderLayouts)
+            ?? [dateFolderLayout]).filter { $0.validationError == nil }
+        if !recognizedDateFolderLayouts.contains(dateFolderLayout) { recognizedDateFolderLayouts.append(dateFolderLayout) }
         wipePolicy = try c.decodeIfPresent(WipePolicy.self, forKey: .wipePolicy) ?? d.wipePolicy
         autoEject = try c.decodeIfPresent(Bool.self, forKey: .autoEject) ?? d.autoEject
         wipeCountdownSeconds = try c.decodeIfPresent(Int.self, forKey: .wipeCountdownSeconds) ?? d.wipeCountdownSeconds

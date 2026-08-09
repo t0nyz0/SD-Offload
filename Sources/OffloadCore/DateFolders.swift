@@ -1,6 +1,6 @@
 import Foundation
 
-/// Interprets a NAS date-folder path (`YYYY/MM/DD`) into human-readable labels,
+/// Interprets configured NAS date-folder paths into human-readable labels,
 /// so the Library can show "Saturday, July 4th, 2026" instead of a bare "04".
 /// Pure, locale-aware, and unit-tested. Non-date folders (e.g. a card's DCIM
 /// subfolders) fall back to their raw name.
@@ -55,25 +55,32 @@ public enum DateFolders {
     }
 
     /// A compact caption for a folder card.
-    public static func caption(folderPath: String, rootPath: String, rawName: String) -> Caption {
+    public static func caption(folderPath: String, rootPath: String, rawName: String,
+                               layouts: [DateFolderLayout] = DateFolderLayout.presets) -> Caption {
         let comps = relComponents(folderPath, root: rootPath)
-        guard let d = date(from: comps) else { return Caption(title: rawName, subtitle: nil) }
-        switch comps.count {
-        case 1:  return Caption(title: comps[0], subtitle: nil)                       // 2026
-        case 2:  return Caption(title: formatted("LLLL", d), subtitle: comps[0])      // July · 2026
-        default: return Caption(title: formatted("MMMd", d), subtitle: formatted("EEEE", d)) // Jul 4 · Saturday
+        guard let parsed = DateFolderLayout.firstParse(folderPath: comps.joined(separator: "/"), layouts: layouts)
+            ?? date(from: comps).map({ DateFolderLayout.Parsed(date: $0, precision: comps.count == 1 ? .year : (comps.count == 2 ? .month : .day)) })
+        else { return Caption(title: rawName, subtitle: nil) }
+        switch parsed.precision {
+        case .year:  return Caption(title: formatted("yyyy", parsed.date), subtitle: nil)
+        case .month: return Caption(title: formatted("LLLL", parsed.date), subtitle: formatted("yyyy", parsed.date))
+        case .day:   return Caption(title: formatted("MMMd", parsed.date), subtitle: formatted("EEEE", parsed.date))
         }
     }
 
     /// The full header label for the currently-open folder, or nil if it isn't a
     /// date folder. Day → "Saturday, July 4th, 2026"; month → "July 2026"; year → "2026".
-    public static func headerLabel(folderPath: String, rootPath: String) -> String? {
+    public static func headerLabel(folderPath: String, rootPath: String,
+                                   layouts: [DateFolderLayout] = DateFolderLayout.presets) -> String? {
         let comps = relComponents(folderPath, root: rootPath)
-        guard let d = date(from: comps) else { return nil }
-        switch comps.count {
-        case 1:  return comps[0]
-        case 2:  return formatted("yyyyLLLL", d)                                       // July 2026
-        default: return "\(formatted("EEEE", d)), \(formatted("LLLL", d)) \(ordinalDay(d)), \(comps[0])"
+        guard let parsed = DateFolderLayout.firstParse(folderPath: comps.joined(separator: "/"), layouts: layouts)
+            ?? date(from: comps).map({ DateFolderLayout.Parsed(date: $0, precision: comps.count == 1 ? .year : (comps.count == 2 ? .month : .day)) })
+        else { return nil }
+        switch parsed.precision {
+        case .year:  return formatted("yyyy", parsed.date)
+        case .month: return formatted("yyyyLLLL", parsed.date)
+        case .day:
+            return "\(formatted("EEEE", parsed.date)), \(formatted("LLLL", parsed.date)) \(ordinalDay(parsed.date)), \(formatted("yyyy", parsed.date))"
         }
     }
 

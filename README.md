@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-on--device-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-79%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-90%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -47,7 +47,7 @@ Two pipelined hops with a verify at each, and a strict all-or-nothing wipe gate 
 flowchart LR
     SD["SD card"] -->|"chunked copy<br/>inline SHA-256"| STG["Local staging SSD"]
     STG -->|"read-back verify<br/>(F_NOCACHE)"| STG
-    STG -->|"write · fsync · rename<br/>into YYYY/MM/DD"| NAS["NAS"]
+    STG -->|"write · fsync · rename<br/>into your date layout"| NAS["NAS"]
     NAS -->|"uncached read-back<br/>hash vs the card's hash"| GATE{"Wipe gate"}
     GATE -->|"every file verified<br/>nothing failed"| WIPE["Erase card → eject<br/>Safe to remove"]
     GATE -->|"any failure"| KEEP["Card left untouched"]
@@ -57,7 +57,7 @@ flowchart LR
    read* (the card read is the canonical hash), then a read-back verify with `F_NOCACHE` so it
    checks the disk, not the page cache.
 2. **Hop 2 — staging → NAS.** Each file is promoted the moment it staging-verifies, so wall-clock ≈
-   `max(card read, NAS write)`. Files land in pure date folders (`YYYY/MM/DD/` from EXIF
+   `max(card read, NAS write)`. Files land in your selected reversible date-folder layout (using EXIF
    *DateTimeOriginal*), then the NAS copy is **read back uncached** and its hash compared to the
    original card-read hash — true end-to-end integrity.
 3. **Wipe gate.** The card is erased only when *every* file is NAS-verified, nothing failed, the NAS
@@ -92,6 +92,7 @@ one being offloaded.
 | | |
 |---|---|
 | Browse NAS + card | Storage gauge, progressive photo count, date-folder navigation |
+| Flexible date folders | Seven presets or a reversible custom pattern; safely convert existing folders with preflight, resume, and rollback |
 | Folder collage cards | Date folders render as a photo collage of what's inside, captioned "Saturday, July 4th, 2026" |
 | Fast thumbnails | Embedded-preview extraction (KBs over SMB, not whole RAWs), memory + disk cache, bounded concurrency |
 | In-app viewer | Opens instantly (no Preview), zoom/pan, arrow-key paging, RAW+JPEG paired into one photo |

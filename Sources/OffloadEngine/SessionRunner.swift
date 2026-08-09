@@ -575,12 +575,12 @@ public actor SessionRunner {
         if await nas.validateNow(force: false) == .healthy {
             return URL(fileURLWithPath: config.nasRootPath, isDirectory: true)
         }
-        let emit = self.emit
         let runner = self
-        return try await nas.ensureMountedAndHealthy { health in
-            Task { await runner.noteWaitingForNAS(health) }
-            _ = emit   // captured for the ghost attention below
+        let root = try await nas.ensureMountedAndHealthy { health in
+            await runner.noteWaitingForNAS(health)
         }
+        await runner.noteNASRecovered()
+        return root
     }
 
     private func noteWaitingForNAS(_ health: NASHealth) async {
@@ -597,6 +597,30 @@ public actor SessionRunner {
                                           title: "Waiting for the NAS",
                                           detail: "Copying off the card continues; uploads resume when \(config.nasRootPath) is back.")))
         }
+    }
+
+    /// Restore the session's real state after the NAS health loop succeeds. The
+    /// old one-way waiting flag made uploads resume while the UI and journal kept
+    /// saying "waiting for NAS", and suppressed a later outage in the same run.
+    private func noteNASRecovered() async {
+        guard waitingForNAS else { return }
+        waitingForNAS = false
+
+        let state: SessionState
+        let phase: EnginePhase
+        if userPaused {
+            state = .pausedByUser
+            phase = .pausedByUser
+        } else if !cardPresent {
+            state = .pausedCardGone
+            phase = .pausedCardGone
+        } else {
+            state = .transferring
+            phase = .transferring
+        }
+        await journal.setSessionState(state, in: sessionID)
+        emit(.nasRecovered)
+        emit(.phase(phase))
     }
 
     private func handleHop2Error(_ file: FileRecord, _ error: Error) async {

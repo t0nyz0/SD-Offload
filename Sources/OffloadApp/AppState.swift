@@ -23,8 +23,12 @@ final class AppState {
     private(set) var cardMountPath: String?
 
     var popoverVisible = false {
-        didSet { if popoverVisible && !oldValue { refreshNASGlance(); refreshRecent() } }
+        didSet {
+            if popoverVisible && !oldValue { refreshNASGlance(); refreshRecent() }
+            updateNASMonitoring()
+        }
     }
+    @ObservationIgnored private var libraryVisible = false
 
     /// The AppKit layer that fulfills window requests (status-item popover, Library,
     /// History, Settings). Set once at launch by the AppDelegate. Weak: the
@@ -37,6 +41,7 @@ final class AppState {
     @ObservationIgnored private var pumpTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var doneResetTask: Task<Void, Never>?
+    @ObservationIgnored private var nasMonitorTask: Task<Void, Never>?
 
     init() {
         Paths.ensureAll()
@@ -174,6 +179,13 @@ final class AppState {
         case .nasGlance(let glance):
             nasGlance = glance
             learnNASIdentityIfNeeded(glance)
+
+        case .nasRecovered:
+            if session?.failure?.title == "Waiting for the NAS"
+                || session?.failure?.title == "NAS path is a local folder" {
+                session?.failure = nil
+            }
+            refreshNASGlance()
         }
     }
 
@@ -234,12 +246,33 @@ final class AppState {
     // MARK: - Glance + history
 
     func refreshNASGlance() {
-        let config = settings.config
-        Task.detached { [weak self] in
-            let glance = EngineGlance.quickNASGlance(config: config)
-            await MainActor.run { [weak self] in
-                self?.nasGlance = glance
-                self?.learnNASIdentityIfNeeded(glance)
+        engine.refreshNASGlance()
+    }
+
+    /// Keep the configured destination live while either NAS-facing surface is
+    /// visible. Closing both stops the idle polling; an active transfer has its
+    /// own persistent retry loop in SessionRunner.
+    func setLibraryVisible(_ visible: Bool) {
+        guard libraryVisible != visible else { return }
+        libraryVisible = visible
+        updateNASMonitoring()
+    }
+
+    private func updateNASMonitoring() {
+        let shouldMonitor = popoverVisible || libraryVisible
+        guard shouldMonitor else {
+            nasMonitorTask?.cancel()
+            nasMonitorTask = nil
+            return
+        }
+        refreshNASGlance()
+        guard nasMonitorTask == nil else { return }
+        nasMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(15)) }
+                catch { return }
+                guard let self, self.popoverVisible || self.libraryVisible else { return }
+                self.refreshNASGlance()
             }
         }
     }
@@ -288,16 +321,16 @@ final class AppState {
     /// insert wasn't picked up automatically.
     func rescanTapped() { engine.rescan() }
 
-    /// The NAS day-folder (YYYY/MM/DD, absolute) that received the most files this
+    /// The NAS date-folder (absolute) that received the most files this
     /// session — a batch spanning several capture days reveals the busiest day.
     /// Counts only files that actually landed on the NAS (nasVerified / skipped /
     /// wiped), so it resolves for auto-wiped batches too.
     static func uploadedFolder(from record: SessionRecord, nasRoot: String) -> String? {
         var counts: [String: Int] = [:]
         for file in record.files where file.state.isWipeEligible {
-            let comps = file.destRelPath.split(separator: "/")
-            guard comps.count >= 4 else { continue }        // YYYY/MM/DD/name
-            counts[comps.prefix(3).joined(separator: "/"), default: 0] += 1
+            let folder = (file.destRelPath as NSString).deletingLastPathComponent
+            guard folder != ".", !folder.isEmpty else { continue }
+            counts[folder, default: 0] += 1
         }
         guard let best = counts.max(by: { $0.value < $1.value })?.key else { return nil }
         return URL(fileURLWithPath: nasRoot, isDirectory: true).appendingPathComponent(best).path

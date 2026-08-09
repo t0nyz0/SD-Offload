@@ -29,4 +29,9 @@ final class SettingsStore {
         saveTask?.cancel()
         config.save()
     }
+
+    func reload() {
+        saveTask?.cancel()
+        config = AppConfig.load()
+    }
 }

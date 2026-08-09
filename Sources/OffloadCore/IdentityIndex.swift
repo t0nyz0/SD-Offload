@@ -70,6 +70,15 @@ public actor IdentityIndex {
         dirty = true
     }
 
+    public func remapPaths(_ mapping: [String: String]) {
+        for (id, var identity) in identities {
+            guard let old = identity.coverPath, let new = mapping[old], old != new else { continue }
+            identity.coverPath = new
+            identities[id] = identity
+            dirty = true
+        }
+    }
+
     public func delete(_ id: UUID) {
         if identities.removeValue(forKey: id) != nil { dirty = true }
     }

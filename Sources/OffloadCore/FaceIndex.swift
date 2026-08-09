@@ -40,6 +40,14 @@ public actor FaceIndex {
         for p in paths where byPath[p] != nil { byPath.removeValue(forKey: p); dirty = true }
     }
 
+    public func remapPaths(_ mapping: [String: String]) {
+        for (old, new) in mapping where old != new {
+            guard let detections = byPath.removeValue(forKey: old) else { continue }
+            byPath[new] = detections
+            dirty = true
+        }
+    }
+
     public func pruneMissing(underPrefix prefix: String, keeping: Set<String>) {
         for path in byPath.keys where Self.isUnder(path, prefix) && !keeping.contains(path) {
             byPath.removeValue(forKey: path)

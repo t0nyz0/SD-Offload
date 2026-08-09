@@ -35,6 +35,8 @@ public actor NASLocator {
     private let configProvider: ConfigProvider
     private var cached: (health: NASHealth, at: Date)?
     private var remountBackoff: TimeInterval = 5
+    private var remountInProgress = false
+    private var remountWaiters: [CheckedContinuation<Bool, Never>] = []
 
     public init(configProvider: @escaping ConfigProvider) {
         self.configProvider = configProvider
@@ -75,17 +77,25 @@ public actor NASLocator {
     /// reporting "healthy" for a mount that just disappeared.
     public func invalidate() { cached = nil }
 
+    /// One immediate health check with a single safe remount attempt. This is the
+    /// non-blocking variant used by idle UI monitoring; active transfers use the
+    /// persistent backoff loop below.
+    public func reconnectIfNeeded() async -> NASHealth {
+        var health = await validateNow(force: true)
+        if health == .notMounted {
+            _ = await attemptRemount()
+            health = await validateNow(force: true)
+        }
+        return health
+    }
+
     /// Opt-in pre-warm, kicked off when a card is inserted. READ-ONLY: wakes the SMB
     /// session (and spins up the NAS disks) early so the first hop-2 upload doesn't
     /// pay the cold-connection cost. Never writes → can't violate the ghost-mount
     /// guard. Best-effort and non-throwing. (Even if the ≤5 s health cache lapses
     /// before uploads start, the SMB session + spun-up disks stay warm — the real win.)
     public func prewarm() async {
-        var health = await validateNow(force: true)          // forced statfs classifies + wakes the session
-        if health == .notMounted {
-            _ = await attemptRemount()
-            health = await validateNow(force: true)
-        }
+        let health = await reconnectIfNeeded()               // forced statfs classifies + wakes the session
         guard health == .healthy else { return }             // never probe a ghost/wrong/read-only share
         let root = (await configProvider()).nasRootPath
         await Task.detached(priority: .utility) {            // off-actor: don't hold NASLocator during the read
@@ -96,7 +106,7 @@ public actor NASLocator {
     /// Blocks until the share is healthy. Attempts a NetFS remount, then
     /// backoff-retries (5 s → 60 s). Ghost folders are NEVER retried past —
     /// the caller surfaces them loudly and waits for the user.
-    public func ensureMountedAndHealthy(onWaiting: (@Sendable (NASHealth) -> Void)? = nil) async throws -> URL {
+    public func ensureMountedAndHealthy(onWaiting: (@Sendable (NASHealth) async -> Void)? = nil) async throws -> URL {
         while true {
             try Task.checkCancellation()
             let health = await validateNow(force: true)
@@ -104,10 +114,10 @@ public actor NASLocator {
             case .healthy:
                 return URL(fileURLWithPath: (await configProvider()).nasRootPath, isDirectory: true)
             case .notMounted:
-                onWaiting?(health)
+                await onWaiting?(health)
                 if await attemptRemount() { continue }
             case .ghostLocalFolder, .wrongShare, .readOnly:
-                onWaiting?(health)
+                await onWaiting?(health)
                 // Nothing we can safely automate — wait for the user/system.
             }
             try await Task.sleep(for: .seconds(remountBackoff))
@@ -121,6 +131,14 @@ public actor NASLocator {
         let config = await configProvider()
         guard let smb = config.nasSMBURL, let url = URL(string: smb) else { return false }
 
+        // Several upload workers and the visible-window monitor can notice the
+        // same outage together. Join the in-flight NetFS request instead of
+        // launching competing mounts for the same share.
+        if remountInProgress {
+            return await withCheckedContinuation { remountWaiters.append($0) }
+        }
+        remountInProgress = true
+
         var user: String?
         var password: String?
         if let creds = Keychain.get(service: Keychain.nasCredentialsService),
@@ -131,7 +149,7 @@ public actor NASLocator {
         // With nil credentials NetFS falls back to the login keychain entry
         // Finder saved when the user ticked "Remember this password".
 
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let options = NSMutableDictionary()
             options[kNAUIOptionKey as String] = kNAUIOptionNoUI
             var requestID: AsyncRequestID?
@@ -151,5 +169,10 @@ public actor NASLocator {
                 continuation.resume(returning: false)
             }
         }
+        remountInProgress = false
+        let waiters = remountWaiters
+        remountWaiters.removeAll()
+        for waiter in waiters { waiter.resume(returning: result) }
+        return result
     }
 }

@@ -125,7 +125,7 @@ public actor StagingBudget {
     }
 }
 
-/// Serializes NAS destination-directory creation so each `YYYY/MM/DD` dir is
+/// Serializes NAS destination-directory creation so each routed date directory is
 /// created once per session even under concurrent hop2 workers. Creation happens
 /// inside the actor's critical section, so a second worker can never start a
 /// write into a dir the first worker hasn't finished creating.

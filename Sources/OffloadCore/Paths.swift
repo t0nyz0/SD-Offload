@@ -23,6 +23,8 @@ public enum Paths {
     public static var pinnedFoldersFile: URL { appSupport.appendingPathComponent("pinned-folders.json") }
     /// Culling verdicts: per-photo star ratings + pick/reject flags.
     public static var cullFile: URL { appSupport.appendingPathComponent("cull.json") }
+    public static var migrationStateFile: URL { appSupport.appendingPathComponent("library-migration.json") }
+    public static var migrationBackupsDir: URL { appSupport.appendingPathComponent("MigrationBackups", isDirectory: true) }
 
     /// Hidden marker file written to a card to tie it to a session (per-card
     /// identity that survives synthesized-UUID collisions). Hidden, so the
@@ -30,7 +32,7 @@ public enum Paths {
     public static let cardSessionMarkerName = ".offload-session"
 
     public static func ensureAll() {
-        for dir in [appSupport, journalDir, historyDir, stagingRoot] {
+        for dir in [appSupport, journalDir, historyDir, stagingRoot, migrationBackupsDir] {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }

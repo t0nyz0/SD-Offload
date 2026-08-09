@@ -11,6 +11,23 @@ import OffloadEngine
 /// a deep add may leave a parent count stale until Refresh — see invalidateAll().)
 struct FolderStats: Sendable, Codable { let count: Int; let bytes: Int64 }
 
+/// `countMedia` reports through a `@Sendable` callback. Keep the progressive
+/// result in a tiny locked box so this remains valid when the package moves to
+/// Swift 6 language mode as well as today's Swift 5 compatibility mode.
+private final class FolderStatsAccumulator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = FolderStats(count: 0, bytes: 0)
+
+    func update(count: Int, bytes: Int64) {
+        lock.lock(); value = FolderStats(count: count, bytes: bytes); lock.unlock()
+    }
+
+    func snapshot() -> FolderStats {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+}
+
 final class FolderStatsLoader: @unchecked Sendable {
     static let shared = FolderStatsLoader()
 
@@ -37,9 +54,11 @@ final class FolderStatsLoader: @unchecked Sendable {
 
         let browser = self.browser
         let result: FolderStats = await Task.detached(priority: .utility) {
-            var count = 0; var bytes: Int64 = 0
-            browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { c, b in count = c; bytes = b }
-            return FolderStats(count: count, bytes: bytes)
+            let accumulator = FolderStatsAccumulator()
+            browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { count, bytes in
+                accumulator.update(count: count, bytes: bytes)
+            }
+            return accumulator.snapshot()
         }.value
         if Task.isCancelled { return nil }
         store(path: path, mtime: m, stats: result)

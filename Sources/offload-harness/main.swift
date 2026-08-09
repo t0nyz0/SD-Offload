@@ -160,6 +160,7 @@ let runner = SessionRunner(sessionID: record.id, card: cardInfo, config: cfg, jo
     switch event {
     case .phase(let p): eventLog.add("phase:\(p.rawValue)")
     case .attention(let a): eventLog.add("attention:\(a.title) — \(a.detail)")
+    case .nasRecovered: eventLog.add("nasRecovered")
     case .safeToRemove: eventLog.add("safeToRemove")
     default: break
     }
@@ -187,6 +188,22 @@ let elapsed = Date().timeIntervalSince(start)
 // --- Assertions --------------------------------------------------------------
 print("\n▸ Verifying")
 let final = await journal.loadHistory(limit: 1).first ?? record
+
+// Recovery must be visible as well as functional: the session should leave the
+// waiting phase, clear the one-way outage latch, and return to transferring.
+if mode == "chaos-nas" {
+    let events = eventLog.all
+    guard let waiting = events.firstIndex(of: "phase:waitingForNAS") else {
+        fail("NAS outage never surfaced a waiting phase: \(events)")
+    }
+    guard let recovered = events[waiting...].firstIndex(of: "nasRecovered") else {
+        fail("NAS return never emitted recovery: \(events)")
+    }
+    guard events[recovered...].contains("phase:transferring") else {
+        fail("session stayed visually stuck waiting after NAS recovery: \(events)")
+    }
+    log("NAS recovery returned the session from waiting to transferring")
+}
 
 // Safety-critical path: a single unreadable file must leave the card 100% intact.
 if mode == "chaos-unreadable" {
@@ -260,10 +277,10 @@ if mode == "secondary" {
     log("all \(sec) files also on the second drive with matching SHA-256")
 }
 
-// 3. Date routing sanity: files carry YYYY/MM/DD.
-let routed = final.files.allSatisfy { $0.destRelPath.range(of: #"^\d{4}/\d{2}/\d{2}/"#, options: .regularExpression) != nil }
-guard routed else { fail("some files not routed into YYYY/MM/DD folders") }
-log("date routing correct (2026/07/04 and 2026/07/05 present)")
+// 3. Date routing sanity: every destination reversibly matches the configured layout.
+let routed = final.files.allSatisfy { config.dateFolderLayout.parse(relativeFilePath: $0.destRelPath)?.precision == .day }
+guard routed else { fail("some files do not match the configured date-folder layout") }
+log("date routing correct for \(config.dateFolderLayout.pattern)")
 
 // 4. The card's DCIM is wiped and empty folders pruned; system folder untouched.
 for rel in sourceHashes.keys {
