@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import ImageIO
 import OffloadCore
 import OffloadEngine
 
@@ -20,6 +19,7 @@ struct ImageViewer: View {
     // Lightroom-style flow. Persisted, on by default; toggled from the top bar.
     @AppStorage("offload.viewer.autoAdvance") private var autoAdvance = true
     @State private var confirmingDelete = false
+    @State private var manualRotation = 0
 
     private var current: DisplayItem? {
         guard let i = index, items.indices.contains(i) else { return nil }
@@ -37,7 +37,8 @@ struct ImageViewer: View {
                 // the photo — the image fits into the width left of the panel.
                 HStack(spacing: 0) {
                     ZStack {
-                        ZoomableImage(url: item.primary.url, mtime: item.primary.modified)
+                        ZoomableImage(url: item.primary.url, mtime: item.primary.modified,
+                                      quarterTurns: manualRotation)
                             .id(item.id)
                         HStack {
                             navButton("chevron.left", enabled: i > 0) { step(-1) }
@@ -65,6 +66,7 @@ struct ImageViewer: View {
             .background(shortcuts)
             .transition(.opacity)
             .task(id: item.id) {
+                manualRotation = 0
                 meta = await PhotoMetaCache.shared.meta(url: item.primary.url, mtime: item.primary.modified)
             }
             .confirmationDialog("Delete this photo?", isPresented: $confirmingDelete) {
@@ -127,6 +129,17 @@ struct ImageViewer: View {
             }
             .tint(autoAdvance ? Color.accentColor : nil)
             .help("Auto-advance to the next photo after you rate or flag it")
+            HStack(spacing: 2) {
+                Button { rotateView(-1) } label: {
+                    Label("Rotate left", systemImage: "rotate.left")
+                }
+                .help("Rotate view left ([)")
+                Button { rotateView(1) } label: {
+                    Label("Rotate right", systemImage: "rotate.right")
+                }
+                .help("Rotate view right (])")
+            }
+            .labelStyle(.iconOnly)
             Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
                 Label("Info", systemImage: "info.circle")
             }
@@ -234,6 +247,10 @@ struct ImageViewer: View {
                 .keyboardShortcut(.delete, modifiers: [])
             Button("") { if let c = current { model.toggleFavorite(c) } }
                 .keyboardShortcut("f", modifiers: [])
+            Button("") { rotateView(-1) }
+                .keyboardShortcut("[", modifiers: [])
+            Button("") { rotateView(1) }
+                .keyboardShortcut("]", modifiers: [])
             // Culling keys: 0–5 rate, P pick, X reject (Lightroom-style).
             ForEach(0...5, id: \.self) { n in
                 Button("") { if let c = current { rate(n, for: c) } }
@@ -252,6 +269,10 @@ struct ImageViewer: View {
         let next = i + delta
         if items.indices.contains(next) { index = next }
     }
+
+    private func rotateView(_ delta: Int) {
+        manualRotation = ((manualRotation + delta) % 4 + 4) % 4
+    }
 }
 
 /// A tiny LRU of already-decoded full-resolution images, keyed by url + mtime.
@@ -261,19 +282,19 @@ struct ImageViewer: View {
 @MainActor
 final class FullImageCache {
     static let shared = FullImageCache()
-    private struct Key: Hashable { let path: String; let mtime: TimeInterval }
+    private struct Key: Hashable { let path: String; let mtime: TimeInterval; let rotation: Int }
     private var order: [Key] = []            // most-recent-last
     private var store: [Key: NSImage] = [:]
     private let capacity = 8
 
-    func get(url: URL, mtime: Date) -> NSImage? {
-        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate)
+    func get(url: URL, mtime: Date, rotation: Int = 0) -> NSImage? {
+        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate, rotation: rotation)
         guard let img = store[k] else { return nil }
         if let i = order.firstIndex(of: k) { order.remove(at: i); order.append(k) }
         return img
     }
-    func put(url: URL, mtime: Date, image: NSImage) {
-        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate)
+    func put(url: URL, mtime: Date, rotation: Int = 0, image: NSImage) {
+        let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate, rotation: rotation)
         if store[k] == nil { order.append(k); store[k] = image }
         while order.count > capacity, let victim = order.first {
             order.removeFirst(); store.removeValue(forKey: victim)
@@ -290,6 +311,7 @@ final class FullImageCache {
 private struct ZoomableImage: View {
     let url: URL
     let mtime: Date
+    let quarterTurns: Int
     @State private var image: NSImage?
     @State private var failed = false
 
@@ -308,31 +330,44 @@ private struct ZoomableImage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) { await load() }
+        .task(id: LoadID(url: url, rotation: quarterTurns)) { await load() }
     }
 
+    private struct LoadID: Hashable { let url: URL; let rotation: Int }
+
     private func load() async {
-        if let cached = FullImageCache.shared.get(url: url, mtime: mtime) {
+        if let cached = FullImageCache.shared.get(url: url, mtime: mtime, rotation: quarterTurns) {
             image = cached; failed = false
             return
         }
         image = nil; failed = false
         let u = url
-        let loaded = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-            // Force ImageIO to decode into a cached pixel buffer here — otherwise
-            // the first draw on the main thread does it and the UI stalls.
-            guard let src = CGImageSourceCreateWithURL(u as CFURL, nil) else { return nil }
-            let opts: CFDictionary = [
-                kCGImageSourceShouldCache: true,
-                kCGImageSourceShouldCacheImmediately: true,
-            ] as CFDictionary
-            guard let cg = CGImageSourceCreateImageAtIndex(src, 0, opts) else { return nil }
-            let size = NSSize(width: cg.width, height: cg.height)
-            return NSImage(cgImage: cg, size: size)
+        let rotation = quarterTurns
+        let base = FullImageCache.shared.get(url: url, mtime: mtime)
+        let loaded = await Task.detached(priority: .userInitiated) { () -> (NSImage, NSImage?)? in
+            let baseImage: NSImage
+            if let base {
+                baseImage = base
+            } else {
+                guard let cg = OrientedImageDecoder.decode(url: u) else { return nil }
+                baseImage = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
+            guard rotation != 0 else { return (baseImage, nil) }
+            guard let cg = baseImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  let rotated = OrientedImageDecoder.rotated(cg, quarterTurns: rotation) else { return nil }
+            let display = NSImage(cgImage: rotated,
+                                  size: NSSize(width: rotated.width, height: rotated.height))
+            return (display, base == nil ? baseImage : nil)
         }.value
+        guard !Task.isCancelled else { return }
         if let loaded {
-            image = loaded
-            FullImageCache.shared.put(url: url, mtime: mtime, image: loaded)
+            image = loaded.0
+            if let decodedBase = loaded.1 {
+                FullImageCache.shared.put(url: url, mtime: mtime, image: decodedBase)
+            } else if rotation == 0 {
+                FullImageCache.shared.put(url: url, mtime: mtime, image: loaded.0)
+            }
+            FullImageCache.shared.put(url: url, mtime: mtime, rotation: rotation, image: loaded.0)
         } else {
             failed = true
         }
@@ -349,9 +384,12 @@ private struct ZoomPanSurface: NSViewRepresentable {
     func makeNSView(context: Context) -> ZoomScrollView { ZoomScrollView(image: image) }
 
     func updateNSView(_ nsView: ZoomScrollView, context: Context) {
-        // `.id(item.id)` remounts us per photo, so the image is normally set once at
-        // init; refresh only if SwiftUI happened to reuse the view for a new image.
-        if nsView.pannableView.image !== image { nsView.pannableView.image = image }
+        // `.id(item.id)` remounts us per photo. Manual rotation intentionally
+        // replaces the image in place and returns zoom to fit.
+        if nsView.pannableView.image !== image {
+            nsView.pannableView.image = image
+            nsView.magnification = nsView.minMagnification
+        }
     }
 }
 

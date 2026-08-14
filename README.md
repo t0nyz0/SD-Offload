@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-on--device-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-90%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-92%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -95,7 +95,7 @@ one being offloaded.
 | Flexible date folders | Seven presets or a reversible custom pattern; safely convert existing folders with preflight, resume, and rollback |
 | Folder collage cards | Date folders render as a photo collage of what's inside, captioned "Saturday, July 4th, 2026" |
 | Fast thumbnails | Embedded-preview extraction (KBs over SMB, not whole RAWs), memory + disk cache, bounded concurrency |
-| In-app viewer | Opens instantly (no Preview), zoom/pan, arrow-key paging, RAW+JPEG paired into one photo |
+| In-app viewer | Opens instantly (no Preview), honors portrait orientation, rotate/zoom/pan, arrow-key paging, RAW+JPEG paired into one photo |
 | Info inspector | Camera, lens, full exposure, dimensions/megapixels, GPS, and content tags — packed into one panel |
 | Delete & multi-select | Remove photos (with their RAW/sidecars) from the NAS, one or many, with confirmation |
 

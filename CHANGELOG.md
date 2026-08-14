@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-08-13
+
+### Added
+- **Non-destructive viewer rotation.** Rotate a photo left or right from compact
+  viewer controls or the `[` / `]` shortcuts without modifying the original file.
+
+### Fixed
+- **Portrait photos display upright in the Library viewer.** Full-resolution
+  decoding now applies mirrored and rotated EXIF orientation just like Library
+  thumbnails already did, instead of showing the camera's raw landscape pixels.
+
 ## [1.7.0] — 2026-08-09
 
 ### Added
