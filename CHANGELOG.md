@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-09-25
+
+### Fixed
+- Give the photo viewer a dedicated top bar with a labeled Back to Library button.
+
+### Changed
+- Put a labeled Favorite heart in the photo viewer's bottom controls, label star
+  ratings, and move Pick / Reject into a separate menu with explanatory help.
+
 ## [1.7.1] — 2026-08-13
 
 ### Added

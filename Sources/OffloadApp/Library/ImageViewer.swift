@@ -33,35 +33,35 @@ struct ImageViewer: View {
                 Color.black.opacity(0.985).ignoresSafeArea()
                     .onTapGesture { index = nil }
 
-                // Image and inspector sit SIDE BY SIDE, so the panel never covers
-                // the photo — the image fits into the width left of the panel.
-                HStack(spacing: 0) {
-                    ZStack {
-                        ZoomableImage(url: item.primary.url, mtime: item.primary.modified,
-                                      quarterTurns: manualRotation)
-                            .id(item.id)
-                        HStack {
-                            navButton("chevron.left", enabled: i > 0) { step(-1) }
-                            Spacer()
-                            navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
-                        }
-                        .padding(.horizontal, 12)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    topBar(item: item, position: i)
 
-                    if showInfo {
-                        InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary), model: model)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    // Image and inspector sit SIDE BY SIDE, so the panel never covers
+                    // the photo — the image fits into the width left of the panel.
+                    HStack(spacing: 0) {
+                        ZStack {
+                            ZoomableImage(url: item.primary.url, mtime: item.primary.modified,
+                                          quarterTurns: manualRotation)
+                                .id(item.id)
+                            HStack {
+                                navButton("chevron.left", enabled: i > 0) { step(-1) }
+                                Spacer()
+                                navButton("chevron.right", enabled: i < items.count - 1) { step(1) }
+                            }
+                            .padding(.horizontal, 12)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if showInfo {
+                            InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary), model: model)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
+                    .overlay(alignment: .bottom) {
+                        cullBar(item: item)
+                            .padding(.bottom, DS.Space.l)
                     }
                 }
-                .padding(.top, 44)   // clear the top bar
-
-                topBar(item: item, position: i)
-
-                cullBar(item: item)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, DS.Space.l)
-                    .allowsHitTesting(true)
             }
             .background(shortcuts)
             .transition(.opacity)
@@ -105,25 +105,21 @@ struct ImageViewer: View {
 
     private func topBar(item: DisplayItem, position: Int) -> some View {
         HStack(spacing: DS.Space.m) {
+            Button { index = nil } label: {
+                Label("Back to Library", systemImage: "chevron.left")
+            }
+            .labelStyle(.titleAndIcon)
+            .fixedSize()
+            .help("Back to Library (Esc)")
+
             VStack(alignment: .leading, spacing: 1) {
                 Text((item.primary.name as NSString).deletingPathExtension)
                     .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1).truncationMode(.middle)
                 Text("\(position + 1) of \(items.count)")
                     .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
             }
             Spacer()
-            if let exif = meta?.exif, exif.hasAny {
-                Text(exif.caption)
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.45))
-                    .padding(.trailing, DS.Space.s)
-            }
-            Button { model.toggleFavorite(item) } label: {
-                Label("Favorite", systemImage: model.isFavorite(item.primary.id) ? "heart.fill" : "heart")
-            }
-            .tint(model.isFavorite(item.primary.id) ? .pink : nil)
-            .help("Favorite (F)")
             Button { autoAdvance.toggle() } label: {
                 Label("Auto-advance", systemImage: autoAdvance ? "forward.fill" : "forward")
             }
@@ -158,22 +154,29 @@ struct ImageViewer: View {
                 .tint(.red)
                 .help("Delete from NAS (⌦)")
             }
-            Button { index = nil } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 18)) }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
         }
+        .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
-        .background(.ultraThinMaterial)
+        .background(Color(white: 0.12))
         .foregroundStyle(.white)
     }
 
-    // Floating rating + flag strip: the primary culling surface. Click a star to
-    // rate (click the current rating again to clear), or Pick/Reject. Keyboard 0–5,
-    // P, X do the same. Reject dims the photo; picks read green.
+    // Favorites are the primary action; ratings and culling flags stay separate.
     private func cullBar(item: DisplayItem) -> some View {
         let stars = model.rating(for: item)
         let flag = model.flag(for: item)
+        let favorite = model.isFavorite(item.primary.id)
         return HStack(spacing: DS.Space.m) {
+            Button { model.toggleFavorite(item) } label: {
+                Label(favorite ? "Favorited" : "Favorite", systemImage: favorite ? "heart.fill" : "heart")
+                    .foregroundStyle(favorite ? Color.pink : .white)
+            }
+            .buttonStyle(.plain)
+            .help(favorite ? "Remove from Favorites (F)" : "Add to Favorites (F)")
+            .accessibilityValue(favorite ? "On" : "Off")
+            Divider().frame(height: 18).overlay(.white.opacity(0.2))
+            Text("Rating").foregroundStyle(.white.opacity(0.65))
             HStack(spacing: 3) {
                 ForEach(1...5, id: \.self) { n in
                     Button { rate(n == stars ? 0 : n, for: item) } label: {
@@ -186,19 +189,16 @@ struct ImageViewer: View {
                 }
             }
             Divider().frame(height: 18).overlay(.white.opacity(0.2))
-            Button { setFlag(.pick, for: item) } label: {
-                Label("Pick", systemImage: "flag.fill")
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 14))
-                    .foregroundStyle(flag == .pick ? Color.green : .white.opacity(0.45))
+            Menu {
+                Button(flag == .pick ? "Clear Pick (P)" : "Mark as Pick (P)") { setFlag(.pick, for: item) }
+                Button(flag == .reject ? "Clear Reject (X)" : "Mark as Reject (X)") { setFlag(.reject, for: item) }
+            } label: {
+                Text(flag == .pick ? "Picked" : flag == .reject ? "Rejected" : "Pick / Reject")
+                    .foregroundStyle(flag == .pick ? Color.green : flag == .reject ? Color.red : .white.opacity(0.65))
             }
-            .buttonStyle(.plain).help("Pick (P)")
-            Button { setFlag(.reject, for: item) } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(flag == .reject ? Color.red : .white.opacity(0.45))
-            }
-            .buttonStyle(.plain).help("Reject (X)")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Pick marks a photo to keep; Reject marks it for review. Neither changes Favorites or deletes the file.")
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
