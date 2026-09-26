@@ -60,6 +60,7 @@ struct SettingsView: View {
                 case .notifications: notificationsPane(settings: settings)
                 }
             }
+            .id(pane) // Each pane starts at its own scroll origin.
             .navigationTitle(pane.label)
             .navigationSplitViewColumnWidth(min: 480, ideal: 540)
         }
@@ -86,14 +87,14 @@ struct SettingsView: View {
     @ViewBuilder
     private func generalPane(settings: SettingsStore) -> some View {
         @Bindable var s = settings
-        Form {
-            Section("Startup") {
+        SettingsPaneForm {
+            SettingsSection("Startup") {
                 LoginItemToggle()
                 Toggle("Pop open the tray when a card is inserted", isOn: $s.config.autoOpenTrayOnInsert)
                 Toggle("Reveal uploaded photos in the Library when an offload finishes", isOn: $s.config.autoShowLibrary)
             }
 
-            Section("Sound") {
+            SettingsSection("Sound") {
                 Toggle("Play a sound when an offload finishes", isOn: $s.config.playSounds)
                 if s.config.playSounds {
                     HStack {
@@ -112,11 +113,10 @@ struct SettingsView: View {
                 }
             }
 
-            Section("About") {
+            SettingsSection("About") {
                 LabeledContent("Version", value: AppInfo.versionString)
             }
         }
-        .formStyle(.grouped)
     }
 
     // MARK: - Destination
@@ -124,8 +124,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func destinationPane(settings: SettingsStore) -> some View {
         @Bindable var s = settings
-        Form {
-            Section {
+        SettingsPaneForm {
+            SettingsSection {
                 LabeledContent("NAS folder") {
                     HStack(spacing: 8) {
                         Circle()
@@ -152,7 +152,7 @@ struct SettingsView: View {
                 Text("Primary")
             }
 
-            Section {
+            SettingsSection {
                 Picker("Folder organization", selection: Binding(
                     get: { s.config.dateFolderLayout.pattern },
                     set: { pattern in
@@ -187,7 +187,7 @@ struct SettingsView: View {
                 Text("Date folders")
             }
 
-            Section {
+            SettingsSection {
                 LabeledContent("Second drive") {
                     HStack(spacing: 8) {
                         Text(s.config.secondaryDestPath ?? "Off")
@@ -208,7 +208,6 @@ struct SettingsView: View {
                 Text("Second copy (optional)")
             }
         }
-        .formStyle(.grouped)
     }
 
     // MARK: - Card & Offload
@@ -216,8 +215,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func offloadPane(settings: SettingsStore) -> some View {
         @Bindable var s = settings
-        Form {
-            Section("When a card is inserted") {
+        SettingsPaneForm {
+            SettingsSection("When a card is inserted") {
                 Picker("Action", selection: $s.config.defaultCardAction) {
                     Text("Offload automatically").tag(CardPolicy.alwaysIngest)
                     Text("Ask each time").tag(CardPolicy.ask)
@@ -229,7 +228,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Erase the card") {
+            SettingsSection("Erase the card") {
                 Picker("Wipe policy", selection: $s.config.wipePolicy) {
                     Text("Ask every time (recommended)").tag(WipePolicy.askEachTime)
                     Text("Automatically, after NAS verification").tag(WipePolicy.afterNASVerify)
@@ -238,7 +237,7 @@ struct SettingsView: View {
                 Toggle("Eject card automatically when done", isOn: $s.config.autoEject)
             }
 
-            Section {
+            SettingsSection {
                 LabeledContent("Local staging") {
                     HStack(spacing: 8) {
                         Text(s.config.stagingRootPath)
@@ -257,7 +256,7 @@ struct SettingsView: View {
                 Text("Staging")
             }
 
-            Section {
+            SettingsSection {
                 Stepper("Parallel NAS uploads: \(s.config.hop2Workers)",
                         value: $s.config.hop2Workers, in: 1...8)
                 Text("Each uploaded file is read back from the NAS uncached and checksummed against the card before the card can be wiped — always. More parallel uploads can help on fast links; a single spinning-disk NAS may prefer fewer.")
@@ -271,7 +270,6 @@ struct SettingsView: View {
                 Text("Performance")
             }
         }
-        .formStyle(.grouped)
     }
 
     // MARK: - Library
@@ -279,8 +277,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func libraryPane(settings: SettingsStore) -> some View {
         @Bindable var s = settings
-        Form {
-            Section {
+        SettingsPaneForm {
+            SettingsSection {
                 Picker("Thumbnail quality", selection: Binding(
                     get: { thumbQuality },
                     set: { newValue in
@@ -301,7 +299,7 @@ struct SettingsView: View {
                 Text("Thumbnails")
             }
 
-            Section {
+            SettingsSection {
                 Picker("Provider", selection: $s.config.aiProvider) {
                     ForEach(AIProvider.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
@@ -323,7 +321,6 @@ struct SettingsView: View {
                 Text("AI photo analysis")
             }
         }
-        .formStyle(.grouped)
     }
 
     // MARK: - Notifications
@@ -331,8 +328,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func notificationsPane(settings: SettingsStore) -> some View {
         @Bindable var s = settings
-        Form {
-            Section {
+        SettingsPaneForm {
+            SettingsSection {
                 Toggle("Card detected", isOn: $s.config.notifyCardDetected)
                 Toggle("Transfer complete (safe to remove)", isOn: $s.config.notifyComplete)
                 Toggle("Problems", isOn: $s.config.notifyProblems)
@@ -344,7 +341,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
     }
 
     private func pickFolder(_ apply: @escaping (String) -> Void) {
@@ -599,5 +595,66 @@ enum AppInfo {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
         return build.map { "\(version) (\($0))" } ?? version
+    }
+}
+
+/// A single scroll surface with bounded, leading-aligned content. Avoid the
+/// grouped Form's implicit scrolling/sizing inside an AppKit-hosted split view.
+private struct SettingsPaneForm<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 24) {
+                content
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .scrollIndicators(.visible)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toggleStyle(.switch)
+    }
+}
+
+private struct SettingsSection<Content: View, Header: View, Footer: View>: View {
+    let content: Content
+    let header: Header
+    let footer: Footer
+
+    init(_ title: String, @ViewBuilder content: () -> Content)
+        where Header == Text, Footer == EmptyView {
+        self.content = content()
+        self.header = Text(title)
+        self.footer = EmptyView()
+    }
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder header: () -> Header)
+        where Footer == EmptyView {
+        self.content = content()
+        self.header = header()
+        self.footer = EmptyView()
+    }
+
+    init(@ViewBuilder content: () -> Content, @ViewBuilder header: () -> Header,
+         @ViewBuilder footer: () -> Footer) {
+        self.content = content()
+        self.header = header()
+        self.footer = footer()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header.font(.headline)
+            VStack(alignment: .leading, spacing: 16) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+            footer
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

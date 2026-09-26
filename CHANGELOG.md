@@ -5,6 +5,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.5] — 2026-09-26
+
+### Fixed
+- Give every Settings pane an explicit vertical scroll view, leading-aligned
+  sections, and readable content width so all controls remain reachable when resized.
+- Reset the scroll position when switching Settings categories.
+
 ## [1.7.4] — 2026-09-26
 
 ### Fixed
