@@ -44,25 +44,34 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var settings = app.settings
-        NavigationSplitView {
+        HStack(spacing: 0) {
             List(Pane.allCases, selection: $pane) { p in
                 Label(p.label, systemImage: p.icon).tag(p)
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 220)
-        } detail: {
-            Group {
-                switch pane {
-                case .general:       generalPane(settings: settings)
-                case .destination:   destinationPane(settings: settings)
-                case .offload:       offloadPane(settings: settings)
-                case .library:       libraryPane(settings: settings)
-                case .notifications: notificationsPane(settings: settings)
+            .frame(width: 200)
+            Divider()
+            VStack(spacing: 0) {
+                HStack {
+                    Text(pane.label).font(.title2.bold())
+                    Spacer()
+                    Button("Close Settings") { NSApp.keyWindow?.performClose(nil) }
+                        .keyboardShortcut("w", modifiers: .command)
                 }
+                .padding(20)
+                Divider()
+                Group {
+                    switch pane {
+                    case .general:       generalPane(settings: settings)
+                    case .destination:   destinationPane(settings: settings)
+                    case .offload:       offloadPane(settings: settings)
+                    case .library:       libraryPane(settings: settings)
+                    case .notifications: notificationsPane(settings: settings)
+                    }
+                }
+                .id(pane) // Each pane starts at its own scroll origin.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .id(pane) // Each pane starts at its own scroll origin.
-            .navigationTitle(pane.label)
-            .navigationSplitViewColumnWidth(min: 480, ideal: 540)
         }
         .frame(minWidth: 700, minHeight: 520)
         .onAppear { app.refreshNASGlance(); apiKey = Keychain.get(service: Keychain.aiAPIKeyService) ?? "" }

@@ -5,6 +5,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.7] — 2026-09-26
+
+### Fixed
+- Keep a labeled Close Settings button in a fixed header above the scrolling pane.
+- Remove the automatic floating sidebar toggle from Settings; category navigation
+  remains visible beside the content.
+
 ## [1.7.6] — 2026-09-26
 
 ### Added
