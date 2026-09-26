@@ -1,11 +1,12 @@
 import SwiftUI
 import AppKit
+import AVKit
 import OffloadCore
 import OffloadEngine
 
 /// A fast in-app image viewer — opens instantly instead of launching Preview.
-/// Always shows the JPEG (the display copy); the RAW opens externally on demand.
-/// Arrow keys move between photos, Escape/Space closes, scroll/pinch zooms,
+/// Photos show the JPEG; videos use native AVKit playback controls.
+/// Arrow keys navigate, Escape closes, Space plays/pauses videos or closes photos,
 /// "i" toggles the info inspector, ⌦ deletes (NAS only).
 struct ImageViewer: View {
     let items: [DisplayItem]
@@ -20,6 +21,15 @@ struct ImageViewer: View {
     @AppStorage("offload.viewer.autoAdvance") private var autoAdvance = true
     @State private var confirmingDelete = false
     @State private var manualRotation = 0
+    @State private var videoPlayer = AVPlayer()
+    @State private var videoLoading = false
+    @State private var videoError: String?
+
+    private var isVideo: Bool {
+        guard let current else { return false }
+        if case .media(.video) = current.primary.kind { return true }
+        return false
+    }
 
     private var current: DisplayItem? {
         guard let i = index, items.indices.contains(i) else { return nil }
@@ -40,9 +50,13 @@ struct ImageViewer: View {
                     // the photo — the image fits into the width left of the panel.
                     HStack(spacing: 0) {
                         ZStack {
-                            ZoomableImage(url: item.primary.url, mtime: item.primary.modified,
-                                          quarterTurns: manualRotation)
-                                .id(item.id)
+                            if isVideo {
+                                videoPreview(item)
+                            } else {
+                                ZoomableImage(url: item.primary.url, mtime: item.primary.modified,
+                                              quarterTurns: manualRotation)
+                                    .id(item.id)
+                            }
                             HStack {
                                 navButton("chevron.left", enabled: i > 0) { step(-1) }
                                 Spacer()
@@ -57,17 +71,43 @@ struct ImageViewer: View {
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
-                    .overlay(alignment: .bottom) {
-                        cullBar(item: item)
-                            .padding(.bottom, DS.Space.l)
-                    }
+                    // Reserve space so our controls never cover video playback controls.
+                    cullBar(item: item)
+                        .padding(.vertical, DS.Space.s)
                 }
             }
             .background(shortcuts)
             .transition(.opacity)
             .task(id: item.id) {
                 manualRotation = 0
-                meta = await PhotoMetaCache.shared.meta(url: item.primary.url, mtime: item.primary.modified)
+                videoPlayer.pause()
+                videoPlayer.replaceCurrentItem(with: nil)
+                videoError = nil
+                meta = nil
+                if isVideo {
+                    videoLoading = true
+                    let asset = AVURLAsset(url: item.primary.url)
+                    do {
+                        let playable = try await asset.load(.isPlayable)
+                        try Task.checkCancellation()
+                        if playable {
+                            videoPlayer.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+                        } else {
+                            videoError = "macOS cannot play this video's format."
+                        }
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        videoError = "Couldn't load this video: \(error.localizedDescription)"
+                    }
+                    videoLoading = false
+                } else {
+                    videoLoading = false
+                    meta = await PhotoMetaCache.shared.meta(url: item.primary.url, mtime: item.primary.modified)
+                }
+            }
+            .onDisappear {
+                videoPlayer.pause()
+                videoPlayer.replaceCurrentItem(with: nil)
             }
             .confirmationDialog("Delete this photo?", isPresented: $confirmingDelete) {
                 if item.isRawJpegPair {
@@ -81,6 +121,24 @@ struct ImageViewer: View {
             } message: {
                 Text(deleteMessage(item))
             }
+        }
+    }
+
+    @ViewBuilder
+    private func videoPreview(_ item: DisplayItem) -> some View {
+        if let videoError {
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                Text("Video unavailable").font(.headline)
+                Text(videoError).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button("Open in Default Video App") { NSWorkspace.shared.open(item.primary.url) }
+            }
+            .padding(32)
+        } else {
+            VideoPlayer(player: videoPlayer)
+                .overlay {
+                    if videoLoading { ProgressView("Loading video…") }
+                }
         }
     }
 
@@ -136,6 +194,7 @@ struct ImageViewer: View {
                 .help("Rotate view right (])")
             }
             .labelStyle(.iconOnly)
+            .disabled(isVideo)
             Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
                 Label("Info", systemImage: "info.circle")
             }
@@ -253,7 +312,11 @@ struct ImageViewer: View {
             Button("") { step(-1) }.keyboardShortcut(.leftArrow, modifiers: [])
             Button("") { step(1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { index = nil }.keyboardShortcut(.cancelAction)
-            Button("") { index = nil }.keyboardShortcut(KeyEquivalent(" "), modifiers: [])
+            Button("") {
+                if isVideo {
+                    if videoPlayer.rate == 0 { videoPlayer.play() } else { videoPlayer.pause() }
+                } else { index = nil }
+            }.keyboardShortcut(KeyEquivalent(" "), modifiers: [])
             Button("") { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } }
                 .keyboardShortcut("i", modifiers: [])
             Button("") { if canDelete { confirmingDelete = true } }

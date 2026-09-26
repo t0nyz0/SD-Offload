@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.8] — 2026-09-26
+
+### Fixed
+- Preview videos with native AVKit playback, seeking, and volume controls instead
+  of sending movies to the still-image decoder.
+- Space plays/pauses videos; Escape and Back to Library exit. Stop playback and
+  release the video when navigating away or closing the viewer.
+- Keep Library controls below playback controls and show a useful loading/error state.
+
 ## [1.7.7] — 2026-09-26
 
 ### Fixed
