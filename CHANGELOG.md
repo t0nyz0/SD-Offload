@@ -8,6 +8,8 @@ the app version lives in `VERSION`, the build number is the git commit count.
 ## [1.7.4] — 2026-09-26
 
 ### Fixed
+- Skip empty staging folders during next-run cleanup, avoiding unnecessary reads of
+  historical NAS batches before a new transfer starts.
 - Add Back to Library to the native window toolbar and the photo viewer's bottom
   controls, so exiting remains visible when window tabs obscure the content header.
 

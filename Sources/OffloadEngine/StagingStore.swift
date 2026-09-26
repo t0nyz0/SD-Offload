@@ -53,7 +53,9 @@ public struct StagingStore: Sendable {
         for record in history {
             guard record.state == .done, let ended = record.endedAt,
                   now.timeIntervalSince(ended) >= Double(max(0, keepDays)) * 86_400,
-                  FileManager.default.fileExists(atPath: sessionDir(record.id).path) else { continue }
+                  let retained = try? FileManager.default.contentsOfDirectory(
+                    at: sessionDir(record.id), includingPropertiesForKeys: nil),
+                  !retained.isEmpty else { continue }
             do {
                 try await DestinationVerifier.verify(files: record.files, root: nasRoot)
                 purgeSession(record.id)
