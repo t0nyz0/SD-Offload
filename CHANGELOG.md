@@ -5,6 +5,12 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.4] — 2026-09-26
+
+### Fixed
+- Add Back to Library to the native window toolbar and the photo viewer's bottom
+  controls, so exiting remains visible when window tabs obscure the content header.
+
 ## [1.7.3] — 2026-09-26
 
 ### Fixed

@@ -168,6 +168,14 @@ struct ImageViewer: View {
         let flag = model.flag(for: item)
         let favorite = model.isFavorite(item.primary.id)
         return HStack(spacing: DS.Space.m) {
+            // Keep an exit beside the always-visible photo controls even when
+            // macOS window tabs/titlebar obscure the viewer's content header.
+            Button { index = nil } label: {
+                Label("Back to Library", systemImage: "chevron.left")
+            }
+            .buttonStyle(.plain)
+            .help("Back to Library (Esc)")
+            Divider().frame(height: 18).overlay(.white.opacity(0.2))
             Button { model.toggleFavorite(item) } label: {
                 Label(favorite ? "Favorited" : "Favorite", systemImage: favorite ? "heart.fill" : "heart")
                     .foregroundStyle(favorite ? Color.pink : .white)

@@ -171,6 +171,17 @@ struct LibraryWindow: View {
                 }
             }
         }
+        .toolbar {
+            if viewerIndex != nil {
+                ToolbarItem(placement: .navigation) {
+                    Button { viewerIndex = nil } label: {
+                        Label("Back to Library", systemImage: "chevron.left")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .help("Back to Library (Esc)")
+                }
+            }
+        }
         .onChange(of: model.source) { _, source in
             viewerIndex = nil   // switching source closes the viewer
             if source == .nas { model.setNASAvailable(app.nasGlance.healthy) }
