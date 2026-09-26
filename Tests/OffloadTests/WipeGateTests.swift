@@ -135,12 +135,12 @@ final class WipeGateTests: XCTestCase {
         }
     }
 
-    func testStagingPolicyToleratesUnhealthyNASAndStagedVerified() {
-        // afterStagingVerify: staged copy is the safety net, NAS not required.
+    func testLegacyStagingPolicyStillRequiresVerifiedHealthyNAS() {
+        // Legacy settings must never bypass NAS verification.
         let s = baselineSession(states: [.stagedVerified, .stagedVerified])
         let v = WipeGate.evaluate(session: s, policy: .afterStagingVerify, cardMount: card(),
                                   nasHealth: .notMounted, statOf: goodStat(s), journalFlushed: true)
-        XCTAssertTrue(v.allowed, "\(v.blockers)")
+        XCTAssertFalse(v.allowed, "\(v.blockers)")
     }
 
     func testCardNotMountedBlocks() {

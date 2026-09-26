@@ -43,7 +43,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var stagingRootPath: String = Paths.stagingRoot.path
     public var stagingBudgetCapBytes: Int64 = 100 << 30
     public var stagingHeadroomBytes: Int64 = 12 << 30
-    public var keepStagedDays: Int = 0        // 0 = purge as soon as NAS-verified
+    public var keepStagedDays: Int = 0        // 0 = until next transfer, after NAS re-verification
 
     // Performance
     public var hop1Workers: Int = 1
@@ -92,6 +92,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
             ?? [dateFolderLayout]).filter { $0.validationError == nil }
         if !recognizedDateFolderLayouts.contains(dateFolderLayout) { recognizedDateFolderLayouts.append(dateFolderLayout) }
         wipePolicy = try c.decodeIfPresent(WipePolicy.self, forKey: .wipePolicy) ?? d.wipePolicy
+        if wipePolicy == .afterStagingVerify { wipePolicy = .afterNASVerify }
         autoEject = try c.decodeIfPresent(Bool.self, forKey: .autoEject) ?? d.autoEject
         wipeCountdownSeconds = try c.decodeIfPresent(Int.self, forKey: .wipeCountdownSeconds) ?? d.wipeCountdownSeconds
         ingestScope = try c.decodeIfPresent(IngestScope.self, forKey: .ingestScope) ?? d.ingestScope

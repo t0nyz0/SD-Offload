@@ -46,16 +46,20 @@ public struct StagingStore: Sendable {
         }
     }
 
-    /// keepStagedDays sweep at app launch (0 = purge-on-verify mode, nothing to sweep here
-    /// beyond orphaned session dirs older than a day).
-    public func sweep(keepDays: Int) {
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        let cutoff = Date().addingTimeInterval(-Double(max(keepDays, 1)) * 86_400)
-        for url in entries {
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            if modified < cutoff {
-                try? fm.removeItem(at: url)
+    /// Only a new transfer may retire recovery copies. Never sweep unknown,
+    /// failed, interrupted, or unverifiable sessions based on directory age.
+    public func pruneCompletedBeforeNextRun(_ history: [SessionRecord], nasRoot: String,
+                                            keepDays: Int, now: Date = Date()) async {
+        for record in history {
+            guard record.state == .done, let ended = record.endedAt,
+                  now.timeIntervalSince(ended) >= Double(max(0, keepDays)) * 86_400,
+                  FileManager.default.fileExists(atPath: sessionDir(record.id).path) else { continue }
+            do {
+                try await DestinationVerifier.verify(files: record.files, root: nasRoot)
+                purgeSession(record.id)
+            } catch {
+                // A missing/changed NAS file makes the local copy essential.
+                continue
             }
         }
     }

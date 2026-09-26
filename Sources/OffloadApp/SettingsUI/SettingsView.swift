@@ -233,7 +233,6 @@ struct SettingsView: View {
                 Picker("Wipe policy", selection: $s.config.wipePolicy) {
                     Text("Ask every time (recommended)").tag(WipePolicy.askEachTime)
                     Text("Automatically, after NAS verification").tag(WipePolicy.afterNASVerify)
-                    Text("Automatically, after local staging verification").tag(WipePolicy.afterStagingVerify)
                 }
                 .pickerStyle(.radioGroup)
                 Toggle("Eject card automatically when done", isOn: $s.config.autoEject)
@@ -250,7 +249,7 @@ struct SettingsView: View {
                     }
                 }
                 Picker("Keep staged copies", selection: $s.config.keepStagedDays) {
-                    Text("Until NAS verified").tag(0)
+                    Text("Until the next transfer (NAS rechecked)").tag(0)
                     Text("For 7 days").tag(7)
                     Text("For 30 days").tag(30)
                 }

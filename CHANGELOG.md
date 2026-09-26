@@ -5,6 +5,28 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.3] — 2026-09-26
+
+### Fixed
+- Re-read and SHA-256 verify every destination immediately before card erasure;
+  a missing or changed NAS/secondary file blocks erasure of the entire batch.
+- Require verified NAS copies even for the legacy staging-only erasure setting.
+- Retry SD-card discovery after delayed mount readiness, discover missed insertion
+  notifications, and discard stale probes after removal or remount.
+- Leave Library originals untouched when moving to Trash fails; remove the
+  permanent-deletion fallback and correct confirmation text.
+
+### Added
+- Per-file transfer history with original names, destination paths, sizes,
+  recorded outcomes, errors, and source SHA-256 details. Historical success is
+  explicitly distinguished from current file availability.
+
+### Changed
+- Keep local recovery copies after completion, cancellation, and app restart.
+  The next new transfer may clear completed batches only after fresh NAS hash
+  verification; failed or unverifiable batches remain. Longer retention settings
+  still apply.
+
 ## [1.7.2] — 2026-09-25
 
 ### Fixed

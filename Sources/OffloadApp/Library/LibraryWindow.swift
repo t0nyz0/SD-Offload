@@ -593,7 +593,7 @@ private struct SearchBar: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Permanently deletes every photo you flagged Reject in this folder (with their RAW/sidecar files) from your NAS. This can't be undone.")
+            Text("Moves to Trash: every photo you flagged Reject in this folder (with their RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept.")
         }
     }
     private var cullActive: Bool { model.minRating > 0 || model.flagFilter != .all || model.sortOrder != .nameAsc }
@@ -743,7 +743,7 @@ private struct LibraryGrid: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Permanently deletes \(model.selectedCount) photos (with their RAW/sidecar files) from your NAS. This can't be undone.")
+            Text("Moves to Trash: \(model.selectedCount) photos (with their RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept.")
         }
     }
 
@@ -837,15 +837,15 @@ private struct LibraryGrid: View {
         switch scope {
         case .rawOnly:
             let n = (item.rawCompanion?.name).map { "the RAW (\($0))" } ?? "the RAW"
-            return "Permanently deletes \(n) from your NAS. The JPEG stays. This can't be undone."
+            return "Moves to Trash: \(n) from your NAS. The JPEG stays. If Trash is unavailable, the originals are kept."
         case .jpegOnly:
             let n = (item.photo?.name).map { "the JPEG (\($0))" } ?? "the JPEG"
-            return "Permanently deletes \(n) from your NAS. The RAW stays. This can't be undone."
+            return "Moves to Trash: \(n) from your NAS. The RAW stays. If Trash is unavailable, the originals are kept."
         case .all:
             let names = item.all.map { ($0.id as NSString).lastPathComponent }
             let listed = names.count <= 3 ? names.joined(separator: ", ")
                 : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
-            return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
+            return "Moves to Trash: \(listed) (plus any matching RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept."
         }
     }
 

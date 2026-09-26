@@ -93,7 +93,7 @@ config.nasRootPath = nasRoot.path
 config.stagingRootPath = staging.path
 config.wipePolicy = .afterNASVerify
 config.autoEject = false            // we detach the DMG ourselves
-config.wipeCountdownSeconds = 0     // no countdown in the harness
+config.wipeCountdownSeconds = mode.hasPrefix("chaos-final-") ? 1 : 0
 config.testAllowLocalNAS = true
 if mode == "secondary" || mode == "chaos-secondary" {
     config.secondaryDestPath = secondary.path
@@ -155,11 +155,22 @@ final class EventLog: @unchecked Sendable {
     var all: [String] { lock.lock(); defer { lock.unlock() }; return items }
 }
 let eventLog = EventLog()
+let finalCheckVictim = nasRoot.appendingPathComponent(plan.files[0].destRelPath)
 let runner = SessionRunner(sessionID: record.id, card: cardInfo, config: cfg, journal: journal,
                            staging: stagingStore, nas: nas, cardWatcher: watcher) { event in
     switch event {
     case .phase(let p): eventLog.add("phase:\(p.rawValue)")
     case .attention(let a): eventLog.add("attention:\(a.title) — \(a.detail)")
+    case .wipeCountdown(let remaining) where remaining == 1 && mode.hasPrefix("chaos-final-"):
+        // The original NAS verification already passed. Damage the destination
+        // during the countdown; the FINAL check must save the entire card.
+        if mode == "chaos-final-missing" {
+            try? FileManager.default.removeItem(at: finalCheckVictim)
+        } else {
+            if let data = try? Data(contentsOf: finalCheckVictim) {
+                try? Data(repeating: 0, count: data.count).write(to: finalCheckVictim)
+            }
+        }
     case .nasRecovered: eventLog.add("nasRecovered")
     case .safeToRemove: eventLog.add("safeToRemove")
     default: break
@@ -188,6 +199,20 @@ let elapsed = Date().timeIntervalSince(start)
 // --- Assertions --------------------------------------------------------------
 print("\n▸ Verifying")
 let final = await journal.loadHistory(limit: 1).first ?? record
+
+if mode.hasPrefix("chaos-final-") {
+    guard final.state == .doneWipeBlocked, final.wipeReport?.ran == false else {
+        fail("Destination damage did not block the wipe")
+    }
+    for file in final.files {
+        guard FileManager.default.fileExists(atPath: cardRoot.appendingPathComponent(file.relPath).path),
+              FileManager.default.fileExists(atPath: stagingStore.stagedURL(session: final.id, file: file).path) else {
+            fail("Card or recovery copy missing after destination damage")
+        }
+    }
+    print("✅ PASS — final destination damage blocked all erasure; card and recovery copies retained. (\(mode))")
+    exit(0)
+}
 
 // Recovery must be visible as well as functional: the session should leave the
 // waiting phase, clear the one-way outage latch, and return to transferring.
@@ -291,11 +316,11 @@ let fwStillThere = FileManager.default.fileExists(atPath: sysFolder.appendingPat
 guard fwStillThere else { fail("harness bug: system folder was deleted (should be untouchable)") }
 log("card DCIM emptied; MISC/FWUP.BIN untouched")
 
-// 5. Staging purged.
+// 5. Local recovery copies survive successful transfer and card erasure.
 let stagingLeft = (try? FileManager.default.contentsOfDirectory(at: stagingStore.sessionDir(record.id),
                                                                 includingPropertiesForKeys: nil))?.count ?? 0
-guard stagingLeft == 0 else { fail("\(stagingLeft) staged files not purged") }
-log("staging purged")
+guard stagingLeft == final.files.count else { fail("Recovery copies missing: \(stagingLeft) of \(final.files.count)") }
+log("local recovery copies retained")
 
 print("\n✅ PASS — \(verified) files offloaded, verified end-to-end, card wiped. (\(mode), \(String(format: "%.1f", elapsed))s)")
 exit(0)

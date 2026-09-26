@@ -109,19 +109,15 @@ public struct WipeGate {
             case .nasVerified, .skippedDuplicate, .wiped:
                 break
             case .stagedVerified, .uploading, .uploaded:
-                // Safe under afterStagingVerify (the fsync'd staged copy is the
-                // safety net); not under the NAS policies.
-                if policy != .afterStagingVerify {
-                    blockers.append(.fileNotTerminal(file.relPath))
-                }
+                blockers.append(.fileNotTerminal(file.relPath))
             case .pending, .copying, .staged:
                 blockers.append(.fileNotTerminal(file.relPath))
             }
         }
 
         // 4. NAS healthy RIGHT NOW (a ghost here means the verifications may
-        //    predate an unmount). Not required for afterStagingVerify.
-        if policy != .afterStagingVerify && nasHealth != .healthy {
+        //    predate an unmount). Required under every policy.
+        if nasHealth != .healthy {
             blockers.append(.nasUnhealthy(nasHealth.summary))
         }
 

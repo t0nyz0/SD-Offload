@@ -71,12 +71,49 @@ struct SessionDetailView: View {
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    stat("Files", "\(record.stats.filesNASVerified + record.stats.filesSkippedDuplicate) of \(record.stats.filesPlanned)")
+                    stat("Recorded NAS verified", "\(record.stats.filesNASVerified + record.stats.filesSkippedDuplicate) of \(record.stats.filesPlanned)")
                     stat("Data", Fmt.bytes(record.stats.bytesPlanned))
                     stat("Duration", record.endedAt.map { Fmt.duration($0.timeIntervalSince(record.startedAt)) } ?? "—")
                     stat("Avg to NAS", Fmt.speed(record.stats.avgNASWriteBps))
                     stat("Avg card read", Fmt.speed(record.stats.avgSDReadBps))
                     stat("Wiped", record.wipeReport?.ran == true ? "\(record.wipeReport?.filesDeleted ?? 0) files" : "no")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Files in this transfer (\(record.files.count))").font(.headline)
+                    Text("Results recorded during this transfer. These do not check whether the files are still on the NAS today.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if record.files.isEmpty {
+                        Text("This history record contains no per-file details.").foregroundStyle(.secondary)
+                    }
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(record.files) { file in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(file.fileName).font(.system(size: 13, weight: .semibold))
+                                    Spacer()
+                                    Text(Fmt.bytes(file.size)).foregroundStyle(.secondary)
+                                }
+                                Label(file.state.historyResult,
+                                      systemImage: file.state.recordsNASVerification ? "checkmark.circle" : "exclamationmark.circle")
+                                    .foregroundStyle(file.state.recordsNASVerification ? Theme.safe : .orange)
+                                Text("Card: \(file.relPath)")
+                                Text("NAS destination: \(file.destRelPath)")
+                                DisclosureGroup("Verification details") {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Original SHA-256: \(file.sourceHashHex ?? "Not recorded")")
+                                            .font(.system(size: 11, design: .monospaced))
+                                        Text("Last recorded update: \(file.stateChangedAt.formatted(date: .abbreviated, time: .standard))")
+                                    }
+                                }
+                                .foregroundStyle(.secondary)
+                            }
+                            .font(.system(size: 12))
+                            .textSelection(.enabled)
+                            .padding(.vertical, 10)
+                            Divider()
+                        }
+                    }
                 }
 
                 if !record.stats.phases.isEmpty {
@@ -124,10 +161,10 @@ struct SessionDetailView: View {
             // `.done` covers both wipe-ran and user-picked-Keep. Distinguish so the
             // detail doesn't lie to the reader about what happened to the card.
             return record.wipeReport?.ran == true
-                ? "Completed — card wiped and ejected"
+                ? "Transfer completed — \(record.wipeReport?.filesDeleted ?? 0) files erased from card"
                 : "Completed — card kept (contents untouched)"
-        case .doneWipeBlocked: return "Files safe on NAS — card NOT wiped"
-        case .cancelled: return "Cancelled — nothing deleted"
+        case .doneWipeBlocked: return "Card erasure blocked — review file results below"
+        case .cancelled: return "Transfer cancelled — review recorded file results"
         case .failed: return "Failed — card NOT wiped"
         default: return "In progress"
         }

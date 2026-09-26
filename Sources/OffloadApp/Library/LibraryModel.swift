@@ -702,17 +702,14 @@ final class LibraryModel {
     private func removeURLs(_ targets: Set<URL>) async {
         guard !targets.isEmpty else { return }
         // Move to the Trash rather than hard-unlink, so a mistaken delete is
-        // recoverable. (Falls back to a hard delete if the volume has no Trash.)
+        // recoverable. If Trash is unavailable, leave the original untouched.
         // Track what actually got removed so a failure isn't silently swallowed —
         // otherwise the file vanishes from the grid, then reappears on reload.
         let failed = await Task.detached(priority: .userInitiated) { () -> Set<URL> in
             var failures = Set<URL>()
             for url in targets {
                 do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
-                catch {
-                    do { try FileManager.default.removeItem(at: url) }
-                    catch { failures.insert(url) }
-                }
+                catch { failures.insert(url) }
             }
             return failures
         }.value
@@ -730,7 +727,7 @@ final class LibraryModel {
         clearSelection()
         if !failed.isEmpty {
             let n = failed.count
-            deleteError = "Couldn't delete \(n) item\(n == 1 ? "" : "s"). The volume may be read-only, or the file\(n == 1 ? " may be" : "s may be") locked or in use."
+            deleteError = "Couldn't move \(n) item\(n == 1 ? "" : "s") to Trash. The originals were left in place. This volume may not support Trash, or the files may be locked."
         }
         if source == .favorites { loadFavorites() }
         else if isSearching { runSearch() } else { loadEntries() }

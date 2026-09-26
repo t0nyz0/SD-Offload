@@ -465,9 +465,7 @@ public actor SessionRunner {
     }
 
     private func finishFile(_ file: FileRecord) {
-        if config.keepStagedDays == 0 {
-            staging.purgeFile(session: sessionID, file: file)
-        }
+        // Retain the verified staging copy for recovery after transfer.
         Task { await budget.release(file.id) }
         settle()
     }
@@ -771,7 +769,7 @@ public actor SessionRunner {
         guard let record = await journal.session(id: sessionID) else { return }
 
         if cancelled {
-            staging.purgeSession(sessionID)
+            // Cancellation must not discard the remaining recovery copy.
             await finalize(state: .cancelled, record: record)
             return
         }
@@ -825,8 +823,25 @@ public actor SessionRunner {
 
     private func executeWipe() async {
         await markPhase("wipe")
-        try? await journal.flushNow(sessionID)
         guard let record = await journal.session(id: sessionID) else { return }
+        do {
+            try await journal.flushNow(sessionID)
+            guard await nas.validateNow(force: true) == .healthy else {
+                throw OffloadError(.nasUnavailable)
+            }
+            try await DestinationVerifier.verify(files: record.files, root: config.nasRootPath)
+            if let secondary = config.secondaryDestPath {
+                try await DestinationVerifier.verify(files: record.files, root: secondary)
+            }
+            guard !cancelled, !wipeCancelled else { throw CancellationError() }
+        } catch {
+            let reason = "Final destination verification blocked erasure: \(error)"
+            await journal.setWipeReport(WipeReport(ran: false, blockers: [reason], finishedAt: Date()), in: sessionID)
+            emit(.attention(AttentionItem(severity: .error, title: "Card NOT erased", detail: reason)))
+            await markPhaseEnd("wipe")
+            await finalize(state: .doneWipeBlocked, record: record)
+            return
+        }
 
         let cardSnapshot: WipeGate.CardMountSnapshot? = {
             guard cardPresent, let fs = statfsInfo(path: card.mountPath) else { return nil }

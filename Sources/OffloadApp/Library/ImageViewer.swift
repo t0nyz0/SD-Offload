@@ -95,12 +95,12 @@ struct ImageViewer: View {
 
     private func deleteMessage(_ item: DisplayItem) -> String {
         if item.isRawJpegPair, let jpeg = item.photo, let raw = item.rawCompanion {
-            return "This photo has a JPEG (\(jpeg.name)) and a RAW (\(raw.name)). Choose what to delete from your NAS — this can't be undone."
+            return "This photo has a JPEG (\(jpeg.name)) and a RAW (\(raw.name)). Choose what to move to Trash. If Trash is unavailable, the originals are kept."
         }
         let names = item.all.map { ($0.id as NSString).lastPathComponent }
         let listed = names.count <= 3 ? names.joined(separator: ", ")
             : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
-        return "Permanently deletes \(listed) (plus any matching RAW/sidecar files) from your NAS. This can't be undone."
+        return "Moves to Trash: \(listed) (plus any matching RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept."
     }
 
     private func topBar(item: DisplayItem, position: Int) -> some View {

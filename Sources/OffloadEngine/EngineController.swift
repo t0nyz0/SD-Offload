@@ -79,8 +79,7 @@ private actor Coordinator {
 
     func start() async {
         await emitGlance()
-        let config = await configProvider()
-        StagingStore(rootPath: config.stagingRootPath).sweep(keepDays: max(config.keepStagedDays, 1))
+        // Starting the app must never purge the last recovery copies.
 
         watcher.start()
         eventsTask = Task { [weak self] in
@@ -327,6 +326,19 @@ private actor Coordinator {
             emit(.attention(AttentionItem(severity: .error, title: "Couldn't start the session",
                                           detail: "Journal write failed: \(error)")))
             emit(.phase(.failed))
+            return
+        }
+        // Recovery copies survive completion and app restarts. Only a genuinely
+        // new transfer may retire completed batches, after fresh NAS read-back.
+        if await nas.validateNow(force: true) == .healthy {
+            let history = await journal.loadHistory(limit: Int.max)
+            await staging.pruneCompletedBeforeNextRun(history, nasRoot: config.nasRootPath,
+                                                      keepDays: config.keepStagedDays)
+        }
+        guard statfsInfo(path: volume.info.mountPath) != nil,
+              readCardToken(volume.info.mountPath) == token else {
+            emit(.cardGone)
+            emit(.phase(.idle))
             return
         }
         emit(.planned(files: record.stats.filesPlanned, bytes: record.stats.bytesPlanned))
