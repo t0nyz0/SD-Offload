@@ -16,8 +16,8 @@
   <img alt="silicon" src="https://img.shields.io/badge/Apple%20Silicon-required-black">
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
-  <img alt="ai" src="https://img.shields.io/badge/AI-on--device-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-92%20passing-brightgreen">
+  <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
+  <img alt="tests" src="https://img.shields.io/badge/tests-106%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ Finder copied the files, but did every byte actually land on the server? Did tha
 The honest answer is you don't know, so you either keep the card full "just in case" or you format
 it and hope.
 
-**SD Offload removes the hope.** It copies, verifies each file end-to-end with SHA-256, and wipes the
+**SD Offload verifies the transfer.** It copies, verifies each file end-to-end with SHA-256, and wipes the
 card only after it has *read the bytes back off the NAS* and confirmed they match what it read off
 the card. If a single file can't be verified, the card is left completely untouched.
 
@@ -60,11 +60,14 @@ flowchart LR
    `max(card read, NAS write)`. Files land in your selected reversible date-folder layout (using EXIF
    *DateTimeOriginal*), then the NAS copy is **read back uncached** and its hash compared to the
    original card-read hash — true end-to-end integrity.
-3. **Wipe gate.** The card is erased only when *every* file is NAS-verified, nothing failed, the NAS
-   is healthy right now, and each card file re-stats unchanged. Then it unmounts, ejects, and says
-   **"Safe to remove."**
+3. **Wipe gate.** Before erasure, reread the entire NAS batch and any configured second copy
+   and compare SHA-256 hashes again. Missing or changed destinations block erasure; the gate also
+   checks source identity and NAS health.
+4. **Recovery copies.** Keep local staging after completion, cancellation, and app restart.
+   The next new transfer may remove completed batches only after fresh NAS verification.
+   Failed or unverifiable batches remain; longer retention settings still apply.
 
-**If anything goes wrong, the card survives.** Crash, yanked card, or the NAS dropping off
+**Interrupted transfers retain journal state.** Crash, yanked card, or the NAS dropping off
 mid-transfer — a crash-safe JSON journal resumes exactly where it left off. A hash mismatch re-copies
 that file once, then fails it; a failed file means the wipe never runs. A per-card session token
 means a *different* card that happens to reuse a synthesized volume UUID is never mistaken for the
@@ -73,38 +76,47 @@ one being offloaded.
 > **Why "uncached" matters.** Over SMB, `fsync` flushes your bytes to the server but doesn't
 > invalidate the client read cache — so a normal read-back can re-hash the bytes you just wrote out
 > of local memory and "pass" without ever touching the server. SD Offload's wipe-gating verify is
-> always uncached, so a match *proves the server holds the data*. This is the whole ballgame for a
-> tool that erases cards.
+> always uncached. A matching read-back records integrity at that time; it cannot guarantee
+> against later deletion, storage failure, or changes by another process. Retained local copies
+> provide an additional recovery opportunity.
 
 ## Features
 
 **Ingest & safety**
+
 | | |
 |---|---|
-| Automatic detection | DiskArbitration spots the card; a DCIM heuristic + per-card policy (always / ask / ignore) decides what to do |
+| Automatic detection | DiskArbitration spots camera cards; one global insert action controls whether SD Offload starts, asks, or does nothing |
+| Multiple-card queue | Insert several cards and they wait in a FIFO queue, then offload one at a time without competing for the NAS |
 | Verified two-hop transfer | Card → staging → NAS, pipelined per file, SHA-256 inline + read-back at both hops |
+| Optional second verified copy | Require every photo to verify on both the NAS and a second destination before the card can be erased |
 | End-to-end integrity | NAS copy hashed (uncached) against the original card-read hash before anything is deleted |
 | Smart dedup | A photo already on the NAS (proven by hash) is skipped, not re-uploaded; same-name-different-content gets a ` (2)` suffix — nothing is ever silently overwritten |
 | All-or-nothing wipe | Strict gate + cancellable countdown, empty-DCIM prune, auto-eject; one unverifiable file blocks the whole wipe |
-| Crash / yank resilience | Journaled per-file state machine resumes exactly where it stopped, regardless of policy |
+| Crash / yank / outage resilience | Journaled per-file state resumes interrupted work; an unavailable NAS is retried and the transfer continues when the expected share returns |
 
 **Library & viewer**
+
 | | |
 |---|---|
 | Browse NAS + card | Storage gauge, progressive photo count, date-folder navigation |
 | Flexible date folders | Seven presets or a reversible custom pattern; safely convert existing folders with preflight, resume, and rollback |
 | Folder collage cards | Date folders render as a photo collage of what's inside, captioned "Saturday, July 4th, 2026" |
 | Fast thumbnails | Embedded-preview extraction (KBs over SMB, not whole RAWs), memory + disk cache, bounded concurrency |
-| In-app viewer | Opens instantly (no Preview), honors portrait orientation, rotate/zoom/pan, arrow-key paging, RAW+JPEG paired into one photo |
+| In-app viewer | Opens instantly (no Preview), honors portrait orientation, offers non-destructive rotate/zoom/pan, arrow-key paging, and pairs RAW+JPEG as one photo |
 | Info inspector | Camera, lens, full exposure, dimensions/megapixels, GPS, and content tags — packed into one panel |
-| Delete & multi-select | Remove photos (with their RAW/sidecars) from the NAS, one or many, with confirmation |
+| Culling workflow | Rate 0–5, mark Pick or Reject, filter the grid, auto-advance in the viewer, and delete rejected photos when ready |
+| Finder access | Visible Show in Finder for selected files and viewer photos; Open Folder in Finder for the current folder |
+| Organize & delete | Favorites timeline, pinned folders, multi-select, and confirmed deletion of photos with their RAW/sidecars |
 
-**On-device AI & search** — *no cloud, no API keys, no accounts, no telemetry*
+**AI, faces & search**
+
 | | |
 |---|---|
-| Content search | Apple Vision (on the Neural Engine) tags scenes/objects/animals so you can search "beach", "dog", "food" |
-| Location | EXIF GPS extraction + library coverage; reverse-geocoding to place names is a planned opt-in |
-| Named faces & pets | *In progress* — a suggest-and-confirm flow to name people ("Elizabeth") and pets ("Hurley") that learns from your labels |
+| Optional photo identification | Run on demand through your logged-in Claude CLI session or your own Anthropic API key to save a description and searchable tags |
+| Library search | Search saved descriptions and tags, filenames, and assigned people/pet names across the archive |
+| Named faces & pets | Opt-in, on-device detection and embeddings with a suggest-and-confirm flow; names and decisions stay local |
+| Location metadata | View embedded EXIF GPS coordinates in the info inspector and open them in Maps |
 
 ## Use cases
 
@@ -113,27 +125,27 @@ one being offloaded.
   tomorrow.
 - **A long day across many cards.** Offload each in turn. Re-insert a card you only half-emptied and
   dedup means it picks up exactly the frames that aren't safe yet — no duplicates, no re-copying.
-- **The format-anxiety cure.** You never have to guess whether a copy "really" finished. If the card
-  got wiped, the bytes are provably on the NAS. If anything was off, the card is still full.
+- **Review transfer results.** History lists each filename, destination, recorded outcome,
+  and source hash. Historical verification does not claim that a file still exists today.
 - **RAW + JPEG shooters.** A paired shot shows as one tile; the JPEG opens instantly for review, the
   RAW rides along and deletes with it.
-- **Finding that photo months later.** Search your whole archive by what's *in* the frame, entirely
-  on-device — and soon by *who* is in it.
-- **NAS housekeeping.** Cull and delete straight from the Library without ever launching Finder or
-  Preview.
+- **Finding that photo months later.** Search saved AI descriptions and tags, filenames, or the
+  people and pets you've named.
+- **NAS housekeeping.** Rate, pick, reject, favorite, and delete straight from the Library without
+  ever launching Finder or Preview.
 
 ## Screenshots
 
-The menu-bar popover is up top. Here's the **Library** — on-device content tags and
-search across the whole archive, with per-photo EXIF under each frame:
+The menu-bar popover is up top. Here's the **Library** — searchable photo tags and
+per-photo EXIF under each frame:
 
-![Library — on-device content search, tags, and per-photo EXIF](docs/screenshots/library.png)
+![Library — content search, tags, and per-photo EXIF](docs/screenshots/library.png)
 
 ## Install
 
-**Download the app** — grab the latest `SD-Offload-x.y.z.zip` from
-[**Releases**](https://github.com/t0nyz0/SD-Offload/releases), unzip it, and drag
-**SD Offload.app** to `/Applications`.
+**Download the app** — grab the latest `.dmg` from
+[**Releases**](https://github.com/t0nyz0/SD-Offload/releases), open it, and drag
+**SD Offload.app** to `/Applications`. A `.zip` is published there too if you prefer it.
 
 It's ad-hoc signed (not yet notarized — see [Status](#status)), so macOS quarantines a
 downloaded copy. Clear it once and launch:
@@ -145,7 +157,8 @@ open "/Applications/SD Offload.app"
 
 (Or right-click the app → **Open**; if macOS still refuses, System Settings →
 Privacy & Security → **Open Anyway**.) First launch asks for Removable Volumes +
-Network Volumes permission. It runs in the menu bar — no Dock icon.
+Network Volumes permission. It lives in the menu bar; a Dock icon appears while one of its windows
+is open.
 
 Prefer to read the code before trusting it with a card? **Build from source** below.
 
@@ -155,7 +168,7 @@ Requires **macOS 14+ on Apple Silicon** and a Swift 6 toolchain (Xcode 16+). Zer
 dependencies.
 
 ```bash
-# Dev run (menu-bar app; no Dock icon)
+# Dev run (menu-bar app)
 swift run OffloadApp
 
 # Build a signed .app bundle → build/SD Offload.app
@@ -169,21 +182,22 @@ swift test
 bash Scripts/harness.sh
 ```
 
-The integration harness drives a **real** session against a temporary fake card and a local
-stand-in NAS, asserting the safety property in every failure mode: happy path, NAS drops out
-mid-upload, one file fails (wipe blocked), crash-and-resume, and a wrong card on a colliding UUID
-(not wiped).
+The integration harness drives **real** sessions against a temporary fake card and local stand-in
+destinations. Its ten modes cover the happy path, NAS and file failures, crash-and-resume, a wrong
+card on a colliding UUID, a required second verified copy, second-destination failure, and resuming
+to backfill a missing second copy before wiping, plus missing/corrupted destinations at the final erasure check.
 
 ## Configuration
 
 Everything is in **Settings** (from the popover's gear menu):
 
-- **Destination** — the mounted NAS path (default `/Volumes/Photos`; the share name is yours to set).
-- **Ingest scope** — camera media roots only (default) or the whole card; remembered per-card policy.
-- **Wipe policy** — **ask every time (default)**, or automatically after NAS-verify / after staging-verify; auto-eject toggle.
-- **Staging** — location and purge policy (purge on verify by default; keep-N-days optional).
-- **Performance** — parallel NAS uploads (verification is always uncached, regardless).
-- **General** — notifications, completion sound, launch at login.
+- **General** — launch at login, tray/Library behavior, completion sound, and app version.
+- **Destination** — primary NAS folder, seven date-folder presets or a custom reversible pattern,
+  safe conversion of existing date folders, and an optional second verified destination.
+- **Card & Offload** — one global insert action, camera-folders-only or whole-card ingest, wipe and
+  eject policy, staging retention, parallel uploads, and optional NAS warm-up on insertion.
+- **Library** — thumbnail quality and optional Claude photo analysis through the CLI or Anthropic API.
+- **Notifications** — separate controls for card detection, successful completion, and problems.
 
 ## Under the hood
 
@@ -194,21 +208,26 @@ Everything is in **Settings** (from the popover's gear menu):
 | Integrity | CryptoKit SHA-256 (ARMv8 SHA-2 instructions — never the bottleneck) |
 | IO | Raw-fd chunked copy/hash, `F_NOCACHE` / `F_PREALLOCATE` / `fsync` where they belong |
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
-| Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision on the Neural Engine (content + faces) |
-| App | SwiftUI `MenuBarExtra`, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 79 unit tests + a full wipe-path integration harness |
+| Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Claude CLI or Anthropic API (photo identification) |
+| App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
+| Tests | 106 unit tests + ten full wipe-path integration harness modes |
 
 ## Status
 
 A personal tool, built to a high bar and shared so others can read it, learn from it, or build it
-themselves. It is **not** on the App Store and is ad-hoc signed — you build it yourself (first launch
-will ask for Removable Volumes and Network Volumes permission). It intentionally has **no** reader
-accounts, telemetry, or cloud services; all AI runs on-device.
+themselves. It is **not** on the App Store and release builds are ad-hoc signed rather than notarized.
+Prebuilt `.dmg` and `.zip` downloads are published on GitHub, or you can build it yourself. First
+launch asks for Removable Volumes and Network Volumes permission.
+
+SD Offload has no app account or telemetry. Transfers, browsing, EXIF handling, face/pet detection,
+and face labels stay local. Photo identification is optional: when you invoke it, the selected image
+is sent to Claude through your logged-in CLI session or through Anthropic's API using your own key;
+the API key is stored in the macOS Keychain.
 
 **Security posture:** no App Sandbox (it needs full access to removable + network volumes), no
 hardened runtime, no notarization — so build it from source and inspect the destructive path
-yourself ([`WipeGate.swift`](Sources/OffloadEngine/WipeGate.swift)). No prebuilt binaries are
-published. NAS credentials live in the login Keychain, device-only (never synced).
+yourself ([`WipeGate.swift`](Sources/OffloadEngine/WipeGate.swift)). NAS credentials saved by the app
+live in the login Keychain, device-only (never synced).
 
 **Independent and open-source** — unaffiliated with Pomfort's "Offload Manager", [offload.app](https://offload.app/),
 or other similarly-named tools.
@@ -221,8 +240,6 @@ or other similarly-named tools.
 
 ## Roadmap
 
-- Named faces & pets (suggest-and-confirm; a bundled Core ML face model for higher accuracy later)
-- Opt-in reverse-geocoding of GPS to place names ("Fairhope, Alabama")
 - Decoupled NAS-verify workers to reclaim upload throughput after the always-uncached verify
 
 ## License
