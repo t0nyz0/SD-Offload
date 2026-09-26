@@ -135,7 +135,7 @@ struct ImageViewer: View {
             }
             .padding(32)
         } else {
-            VideoPlayer(player: videoPlayer)
+            NativeVideoPlayer(player: videoPlayer)
                 .overlay {
                     if videoLoading { ProgressView("Loading video…") }
                 }
@@ -973,5 +973,27 @@ private struct FlowLayout: Layout {
             x += sz.width + spacing
             rowHeight = max(rowHeight, sz.height)
         }
+    }
+}
+
+/// Use AppKit directly, avoiding the SwiftUI AVKit wrapper's runtime dependency.
+private struct NativeVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
     }
 }
