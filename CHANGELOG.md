@@ -5,6 +5,12 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.6] — 2026-09-26
+
+### Added
+- Visible Show in Finder buttons for selected Library files and the photo viewer.
+- Open Folder in Finder beside the current NAS or SD-card folder breadcrumb.
+
 ## [1.7.5] — 2026-09-26
 
 ### Fixed

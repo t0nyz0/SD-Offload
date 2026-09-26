@@ -175,6 +175,11 @@ struct ImageViewer: View {
             }
             .buttonStyle(.plain)
             .help("Back to Library (Esc)")
+            Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
+                Label("Show in Finder", systemImage: "folder")
+            }
+            .buttonStyle(.plain)
+            .help("Reveal this photo in Finder")
             Divider().frame(height: 18).overlay(.white.opacity(0.2))
             Button { model.toggleFavorite(item) } label: {
                 Label(favorite ? "Favorited" : "Favorite", systemImage: favorite ? "heart.fill" : "heart")

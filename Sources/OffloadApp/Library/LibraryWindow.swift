@@ -342,7 +342,18 @@ private struct LibraryHeader: View {
                 }
             }
             if model.source == .nas || model.source == .card {
-                Breadcrumb(model: model)
+                HStack {
+                    Breadcrumb(model: model)
+                    Spacer()
+                    Button {
+                        if let folder = model.currentDir { NSWorkspace.shared.open(folder) }
+                    } label: {
+                        Label("Open Folder in Finder", systemImage: "folder")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .controlSize(.small)
+                    .disabled(model.currentDir == nil || !model.mounted)
+                }
             }
             if let label = model.currentDateLabel {
                 HStack(spacing: 6) {
@@ -776,6 +787,14 @@ private struct LibraryGrid: View {
             Button { model.flagSelection(.reject) } label: { Image(systemName: "xmark") }
                 .buttonStyle(.plain).help("Reject").foregroundStyle(.red)
             Spacer()
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting(model.selectedItems.map { $0.primary.url })
+            } label: {
+                Label("Show in Finder", systemImage: "folder")
+            }
+            .labelStyle(.titleAndIcon)
+            .controlSize(.small)
+            .help("Reveal the selected files in Finder")
             Button("Select All") { model.selectAllPhotos() }
                 .controlSize(.small)
             Button("Clear") { model.clearSelection() }
