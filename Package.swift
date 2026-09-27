@@ -23,7 +23,7 @@ let package = Package(
         ),
         .testTarget(
             name: "OffloadTests",
-            dependencies: ["OffloadCore", "OffloadEngine"]
+            dependencies: ["OffloadCore", "OffloadEngine", "OffloadApp"]
         ),
     ],
     swiftLanguageModes: [.v5]

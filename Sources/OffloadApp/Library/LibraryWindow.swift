@@ -36,7 +36,8 @@ struct LibraryWindow: View {
                 let m = LibraryModel(nasRootPath: app.settings.config.nasRootPath,
                                      cardRootPath: app.cardMountPath,
                                      dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
-                                     activeDateFolderLayout: app.settings.config.dateFolderLayout)
+                                     activeDateFolderLayout: app.settings.config.dateFolderLayout,
+                                     aiConfigProvider: { app.settings.config })
                 if let folder = app.pendingLibraryFolder {
                     m.openPinned(folder)                // land on the just-uploaded batch
                     app.pendingLibraryFolder = nil
@@ -86,7 +87,8 @@ struct LibraryWindow: View {
             let m = LibraryModel(nasRootPath: app.settings.config.nasRootPath,
                                  cardRootPath: app.cardMountPath,
                                  dateFolderLayouts: app.settings.config.recognizedDateFolderLayouts,
-                                 activeDateFolderLayout: app.settings.config.dateFolderLayout)
+                                 activeDateFolderLayout: app.settings.config.dateFolderLayout,
+                                 aiConfigProvider: { app.settings.config })
             m.select(.nas)
             model = m
         }
@@ -162,6 +164,7 @@ struct LibraryWindow: View {
                 }
             }
             .background(DS.Palette.ink)
+            .accessibilityHidden(viewerIndex != nil)
             // Overlay the viewer on the DETAIL pane only, so the sidebar stays
             // visible and its toggle works (collapse for a near-full view, expand
             // to switch sources) instead of the viewer covering the whole window.
@@ -388,7 +391,10 @@ private struct LibraryHeader: View {
 
     private var countLine: some View {
         HStack(spacing: 6) {
-            if let media = model.totalMedia {
+            if model.countUnavailable {
+                Text("Library count unavailable — refresh to retry")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            } else if let media = model.totalMedia {
                 Text("\(media.formatted()) items")
                     .font(.system(size: 12, weight: .medium))
                     .monospacedDigit()
@@ -459,114 +465,127 @@ private struct SearchBar: View {
     @AppStorage("offload.faces.consented") private var facesConsented = false
     @State private var showFacesConsent = false
     @State private var confirmAnalyze = false
+    @State private var confirmDeleteFaces = false
 
     var body: some View {
-        HStack(spacing: DS.Space.s) {
+        VStack(alignment: .leading, spacing: DS.Space.s) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
-                TextField("Search photos by content — try “dog”, “beach”, “food”…", text: $model.searchText)
+                TextField("Search saved tags, descriptions, filenames, and names…", text: $model.searchText)
+                    .accessibilityLabel("Search library")
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                 if !model.searchText.isEmpty {
                     Button { model.searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain).foregroundStyle(.tertiary)
+                        .accessibilityLabel("Clear search")
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(DS.Palette.surfaceRaised.opacity(0.6), in: RoundedRectangle(cornerRadius: DS.Radius.s))
 
-            // Tile size
-            HStack(spacing: 5) {
-                Image(systemName: "photo").font(.system(size: 9)).foregroundStyle(.tertiary)
-                Slider(value: $tileSize, in: 110...320)
-                    .frame(width: 90)
-                    .controlSize(.small)
-                Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(.tertiary)
-            }
-            .help("Thumbnail size")
-
-            Button { app.refreshNASGlance(); model.refresh() } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .keyboardShortcut("r", modifiers: .command)
-            .help("Refresh — re-scan this folder and recount the library (⌘R)")
-
-            viewMenu
-
-            if model.analyzing {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small).scaleEffect(0.8)
-                    Text("Analyzing \(model.analyzeDone)/\(model.analyzeTotal)")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
-                    Button("Stop") { model.cancelAnalysis() }.controlSize(.small)
+            HStack(spacing: DS.Space.s) {
+                // Tile size
+                HStack(spacing: 5) {
+                    Image(systemName: "photo").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Slider(value: $tileSize, in: 110...320)
+                        .frame(width: 90)
+                        .controlSize(.small)
+                    Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(.tertiary)
                 }
-            } else {
-                Button { confirmAnalyze = true } label: {
-                    Label("Analyze", systemImage: "sparkles")
+                .help("Thumbnail size")
+
+                Spacer(minLength: 0)
+
+                Button { app.refreshNASGlance(); model.refresh() } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
-                .help("Deep-analyze photos with AI — names the subject, species, and scene so you can search by content.")
-                .confirmationDialog("Deep-analyze with AI?", isPresented: $confirmAnalyze, titleVisibility: .visible) {
-                    if model.selectedCount > 0 {
-                        Button("Scan \(model.selectedCount) selected") { model.aiAnalyze(model.selectedItems) }
+                .keyboardShortcut("r", modifiers: .command)
+                .help("Refresh — re-scan this folder and recount the library (⌘R)")
+
+                viewMenu
+
+                if model.analyzing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small).scaleEffect(0.8)
+                        Text("Analyzing \(model.analyzeDone)/\(model.analyzeTotal)")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        Button("Stop") { model.cancelAnalysis() }.controlSize(.small)
                     }
-                    Button("Scan all in this folder") { model.aiAnalyzeAll() }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("Each photo is analyzed by Claude — this uses your Claude usage and can take a while for a lot of photos. It runs in the background; you can Stop anytime. Already-analyzed photos are skipped.")
+                } else {
+                    Button { confirmAnalyze = true } label: {
+                        Label("Analyze with AI", systemImage: "sparkles")
+                    }
+                    .help("Deep-analyze photos with AI — names the subject, species, and scene so you can search by content.")
+                    .confirmationDialog("Deep-analyze with AI?", isPresented: $confirmAnalyze, titleVisibility: .visible) {
+                        if model.selectedCount > 0 {
+                            Button("Scan \(model.selectedCount) selected") { model.aiAnalyze(model.selectedItems) }
+                        }
+                        Button("Scan all in this folder") { model.aiAnalyzeAll() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Each photo is sent to the AI provider selected in Settings — this uses that account’s usage and can take a while for a lot of photos. It runs in the background; you can Stop anytime. Already-analyzed photos are skipped.")
+                    }
+                    if let err = model.analyzeError {
+                        Text(err).font(.system(size: 10)).foregroundStyle(.orange)
+                            .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                if let err = model.analyzeError {
-                    Text(err).font(.system(size: 10)).foregroundStyle(.orange)
-                        .lineLimit(3).fixedSize(horizontal: false, vertical: true)
-                }
-            }
 
-            if model.findingFaces {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small).scaleEffect(0.8)
-                    Text("Finding faces \(model.facesDone)/\(model.facesTotal)")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
-                    Button("Stop") { model.cancelFindFaces() }.controlSize(.small)
-                }
-            } else {
-                Menu {
-                    Button { startFindFaces() } label: { Label("Find faces & pets", systemImage: "person.crop.rectangle") }
-                    let people = model.identities.filter { $0.kind == .person }
-                    let pets = model.identities.filter { $0.kind == .pet }
-                    if model.faceUnnamed > 0 || !people.isEmpty || !pets.isEmpty {
-                        Divider()
-                        if model.faceUnnamed > 0 {
-                            Button { model.reviewUnnamedFaces() } label: {
-                                Label("Review \(model.faceUnnamed) unnamed", systemImage: "questionmark.circle")
+                if model.findingFaces {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small).scaleEffect(0.8)
+                        Text("Finding faces \(model.facesDone)/\(model.facesTotal)")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        Button("Stop") { model.cancelFindFaces() }.controlSize(.small)
+                    }
+                } else {
+                    Menu {
+                        Button { startFindFaces() } label: { Label("Find faces & pets", systemImage: "person.crop.rectangle") }
+                        let people = model.identities.filter { $0.kind == .person }
+                        let pets = model.identities.filter { $0.kind == .pet }
+                        if model.faceUnnamed > 0 || !people.isEmpty || !pets.isEmpty {
+                            Divider()
+                            if model.faceUnnamed > 0 {
+                                Button { model.reviewUnnamedFaces() } label: {
+                                    Label("Review \(model.faceUnnamed) unnamed", systemImage: "questionmark.circle")
+                                }
+                            }
+                            if !people.isEmpty {
+                                Menu("People") {
+                                    if people.count > 1 { Button("All people") { model.filterByKind(.person) }; Divider() }
+                                    ForEach(people) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
+                                }
+                            }
+                            if !pets.isEmpty {
+                                Menu("Pets") {
+                                    if pets.count > 1 { Button("All pets") { model.filterByKind(.pet) }; Divider() }
+                                    ForEach(pets) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
+                                }
                             }
                         }
-                        if !people.isEmpty {
-                            Menu("People") {
-                                if people.count > 1 { Button("All people") { model.filterByKind(.person) }; Divider() }
-                                ForEach(people) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
+                        if !model.identities.isEmpty || model.faceUnnamed > 0 {
+                            Divider()
+                            Button(role: .destructive) { confirmDeleteFaces = true } label: {
+                                Label("Delete all face data", systemImage: "trash")
                             }
                         }
-                        if !pets.isEmpty {
-                            Menu("Pets") {
-                                if pets.count > 1 { Button("All pets") { model.filterByKind(.pet) }; Divider() }
-                                ForEach(pets) { idn in Button(idn.name) { model.filterByIdentity(idn.id) } }
-                            }
-                        }
+                    } label: {
+                        Label("Faces", systemImage: "person.crop.square")
+                    } primaryAction: {
+                        startFindFaces()
                     }
-                    if !model.identities.isEmpty || model.faceUnnamed > 0 {
-                        Divider()
-                        Button(role: .destructive) { model.deleteAllFaceData() } label: {
-                            Label("Delete all face data", systemImage: "trash")
-                        }
-                    }
-                } label: {
-                    Label("Faces", systemImage: "person.crop.square")
-                } primaryAction: {
-                    startFindFaces()
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Detect, name, and filter people & pets on-device — stored locally only.")
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Detect, name, and filter people & pets on-device — stored locally only.")
             }
+        }
+        .confirmationDialog("Delete all saved face data?", isPresented: $confirmDeleteFaces, titleVisibility: .visible) {
+            Button("Delete Face Data", role: .destructive) { model.deleteAllFaceData() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes all saved face and pet detections, names, and matching decisions from this Mac. Your photos stay in place. This cannot be undone.")
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
@@ -830,6 +849,10 @@ private struct LibraryGrid: View {
                                            layouts: model.dateFolderLayouts)
                                     .onTapGesture(count: 2) { model.enter(item.primary) }
                                     .onTapGesture { model.clearSelection() }
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityAction { model.enter(item.primary) }
+                                    .help("Double-click to open folder")
                                     .contextMenu { menu(for: item) }
                             }
                         }
@@ -935,6 +958,9 @@ private struct LibraryGrid: View {
 
     private var emptyTitle: String {
         if model.source == .nas && !model.mounted { return "NAS unavailable" }
+        if model.loading { return "Loading photos…" }
+        if model.loadError != nil { return "Couldn’t open this folder" }
+        if model.minRating > 0 || model.flagFilter != .all { return "No photos match these filters" }
         return (model.isSearching || model.faceFilterLabel != nil) ? "No matches" : "Nothing here"
     }
     private var emptySystemImage: String {
@@ -945,8 +971,12 @@ private struct LibraryGrid: View {
         if model.source == .nas && !model.mounted {
             return "Trying to reconnect to the configured destination…"
         }
+        if let error = model.loadError { return "\(error) Use Refresh to try again." }
+        if model.minRating > 0 || model.flagFilter != .all {
+            return "Open View to change the star rating or pick/reject filters."
+        }
         if let f = model.faceFilterLabel { return "No photos for “\(f)”." }
-        if model.isSearching { return "No analyzed photos match “\(model.searchText)”. Try Analyze first, or a different word." }
+        if model.isSearching { return "No saved tags, descriptions, filenames, or names match “\(model.searchText)”. Try another word, or use Analyze with AI to add descriptions." }
         return model.loading ? "Loading…" : "This folder has no photos or subfolders."
     }
 
@@ -1090,10 +1120,10 @@ struct LibraryTile: View {
     private var formatLabel: String {
         if isVideo { return "VIDEO \(Fmt.bytes(item.primary.size))" }
         if let jpeg = item.photo, let raw = item.rawCompanion {
-            return "JPG \(Fmt.bytes(jpeg.size)) · RAW \(Fmt.bytes(raw.size))"
+            return "\(jpeg.url.pathExtension.uppercased()) \(Fmt.bytes(jpeg.size)) · RAW \(Fmt.bytes(raw.size))"
         }
         if isRawOnly { return "RAW \(Fmt.bytes(item.primary.size))" }
-        return "JPG \(Fmt.bytes(item.primary.size))"
+        return "\(item.primary.url.pathExtension.uppercased()) \(Fmt.bytes(item.primary.size))"
     }
 
     /// The tiny line under the name: format + sizes + basic EXIF.

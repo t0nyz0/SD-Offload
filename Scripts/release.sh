@@ -1,6 +1,5 @@
 #!/bin/bash
-# Builds "SD Offload.app" (release) and packages it as a distributable zip for a
-# GitHub Release. Prints the size + SHA-256 so the release notes can list them.
+# Builds the release app, DMG, ZIP, and checksum manifest for GitHub Releases.
 #
 # NOTE: the app is ad-hoc signed, not notarized — a downloaded copy is quarantined
 # by Gatekeeper, so the release notes must tell users to clear the quarantine
@@ -22,10 +21,13 @@ ditto -c -k --keepParent "$APP" "$ZIP"
 # holds the app + an /Applications alias, compressed into a read-only image.
 rm -f "$DMG"
 STAGING="$(mktemp -d)"
+trap 'rm -rf "$STAGING"' EXIT
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "SD Offload" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGING"
+
+(cd build && shasum -a 256 "SD-Offload-$VERSION.dmg" "SD-Offload-$VERSION.zip" > SHA256SUMS.txt)
 
 echo
 echo "==> packaged for release $VERSION"
@@ -35,4 +37,4 @@ for F in "$DMG" "$ZIP"; do
     echo "      sha256: $(shasum -a 256 "$F" | cut -d' ' -f1)"
 done
 echo
-echo "    gh release create v$VERSION \"$DMG\" \"$ZIP\" --title \"SD Offload $VERSION\" --notes-file <notes>"
+echo "    gh release create v$VERSION \"$DMG\" \"$ZIP\" build/SHA256SUMS.txt --title \"SD Offload $VERSION\" --notes-file <notes>"

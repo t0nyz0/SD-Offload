@@ -7,21 +7,16 @@ struct IdleView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            TimelineView(.animation(minimumInterval: 1 / 20, paused: !app.popoverVisible)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
-                let wave = sin(t / 2.4 * 2 * .pi)
-                SDCardShape()
-                    .stroke(.tertiary, lineWidth: 1.5)
-                    .frame(width: 84, height: 104)
-                    .opacity(0.55 + 0.2 * wave)
-                    .scaleEffect(1 + 0.015 * wave)
-            }
+            SDCardShape()
+                .stroke(.tertiary, lineWidth: 1.5)
+                .frame(width: 84, height: 104)
+                .opacity(0.65)
             .frame(height: 108)
 
             VStack(spacing: DS.Space.xs) {
                 Text("Waiting for a card")
                     .font(DS.Typo.title)
-                Text("Insert an SD card — SD Offload copies, verifies, and files it on your NAS, then clears the card.")
+                Text("Insert an SD card to copy and verify your photos on the NAS. Your Card & Offload settings control when copying starts and whether the card is erased.")
                     .font(DS.Typo.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

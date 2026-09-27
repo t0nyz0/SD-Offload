@@ -12,6 +12,10 @@ import OffloadEngine
 //   swift run offload-harness chaos-nas  # NAS disappears mid-upload, then returns
 
 let mode = CommandLine.arguments.dropFirst().first ?? "run"
+if mode == "benchmark" {
+    try await PerformanceBaseline.run()
+    exit(0)
+}
 
 let workspace = FileManager.default.temporaryDirectory
     .appendingPathComponent("offload-harness-\(UUID().uuidString.prefix(8))", isDirectory: true)

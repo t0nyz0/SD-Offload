@@ -301,7 +301,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Higher quality decodes the full photo for sharper thumbnails; lower is faster, especially over a slow NAS connection. Changing this rebuilds the thumbnail cache.")
+                Text("Balanced is the default for responsive NAS browsing. High and Maximum read full photos for sharper thumbnails and use more network bandwidth and memory. Changing quality rebuilds the thumbnail cache.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -323,7 +323,7 @@ struct SettingsView: View {
                               prompt: Text("e.g. claude-opus-4-5 — leave blank for default"))
                         .textFieldStyle(.roundedBorder)
                 }
-                Text("Powers the viewer's “Identify” and the library “Analyze”. **CLI** uses your logged-in Claude session (no key, no extra billing). **API** uses your Anthropic key and is billed to your account. Your key is stored in the macOS Keychain.")
+                Text(s.config.aiProvider.setupHelp + " Identify and Analyze send a smaller copy of each photo to the selected provider. Changes apply to the next analysis; an active batch keeps its original provider.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

@@ -5,6 +5,65 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.12] — 2026-09-26
+
+### Added
+- Release packages include a SHA-256 checksum manifest; README covers provider setup, local tag storage, and performance validation.
+- Select Codex or Claude Code sessions in Settings → Library → AI, alongside the existing Anthropic API option.
+- Codex image analysis uses structured output, a read-only sandbox, and isolated temporary previews.
+
+### Fixed
+- Analysis uses the current provider immediately, even before the settings save debounce completes.
+- Provider setup help and viewer/batch wording now reflect the available choices.
+- Report failed photos in batch analysis and stop CLI processes that ignore timeout cancellation.
+- CLI discovery avoids potentially hanging login-shell startup scripts; existing Claude settings remain compatible.
+
+## [1.7.11] — 2026-09-26
+
+### Changed
+- Show an immediate explanatory caption when hovering over photo-viewer toolbar
+  buttons, plus native tooltips and accessibility hints for every action.
+- Clearly identify Open RAW, Show in Finder, rotation, auto-advance, photo info,
+  and Move to Trash without shifting the photo as the pointer moves.
+
+## [1.7.10] — 2026-09-26
+
+### Added
+- Edit Tags in the photo Info panel: add, rename, or remove searchable tags,
+  including for photos without AI analysis. Tags are saved locally in SD Offload
+  and manual corrections survive later AI analysis.
+- Show all searchable tags together; update search, suggestions, and tile tags
+  after saving, and display an error if the save fails.
+
+## [1.7.9] — 2026-09-26
+
+### Fixed
+- Keep network volume lookups and search-result metadata reads off the UI thread;
+  cancel obsolete folder work and prevent old results replacing the current folder.
+- Do not cache failed or cancelled library counts as a complete empty library;
+  show a retry message when enumeration fails and recheck legacy zero totals.
+- Bound full-resolution viewer caching to 384 MiB and decode one image at a time
+  so rapid paging does not launch overlapping full-resolution reads.
+- Stop abandoned folder-preview/count work and skip queued metadata reads after cancellation.
+- Preserve saved favorites when their volume is temporarily unavailable, and
+  immediately re-sort highest-rated photos after a rating changes.
+
+### Changed
+- Default to Balanced thumbnails for responsive NAS browsing; explicitly chosen
+  quality settings are preserved.
+- Remove the continuously animated idle card to reduce idle work.
+- Keep the viewer background opaque, hide the covered grid from accessibility,
+  label rating controls, and show each photo’s actual filename extension.
+- Give search its own row so Library controls stay readable in smaller windows,
+  and require confirmation before deleting saved face data.
+- Clarify erase-policy wording, AI analysis, search coverage, loading failures,
+  and empty results caused by rating or pick/reject filters.
+
+### Added
+- Isolated demo data and idle mode for safe UI QA, regression coverage for library
+  navigation, counts, cancellation and viewer memory, and a local performance baseline
+  (`swift run -c release offload-harness benchmark`).
+
 ## [1.7.8] — 2026-09-26
 
 ### Fixed

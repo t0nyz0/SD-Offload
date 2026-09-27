@@ -12,7 +12,7 @@ import OffloadCore
 enum ThumbnailQuality: Int, CaseIterable, Sendable {
     case fast = 0, balanced = 1, high = 2, maximum = 3
 
-    static let defaultQuality: ThumbnailQuality = .high
+    static let defaultQuality: ThumbnailQuality = .balanced
 
     var label: String {
         switch self {

@@ -28,6 +28,8 @@ public struct PhotoRecord: Codable, Sendable {
     public var aiTags: [String]? = nil
     public var aiDescription: String? = nil
     public var aiAnalyzedAt: Date? = nil
+    /// nil uses generated tags; an empty array deliberately removes every tag.
+    public var userTags: [String]? = nil
 
     public init(path: String, size: Int64, mtime: Date, labels: [PhotoLabel],
                 animals: [String], analyzedAt: Date = Date()) {
@@ -38,12 +40,21 @@ public struct PhotoRecord: Codable, Sendable {
     /// De-duplicated tag list, lowercased — AI tags first (the specific ones), then
     /// animals, then on-device labels. Powers tile overlays, search, and suggestions.
     public var tags: [String] {
+        if let userTags { return Self.normalizedTags(userTags) }
         var seen = Set<String>()
         var out: [String] = []
         for t in (aiTags ?? []).map({ $0.lowercased() }) + animals.map({ $0.lowercased() }) + labels.map({ $0.name.lowercased() }) {
             if seen.insert(t).inserted { out.append(t) }
         }
         return out
+    }
+
+    public static func normalizedTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        return tags.compactMap {
+            let tag = $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return !tag.isEmpty && seen.insert(tag).inserted ? tag : nil
+        }
     }
 
     public var searchText: String {
@@ -77,6 +88,8 @@ public actor PhotoIndex {
     }
 
     public func put(_ record: PhotoRecord) {
+        var record = record
+        if record.userTags == nil { record.userTags = records[record.path]?.userTags }
         records[record.path] = record
         haystack.removeValue(forKey: record.path)
         dirty = true
@@ -92,6 +105,21 @@ public actor PhotoIndex {
         records[path] = r
         haystack.removeValue(forKey: path)
         dirty = true
+    }
+
+    /// Persist before publishing success. A failed write leaves the prior tags and
+    /// search cache intact, so the editor can truthfully offer a retry.
+    public func saveUserTags(path: String, size: Int64, mtime: Date, tags: [String]) throws -> [String] {
+        var record = records[path] ?? PhotoRecord(path: path, size: size, mtime: mtime, labels: [], animals: [])
+        let normalized = PhotoRecord.normalizedTags(tags)
+        record.userTags = normalized
+        var updated = records
+        updated[path] = record
+        try JSONIO.save(Array(updated.values), to: file)
+        records = updated
+        haystack.removeValue(forKey: path)
+        dirty = false
+        return normalized
     }
 
     public func remove(paths: [String]) {

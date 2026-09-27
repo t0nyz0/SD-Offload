@@ -20,6 +20,7 @@ struct ImageViewer: View {
     // Lightroom-style flow. Persisted, on by default; toggled from the top bar.
     @AppStorage("offload.viewer.autoAdvance") private var autoAdvance = true
     @State private var confirmingDelete = false
+    @State private var hoveredControlHint: String?
     @State private var manualRotation = 0
     @State private var videoPlayer = AVPlayer()
     @State private var videoLoading = false
@@ -40,7 +41,7 @@ struct ImageViewer: View {
     var body: some View {
         if let i = index, let item = current {
             ZStack(alignment: .top) {
-                Color.black.opacity(0.985).ignoresSafeArea()
+                Color.black.ignoresSafeArea()
                     .onTapGesture { index = nil }
 
                 VStack(spacing: 0) {
@@ -67,7 +68,7 @@ struct ImageViewer: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                         if showInfo {
-                            InfoPanel(item: item, meta: meta, tags: model.tags(for: item.primary), model: model)
+                            InfoPanel(item: item, meta: meta, model: model)
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
@@ -162,59 +163,69 @@ struct ImageViewer: View {
     }
 
     private func topBar(item: DisplayItem, position: Int) -> some View {
-        HStack(spacing: DS.Space.m) {
-            Button { index = nil } label: {
-                Label("Back to Library", systemImage: "chevron.left")
-            }
-            .labelStyle(.titleAndIcon)
-            .fixedSize()
-            .help("Back to Library (Esc)")
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: DS.Space.m) {
+                Button { index = nil } label: {
+                    Label("Back to Library", systemImage: "chevron.left")
+                }
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+                .modifier(ViewerControlHint(text: "Back to Library — close the photo viewer (Esc)", activeHint: $hoveredControlHint))
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text((item.primary.name as NSString).deletingPathExtension)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1).truncationMode(.middle)
-                Text("\(position + 1) of \(items.count)")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
-            }
-            Spacer()
-            Button { autoAdvance.toggle() } label: {
-                Label("Auto-advance", systemImage: autoAdvance ? "forward.fill" : "forward")
-            }
-            .tint(autoAdvance ? Color.accentColor : nil)
-            .help("Auto-advance to the next photo after you rate or flag it")
-            HStack(spacing: 2) {
-                Button { rotateView(-1) } label: {
-                    Label("Rotate left", systemImage: "rotate.left")
+                VStack(alignment: .leading, spacing: 1) {
+                    Text((item.primary.name as NSString).deletingPathExtension)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle)
+                    Text("\(position + 1) of \(items.count)")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
                 }
-                .help("Rotate view left ([)")
-                Button { rotateView(1) } label: {
-                    Label("Rotate right", systemImage: "rotate.right")
+                Spacer()
+                Button { autoAdvance.toggle() } label: {
+                    Label("Auto-advance", systemImage: autoAdvance ? "forward.fill" : "forward")
                 }
-                .help("Rotate view right (])")
+                .tint(autoAdvance ? Color.accentColor : nil)
+                .modifier(ViewerControlHint(text: "Auto-advance — move to the next photo after rating or marking Pick/Reject", activeHint: $hoveredControlHint))
+                HStack(spacing: 2) {
+                    Button { rotateView(-1) } label: {
+                        Label("Rotate left", systemImage: "rotate.left")
+                    }
+                    .modifier(ViewerControlHint(text: "Rotate left — turn the view 90° counterclockwise ([)", activeHint: $hoveredControlHint))
+                    Button { rotateView(1) } label: {
+                        Label("Rotate right", systemImage: "rotate.right")
+                    }
+                    .modifier(ViewerControlHint(text: "Rotate right — turn the view 90° clockwise (])", activeHint: $hoveredControlHint))
+                }
+                .labelStyle(.iconOnly)
+                .disabled(isVideo)
+                Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
+                    Label("Info", systemImage: "info.circle")
+                }
+                .tint(showInfo ? Color.accentColor : nil)
+                .modifier(ViewerControlHint(text: "Photo info — show or hide tags, camera details, and metadata (i)", activeHint: $hoveredControlHint))
+                if let raw = item.rawCompanion?.url {
+                    Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
+                        .modifier(ViewerControlHint(text: "Open RAW — open the original camera file in its default app", activeHint: $hoveredControlHint))
+                }
+                Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                }
+                .modifier(ViewerControlHint(text: "Show in Finder — locate this photo in its folder", activeHint: $hoveredControlHint))
+                if canDelete {
+                    Button(role: .destructive) { confirmingDelete = true } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .tint(.red)
+                    .modifier(ViewerControlHint(text: "Move to Trash — review which photo files to remove (⌦)", activeHint: $hoveredControlHint))
+                }
             }
             .labelStyle(.iconOnly)
-            .disabled(isVideo)
-            Button { withAnimation(.snappy(duration: 0.2)) { showInfo.toggle() } } label: {
-                Label("Info", systemImage: "info.circle")
-            }
-            .tint(showInfo ? Color.accentColor : nil)
-            .help("Show photo info (i)")
-            if let raw = item.rawCompanion?.url {
-                Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
-            }
-            Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
-                Label("Reveal", systemImage: "folder")
-            }
-            if canDelete {
-                Button(role: .destructive) { confirmingDelete = true } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-                .tint(.red)
-                .help("Delete from NAS (⌦)")
-            }
+            Text(hoveredControlHint ?? " ")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, minHeight: 28, maxHeight: 28, alignment: .trailing)
+                .accessibilityHidden(true)
         }
-        .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .background(Color(white: 0.12))
@@ -257,6 +268,7 @@ struct ImageViewer: View {
                             .foregroundStyle(n <= stars ? Color.yellow : .white.opacity(0.45))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Rate \(n) star\(n == 1 ? "" : "s")")
                     .help("\(n) star\(n == 1 ? "" : "s") (\(n))")
                 }
             }
@@ -362,6 +374,11 @@ final class FullImageCache {
     private var order: [Key] = []            // most-recent-last
     private var store: [Key: NSImage] = [:]
     private let capacity = 8
+    private let byteLimit: Int
+    private var costs: [Key: Int] = [:]
+    private(set) var residentBytes = 0
+
+    init(byteLimit: Int = 384 << 20) { self.byteLimit = byteLimit }
 
     func get(url: URL, mtime: Date, rotation: Int = 0) -> NSImage? {
         let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate, rotation: rotation)
@@ -371,12 +388,20 @@ final class FullImageCache {
     }
     func put(url: URL, mtime: Date, rotation: Int = 0, image: NSImage) {
         let k = Key(path: url.path, mtime: mtime.timeIntervalSinceReferenceDate, rotation: rotation)
-        if store[k] == nil { order.append(k); store[k] = image }
-        while order.count > capacity, let victim = order.first {
+        guard store[k] == nil else { return }
+        let cost = image.representations.map { rep in
+            if let bitmap = rep as? NSBitmapImageRep { return bitmap.bytesPerRow * bitmap.pixelsHigh }
+            return rep.pixelsWide * rep.pixelsHigh * 8 // allow high-bit-depth decodes
+        }.max() ?? Int(image.size.width * image.size.height * 8)
+        guard cost <= byteLimit else { return } // the viewer still displays it; don't retain it
+        order.append(k); store[k] = image; costs[k] = cost
+        residentBytes += cost
+        while order.count > capacity || residentBytes > byteLimit, let victim = order.first {
             order.removeFirst(); store.removeValue(forKey: victim)
+            residentBytes -= costs.removeValue(forKey: victim) ?? 0
         }
     }
-    func clear() { order.removeAll(); store.removeAll() }
+    func clear() { order.removeAll(); store.removeAll(); costs.removeAll(); residentBytes = 0 }
 }
 
 /// Loads the full image off-main and force-decodes it (NSImage(contentsOf:) is
@@ -411,6 +436,8 @@ private struct ZoomableImage: View {
 
     private struct LoadID: Hashable { let url: URL; let rotation: Int }
 
+    private static let decodeLimiter = ThumbLimiter(limit: 1)
+
     private func load() async {
         if let cached = FullImageCache.shared.get(url: url, mtime: mtime, rotation: quarterTurns) {
             image = cached; failed = false
@@ -420,7 +447,11 @@ private struct ZoomableImage: View {
         let u = url
         let rotation = quarterTurns
         let base = FullImageCache.shared.get(url: url, mtime: mtime)
-        let loaded = await Task.detached(priority: .userInitiated) { () -> (NSImage, NSImage?)? in
+        await Self.decodeLimiter.acquire()
+        defer { Task { await Self.decodeLimiter.release() } }
+        guard !Task.isCancelled else { return }
+        let loaded = await BackgroundWork.run(priority: .userInitiated) { () -> (NSImage, NSImage?)? in
+            guard !Task.isCancelled else { return nil }
             let baseImage: NSImage
             if let base {
                 baseImage = base
@@ -434,7 +465,7 @@ private struct ZoomableImage: View {
             let display = NSImage(cgImage: rotated,
                                   size: NSSize(width: rotated.width, height: rotated.height))
             return (display, base == nil ? baseImage : nil)
-        }.value
+        }
         guard !Task.isCancelled else { return }
         if let loaded {
             image = loaded.0
@@ -640,7 +671,6 @@ private final class PannableImageView: NSImageView {
 private struct InfoPanel: View {
     let item: DisplayItem
     let meta: PhotoMeta?
-    let tags: [String]
     let model: LibraryModel
     @State private var detections: [Detection] = []
     @State private var reloadToken = 0
@@ -653,7 +683,7 @@ private struct InfoPanel: View {
         switch e.kind {
         case .media(.raw): return "RAW"
         case .media(.video): return "Video"
-        default: return "JPEG"
+        default: return e.url.pathExtension.uppercased()
         }
     }
     // The File row: for a JPEG+RAW pair, show each file's own size rather than a
@@ -690,6 +720,7 @@ private struct InfoPanel: View {
                 Text("Info")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
+                PhotoTagsSection(entry: item.primary, model: model).id(item.id)
                 aiSection
                 row("File", fileLine)
                 if let d = meta?.dateText { row("Taken", d) }
@@ -732,20 +763,6 @@ private struct InfoPanel: View {
                     }
                 }
                 if let folder = folderText { row("Folder", folder) }
-                if !tags.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        label("Contents")
-                        FlowLayout(spacing: 5) {
-                            ForEach(tags, id: \.self) { tag in
-                                Text(tag)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(.white.opacity(0.12), in: Capsule())
-                                    .foregroundStyle(.white.opacity(0.85))
-                            }
-                        }
-                    }
-                }
                 if !detections.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         label("People & Pets")
@@ -783,28 +800,17 @@ private struct InfoPanel: View {
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.9))
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
-                if !ai.tags.isEmpty {
-                    FlowLayout(spacing: 5) {
-                        ForEach(ai.tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.system(size: 10, weight: .medium))
-                                .padding(.horizontal, 7).padding(.vertical, 3)
-                                .background(Theme.accent.opacity(0.22), in: Capsule())
-                                .foregroundStyle(.white.opacity(0.92))
-                        }
-                    }
-                }
             } else if identifying {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Identifying with Claude…").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Identifying photo…").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             } else {
                 Button { runIdentify() } label: {
                     Label("Identify with AI", systemImage: "sparkles").font(.system(size: 11))
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
-                Text("Uses your Claude session to name the subject, species, and scene.")
+                Text("Uses the AI provider selected in Settings → Library to describe the subject and scene.")
                     .font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
                     .fixedSize(horizontal: false, vertical: true)
                 if let aiError {
@@ -947,7 +953,7 @@ private struct FaceRow: View {
 }
 
 /// Minimal wrapping layout for the content-tag chips (macOS 14 Layout protocol).
-private struct FlowLayout: Layout {
+struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -995,5 +1001,21 @@ private struct NativeVideoPlayer: NSViewRepresentable {
     static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
         view.player?.pause()
         view.player = nil
+    }
+}
+
+/// Native tooltips plus an immediate, stable caption beneath the viewer toolbar.
+private struct ViewerControlHint: ViewModifier {
+    let text: String
+    @Binding var activeHint: String?
+
+    func body(content: Content) -> some View {
+        content
+            .help(text)
+            .accessibilityHint(text)
+            .onHover { hovering in
+                if hovering { activeHint = text }
+                else if activeHint == text { activeHint = nil }
+            }
     }
 }

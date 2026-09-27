@@ -2,7 +2,12 @@ import Foundation
 
 public enum Paths {
     public static var appSupport: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        // A demo may use disposable data without reading/writing the real library.
+        let env = ProcessInfo.processInfo.environment
+        if env["OFFLOAD_DEMO"] == "1", let root = env["OFFLOAD_DEMO_DATA_ROOT"], root.hasPrefix("/") {
+            return URL(fileURLWithPath: root, isDirectory: true)
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Offload", isDirectory: true)
     }
 

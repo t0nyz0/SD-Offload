@@ -30,9 +30,10 @@ final class FolderPreviewLoader: @unchecked Sendable {
         if Task.isCancelled { return [] }
 
         let browser = self.browser
-        let entries = await Task.detached(priority: .utility) {
-            browser.sampleMedia(under: folder, limit: count)
-        }.value
+        let entries = await BackgroundWork.run {
+            browser.sampleMedia(under: folder, limit: count, isCancelled: { Task.isCancelled })
+        }
+        if Task.isCancelled { return [] }
 
         var images: [NSImage] = []
         for e in entries {
@@ -46,6 +47,7 @@ final class FolderPreviewLoader: @unchecked Sendable {
                      ?? Int(img.size.width * img.size.height)
             return acc + px * 4
         }
+        guard !Task.isCancelled else { return [] }
         mem.setObject(ImagesBox(images), forKey: key, cost: cost)
         return images
     }

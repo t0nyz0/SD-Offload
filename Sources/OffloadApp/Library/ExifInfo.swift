@@ -50,6 +50,7 @@ final class ExifCache: @unchecked Sendable {
         if let box = mem.object(forKey: key) { return box.info.hasAny ? box.info : nil }
         await limiter.acquire()
         defer { Task { await limiter.release() } }
+        if Task.isCancelled { return nil }
         let info = await Task.detached(priority: .utility) { Self.read(url) }.value
         mem.setObject(ExifBox(info ?? ExifInfo()), forKey: key)   // cache negatives too
         return (info?.hasAny ?? false) ? info : nil

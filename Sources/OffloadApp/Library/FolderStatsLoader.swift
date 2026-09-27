@@ -53,14 +53,14 @@ final class FolderStatsLoader: @unchecked Sendable {
         if Task.isCancelled { return nil }
 
         let browser = self.browser
-        let result: FolderStats = await Task.detached(priority: .utility) {
+        let result: FolderStats? = await BackgroundWork.run {
             let accumulator = FolderStatsAccumulator()
-            browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { count, bytes in
+            let complete = browser.countMedia(root: folder, isCancelled: { Task.isCancelled }) { count, bytes in
                 accumulator.update(count: count, bytes: bytes)
             }
-            return accumulator.snapshot()
-        }.value
-        if Task.isCancelled { return nil }
+            return complete ? accumulator.snapshot() : nil
+        }
+        guard !Task.isCancelled, let result else { return nil }
         store(path: path, mtime: m, stats: result)
         return result
     }

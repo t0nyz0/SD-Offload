@@ -12,11 +12,24 @@ public enum CardPolicy: String, Codable, Sendable {
     case alwaysIngest, ask, ignore
 }
 
-/// How AI photo analysis reaches Claude. `cli`: the local, logged-in `claude` CLI
-/// (uses your Claude session, no key). `api`: the Anthropic API with your own key.
+/// Keep the original raw values so existing Claude settings continue to decode.
 public enum AIProvider: String, Codable, Sendable, CaseIterable {
-    case cli, api
-    public var label: String { self == .cli ? "Claude CLI (your session)" : "Anthropic API (your key)" }
+    case cli, codex, api
+    public var label: String {
+        switch self {
+        case .cli: return "Claude (Claude Code session)"
+        case .codex: return "Codex (Codex session)"
+        case .api: return "Anthropic API (API key)"
+        }
+    }
+    public var executableName: String { self == .codex ? "codex" : "claude" }
+    public var setupHelp: String {
+        switch self {
+        case .cli: return "Install Claude Code and sign in with claude in Terminal. Uses that session and its usage limits."
+        case .codex: return "Install the Codex CLI and sign in with codex login in Terminal. Uses that session and its usage limits."
+        case .api: return "Uses your Anthropic API key and bills your API account. The key is stored in macOS Keychain."
+        }
+    }
 }
 
 public enum IngestScope: String, Codable, Sendable {

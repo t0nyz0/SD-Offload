@@ -20,6 +20,7 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
     private func emit(_ e: EngineEvent) { continuation.yield(e) }
 
     func start() {
+        guard ProcessInfo.processInfo.environment["OFFLOAD_DEMO_IDLE"] != "1" else { return }
         scriptTask = Task { [weak self] in
             await self?.runScript()
         }

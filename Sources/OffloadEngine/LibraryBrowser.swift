@@ -11,13 +11,18 @@ public struct LibraryBrowser: Sendable {
     /// read chronologically), then media files (by name). Non-media and hidden
     /// files are skipped.
     public func browse(_ directory: URL) -> [LibraryEntry] {
+        (try? browseChecked(directory)) ?? []
+    }
+
+    public func browseChecked(_ directory: URL) throws -> [LibraryEntry] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey]
-        guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
-                                                      options: [.skipsHiddenFiles]) else { return [] }
+        let items = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
+                                              options: [.skipsHiddenFiles])
         var folders: [LibraryEntry] = []
         var media: [LibraryEntry] = []
         for url in items {
+            try Task.checkCancellation()
             let name = url.lastPathComponent
             if name.hasPrefix(".") { continue }
             guard let vals = try? url.resourceValues(forKeys: Set(keys)) else { continue }
@@ -55,13 +60,16 @@ public struct LibraryBrowser: Sendable {
     /// preview collage. Walks lazily and stops after finding `scanCap` files,
     /// prefers JPEG/HEIC over RAW, dedupes RAW+JPEG pairs by basename, then
     /// samples evenly across what it found. Cheap over SMB (enumerator is lazy).
-    public func sampleMedia(under folder: URL, limit: Int = 4, scanCap: Int = 32) -> [LibraryEntry] {
+    public func sampleMedia(under folder: URL, limit: Int = 4, scanCap: Int = 32,
+                            isCancelled: @Sendable () -> Bool = { false }) -> [LibraryEntry] {
+        guard limit > 0, scanCap > 0, !isCancelled() else { return [] }
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let e = fm.enumerator(at: folder, includingPropertiesForKeys: keys,
                                     options: [.skipsHiddenFiles]) else { return [] }
         var found: [LibraryEntry] = []
         for case let url as URL in e {
+            if isCancelled() { return [] }
             guard let kind = MediaKind.classify(ext: url.pathExtension) else { continue }
             let v = try? url.resourceValues(forKeys: Set(keys))
             guard v?.isRegularFile == true else { continue }
@@ -84,30 +92,39 @@ public struct LibraryBrowser: Sendable {
 
     /// Count media under a root, reporting partial progress as it walks. Cheap
     /// per-file (no hashing); one callback per ~250 files keeps the UI live.
+    @discardableResult
     public func countMedia(root: URL, isCancelled: @Sendable () -> Bool = { false },
-                           progress: @Sendable (_ count: Int, _ bytes: Int64) -> Void) {
+                           progress: @Sendable (_ count: Int, _ bytes: Int64) -> Void) -> Bool {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        var complete = true
+        guard !isCancelled() else { return false }
         guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys,
-                                             options: [.skipsHiddenFiles]) else {
-            progress(0, 0); return
-        }
+                                             options: [.skipsHiddenFiles], errorHandler: { _, _ in
+                                                 complete = false
+                                                 return false
+                                             }) else { return false }
         var count = 0
         var bytes: Int64 = 0
         var sinceReport = 0
         for case let url as URL in enumerator {
-            if isCancelled() { break }
+            if isCancelled() { return false }
             guard MediaKind.isMedia(url.pathExtension) else { continue }
-            let vals = try? url.resourceValues(forKeys: Set(keys))
-            guard vals?.isRegularFile == true else { continue }
+            guard let vals = try? url.resourceValues(forKeys: Set(keys)) else {
+                complete = false
+                continue
+            }
+            guard vals.isRegularFile == true else { continue }
             count += 1
-            bytes += Int64(vals?.fileSize ?? 0)
+            bytes += Int64(vals.fileSize ?? 0)
             sinceReport += 1
             if sinceReport >= 250 {
                 sinceReport = 0
                 progress(count, bytes)
             }
         }
+        guard complete, !isCancelled() else { return false }
         progress(count, bytes)
+        return true
     }
 }

@@ -71,6 +71,7 @@ final class LibraryModel {
     private(set) var pathStack: [URL] = []       // root … current
     private(set) var entries: [LibraryEntry] = [] { didSet { rebuildDisplayed() } }
     private(set) var loading = false
+    private(set) var loadError: String?
     // Cached grouping of displayedEntries, rebuilt ONLY when entries/searchResults
     // change — so selection taps, tag updates during Analyze, and grid re-renders
     // read O(1) instead of re-running the O(n) dictionary grouping every time.
@@ -99,6 +100,8 @@ final class LibraryModel {
     private(set) var totalMedia: Int?
     private(set) var totalBytes: Int64 = 0
     private(set) var countComplete = false
+    private(set) var countUnavailable = false
+    private(set) var volumeTitle: String?
     private(set) var freeBytes: Int64 = 0
     private(set) var totalVolumeBytes: Int64 = 0
     private(set) var mounted = false
@@ -137,12 +140,17 @@ final class LibraryModel {
     }
 
     private let browser = LibraryBrowser()
+    @ObservationIgnored private let browseDirectory: @Sendable (URL) -> Result<[LibraryEntry], Error>
     let photoIndex = PhotoIndex()
     let faceIndex = FaceIndex()
     let identityIndex = IdentityIndex()
     private let faceDetector = FaceDetector()
     @ObservationIgnored private var faceTask: Task<Void, Never>?
     @ObservationIgnored private var faceEpoch = 0
+    @ObservationIgnored private var browseTask: Task<Void, Never>?
+    @ObservationIgnored private var browseEpoch = 0
+    @ObservationIgnored private var volumeTask: Task<Void, Never>?
+    @ObservationIgnored private var volumeEpoch = 0
     @ObservationIgnored private var countTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeEpoch = 0
@@ -152,9 +160,17 @@ final class LibraryModel {
     @ObservationIgnored private(set) var dateFolderLayouts: [DateFolderLayout]
     @ObservationIgnored private var activeDateFolderLayout: DateFolderLayout
 
+    @ObservationIgnored private var aiConfigProvider: () -> AppConfig
+
     init(nasRootPath: String, cardRootPath: String?,
          dateFolderLayouts: [DateFolderLayout] = DateFolderLayout.presets,
-         activeDateFolderLayout: DateFolderLayout = .nestedNumeric) {
+         activeDateFolderLayout: DateFolderLayout = .nestedNumeric,
+         aiConfigProvider: @escaping () -> AppConfig = { AppConfig.load() },
+         browseDirectory: @escaping @Sendable (URL) -> Result<[LibraryEntry], Error> = { url in
+             Result { try LibraryBrowser().browseChecked(url) }
+         }) {
+        self.aiConfigProvider = aiConfigProvider
+        self.browseDirectory = browseDirectory
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
         self.dateFolderLayouts = dateFolderLayouts
@@ -183,8 +199,7 @@ final class LibraryModel {
         case .card: return "SD Card"
         case .nas:
             guard let root = rootURL else { return "Photos" }
-            let name = (try? root.resourceValues(forKeys: [.volumeLocalizedNameKey]))?.volumeLocalizedName
-            return name ?? root.lastPathComponent
+            return volumeTitle ?? root.lastPathComponent
         }
     }
 
@@ -226,6 +241,10 @@ final class LibraryModel {
         guard source == .nas, let root = rootURL else { return }
         if !available {
             countTask?.cancel()
+            browseTask?.cancel()
+            browseEpoch += 1
+            volumeTask?.cancel()
+            volumeEpoch += 1
             mounted = false
             freeBytes = 0
             totalVolumeBytes = 0
@@ -234,19 +253,36 @@ final class LibraryModel {
             return
         }
         let wasMounted = mounted
+        mounted = true
         refreshVolumeStats(root)
-        guard mounted, !wasMounted else { return }
+        guard !wasMounted, !loading else { return }
         loadEntries()
         startCount(root)
     }
 
     func select(_ newSource: Source) {
         guard newSource != source || pathStack.isEmpty else { return }
+        browseTask?.cancel()
+        browseEpoch += 1
+        countTask?.cancel()
+        volumeTask?.cancel()
+        volumeEpoch += 1
         source = newSource
         switch newSource {
         case .nas:
             let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
-            openRoot(root, drillTo: nasHomeFolder(root: root))   // land on this month if it exists
+            openRoot(root, deferBrowse: true)
+            let epoch = browseEpoch
+            let layout = activeDateFolderLayout
+            browseTask?.cancel()
+            browseTask = Task { [weak self] in
+                let target = await BackgroundWork.run {
+                    Self.nasHomeFolder(root: root, layout: layout)
+                }
+                guard let self, !Task.isCancelled, self.browseEpoch == epoch else { return }
+                self.pathStack = Self.pathStack(from: root, to: target)
+                self.loadEntries()
+            }
         case .card:
             guard let card = cardRootPath else { return }
             // Prefer DCIM if present, else the mount root.
@@ -294,7 +330,7 @@ final class LibraryModel {
             if clamped == 0 { ratings.removeValue(forKey: t.primary.id) } else { ratings[t.primary.id] = clamped }
         }
         saveCull()
-        if minRating > 0 { rebuildDisplayed() }
+        if minRating > 0 || sortOrder == .ratingDesc { rebuildDisplayed() }
     }
 
     /// Toggle a pick/reject flag (tapping the same flag clears it).
@@ -335,7 +371,7 @@ final class LibraryModel {
             if clamped == 0 { ratings.removeValue(forKey: t.primary.id) } else { ratings[t.primary.id] = clamped }
         }
         saveCull()
-        if minRating > 0 { rebuildDisplayed() }
+        if minRating > 0 || sortOrder == .ratingDesc { rebuildDisplayed() }
     }
 
     func flagSelection(_ flag: PhotoFlag) {
@@ -363,31 +399,34 @@ final class LibraryModel {
     }
 
     /// Build the Favorites timeline: resolve favorite paths to entries (dropping any
-    /// whose file has gone), group RAW+JPEG, and sort oldest → newest by capture date.
+    /// currently unavailable), group RAW+JPEG, and sort oldest → newest by capture date.
     func loadFavorites() {
         source = .favorites
+        browseTask?.cancel()
+        browseEpoch += 1
+        countTask?.cancel()
+        volumeTask?.cancel()
+        volumeEpoch += 1
         pathStack = []
         searchText = ""
         searchResults = nil
         loading = true
         favoriteItems = []
         let paths = Array(favoritePaths)
-        Task { [weak self] in
+        let epoch = browseEpoch
+        browseTask = Task { [weak self] in
             guard let self else { return }
             let existing = await Task.detached(priority: .userInitiated) {
                 paths.filter { FileManager.default.fileExists(atPath: $0) }
             }.value
             let built = await self.entries(forPaths: existing)
+            guard !Task.isCancelled, self.browseEpoch == epoch else { return }
             let photos = Self.groupPhotos(built).sorted { self.timelineDate($0) < self.timelineDate($1) }
             self.favoriteItems = photos
             self.totalMedia = photos.count
             self.totalBytes = photos.reduce(0) { acc, it in acc + it.all.reduce(0) { $0 + $1.size } }
             self.countComplete = true
             self.loading = false
-            if existing.count < paths.count {          // prune favorites pointing at deleted files
-                self.favoritePaths = Set(existing)
-                self.saveFavorites()
-            }
         }
     }
 
@@ -397,6 +436,11 @@ final class LibraryModel {
     /// identities and their photo counts.
     func loadFaces() {
         source = .faces
+        browseTask?.cancel()
+        browseEpoch += 1
+        countTask?.cancel()
+        volumeTask?.cancel()
+        volumeEpoch += 1
         pathStack = []
         searchText = ""
         searchResults = nil
@@ -484,12 +528,13 @@ final class LibraryModel {
     /// deeper in the tree while keeping `root` as the true root — so breadcrumbs,
     /// the library total, volume stats, and search prefixes all still key off the
     /// real root, only the *displayed* folder is the deeper one.
-    private func openRoot(_ root: URL, drillTo target: URL? = nil) {
+    private func openRoot(_ root: URL, drillTo target: URL? = nil, deferBrowse: Bool = false) {
+        volumeTitle = nil
         pathStack = target.map { Self.pathStack(from: root, to: $0) } ?? [root]
         searchText = ""
         searchResults = nil
         refreshVolumeStats(root)
-        loadEntries()
+        if deferBrowse { loading = true; entries = [] } else { loadEntries() }
         startCount(root)
         refreshSuggestions()
         Task { await refreshFaceState() }
@@ -499,8 +544,8 @@ final class LibraryModel {
     /// when it already exists on the NAS (the daily driver's most-recent shoots),
     /// falling back to the root when it doesn't. Checked against the live
     /// filesystem so a not-yet-created month simply lands on root.
-    private func nasHomeFolder(root: URL) -> URL {
-        var comps = activeDateFolderLayout.folderPath(for: Date()).split(separator: "/").map(String.init)
+    nonisolated private static func nasHomeFolder(root: URL, layout: DateFolderLayout) -> URL {
+        var comps = layout.folderPath(for: Date()).split(separator: "/").map(String.init)
         if comps.count <= 1 { return root }
         comps.removeLast()   // land at the closest stable parent, never a single day
         while !comps.isEmpty {
@@ -571,6 +616,19 @@ final class LibraryModel {
 
     func tags(for entry: LibraryEntry) -> [String] { tagsByPath[entry.id] ?? [] }
 
+    func allTags(for entry: LibraryEntry) async -> [String] {
+        await photoIndex.record(entry.id)?.tags ?? []
+    }
+
+    func saveTags(_ tags: [String], for entry: LibraryEntry) async throws -> [String] {
+        let saved = try await photoIndex.saveUserTags(path: entry.id, size: entry.size,
+                                                      mtime: entry.modified, tags: tags)
+        tagsByPath[entry.id] = Array(saved.prefix(3))
+        refreshSuggestions()
+        if isSearching { runSearch() }
+        return saved
+    }
+
     // MARK: - AI identification (on-demand, via the claude CLI)
 
     /// A previously-run identification for this photo, if any (so reopening shows it
@@ -587,7 +645,7 @@ final class LibraryModel {
         await photoIndex.setAI(path: item.primary.id, size: item.primary.size,
                                mtime: item.primary.modified, tags: result.tags, description: result.description)
         await photoIndex.save()
-        if !result.tags.isEmpty { tagsByPath[item.primary.id] = Array(result.tags.prefix(3)) }
+        tagsByPath[item.primary.id] = Array((await allTags(for: item.primary)).prefix(3))
         aiDonePaths.insert(item.primary.id)
         refreshSuggestions()
         return result
@@ -758,7 +816,9 @@ final class LibraryModel {
                 paths.formUnion(await faces.photos(withIdentities: namedMatches, underPrefix: prefix))
             }
             guard let self, !Task.isCancelled else { return }
-            self.searchResults = await self.entries(forPaths: Array(paths))
+            let results = await self.entries(forPaths: Array(paths))
+            guard !Task.isCancelled else { return }
+            self.searchResults = results
         }
     }
 
@@ -766,18 +826,21 @@ final class LibraryModel {
     /// use the content index where available, stat the rest.
     private func entries(forPaths paths: [String]) async -> [LibraryEntry] {
         let recs = await photoIndex.records(forPaths: paths)
-        return paths.map { path in
-            let kind: LibraryEntry.Kind = MediaKind.classify(ext: (path as NSString).pathExtension)
-                .map { .media($0) } ?? .media(.photo)
-            if let rec = recs[path] {
-                return LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
-                                    kind: kind, size: rec.size, modified: rec.mtime)
+        return await BackgroundWork.run {
+            paths.compactMap { path -> LibraryEntry? in
+                guard !Task.isCancelled else { return nil }
+                let kind: LibraryEntry.Kind = MediaKind.classify(ext: (path as NSString).pathExtension)
+                    .map { .media($0) } ?? .media(.photo)
+                if let rec = recs[path] {
+                    return LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
+                                        kind: kind, size: rec.size, modified: rec.mtime)
+                }
+                let vals = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                return LibraryEntry(id: path, name: (path as NSString).lastPathComponent, kind: kind,
+                                    size: Int64(vals?.fileSize ?? 0), modified: vals?.contentModificationDate ?? .distantPast)
             }
-            let vals = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            return LibraryEntry(id: path, name: (path as NSString).lastPathComponent, kind: kind,
-                                size: Int64(vals?.fileSize ?? 0), modified: vals?.contentModificationDate ?? .distantPast)
+            .sorted { $0.name < $1.name }
         }
-        .sorted { $0.name < $1.name }
     }
 
     // MARK: - Faces filter (reuses searchResults to show matching photos)
@@ -820,7 +883,9 @@ final class LibraryModel {
         searchTask = Task { [weak self] in
             let paths = await gather(faces, prefix)
             guard let self, !Task.isCancelled else { return }
-            self.searchResults = await self.entries(forPaths: Array(paths))
+            let results = await self.entries(forPaths: Array(paths))
+            guard !Task.isCancelled else { return }
+            self.searchResults = results
         }
     }
 
@@ -875,6 +940,8 @@ final class LibraryModel {
             let width = 2
             var i = 0
             var fatal: String?
+            var failures = 0
+            var lastFailure: String?
             while i < todo.count, fatal == nil {
                 if Task.isCancelled { break }
                 let batch = Array(todo[i..<min(i + width, todo.count)])
@@ -889,11 +956,16 @@ final class LibraryModel {
                         switch outcome {
                         case .success(let r):
                             await index.setAI(path: e.id, size: e.size, mtime: e.modified, tags: r.tags, description: r.description)
+                            let effectiveTags = await index.record(e.id)?.tags ?? []
                             await MainActor.run { [weak self] in
-                                if !r.tags.isEmpty { self?.tagsByPath[e.id] = Array(r.tags.prefix(3)) }
+                                self?.tagsByPath[e.id] = Array(effectiveTags.prefix(3))
                                 self?.aiDonePaths.insert(e.id)
                             }
                         case .failure(let err):
+                            if !(err is CancellationError) {
+                                failures += 1
+                                lastFailure = err.localizedDescription
+                            }
                             if Self.isFatalAIError(err) { fatal = (err as? LocalizedError)?.errorDescription ?? "\(err)" }
                         }
                         await MainActor.run { [weak self] in self?.analyzeDone += 1 }
@@ -907,7 +979,7 @@ final class LibraryModel {
             await MainActor.run {
                 guard self.analyzeEpoch == epoch else { return }
                 self.analyzing = false
-                self.analyzeError = fatal
+                self.analyzeError = fatal ?? (failures > 0 ? "\(failures) photo(s) could not be analyzed. \(lastFailure ?? "Try again.")" : nil)
                 self.refreshSuggestions()
                 if self.isSearching { self.runSearch() }
             }
@@ -917,7 +989,7 @@ final class LibraryModel {
     /// Build an identifier from the current AI settings (provider, model, and — in API
     /// mode — the key from the Keychain).
     private func makeIdentifier() -> PhotoIdentifier {
-        let cfg = AppConfig.load()
+        let cfg = aiConfigProvider()
         let key = cfg.aiProvider == .api ? Keychain.get(service: Keychain.aiAPIKeyService) : nil
         return PhotoIdentifier(provider: cfg.aiProvider, apiKey: key, model: cfg.aiModel)
     }
@@ -926,7 +998,7 @@ final class LibraryModel {
         guard let e = err as? PhotoIdentifier.IDError else { return false }
         switch e {
         case .cliNotFound, .noAPIKey: return true
-        case .apiError(let m):
+        case .apiError(let m), .cliFailed(let m):
             let l = m.lowercased()
             return l.contains("authentication") || l.contains("api key") || l.contains("401") || l.contains("invalid")
         default: return false
@@ -1111,23 +1183,34 @@ final class LibraryModel {
     /// Focus-return reload, throttled — re-listing the folder over SMB on every app
     /// activation is wasteful and makes the grid appear to rebuild constantly.
     func reloadOnFocus() {
-        guard Date().timeIntervalSince(lastFocusReload) > 20 else { return }
+        guard !loading, Date().timeIntervalSince(lastFocusReload) > 20 else { return }
         lastFocusReload = Date()
         reloadCurrentFolder()
     }
 
     private func loadEntries() {
+        browseTask?.cancel()
+        browseEpoch += 1
+        let epoch = browseEpoch
         clearSelection()
-        guard let dir = currentDir else { entries = []; return }
+        guard let dir = currentDir else { entries = []; loading = false; return }
         loading = true
-        let browser = self.browser
-        Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                browser.browse(dir)
-            }.value
-            self.entries = result
+        loadError = nil
+        entries = []
+        let browseDirectory = self.browseDirectory
+        browseTask = Task { [weak self] in
+            let result = await BackgroundWork.run(priority: .userInitiated) {
+                browseDirectory(dir)
+            }
+            guard let self, !Task.isCancelled, self.browseEpoch == epoch else { return }
             self.loading = false
-            self.loadTagOverlays(for: result)
+            switch result {
+            case .success(let entries):
+                self.entries = entries
+                self.loadTagOverlays(for: entries)
+            case .failure(let error):
+                self.loadError = error.localizedDescription
+            }
         }
     }
 
@@ -1144,7 +1227,7 @@ final class LibraryModel {
                 guard let self else { return }
                 for (p, r) in recs {
                     let tags = Array(r.tags.prefix(3))
-                    if !tags.isEmpty { self.tagsByPath[p] = tags }
+                    self.tagsByPath[p] = tags
                     if r.aiDescription != nil { self.aiDonePaths.insert(p) }
                 }
             }
@@ -1152,21 +1235,28 @@ final class LibraryModel {
     }
 
     private func refreshVolumeStats(_ root: URL) {
-        // statfs is accurate on SMB; volumeAvailableCapacityForImportantUsage
-        // returns 0 on network shares (it's an APFS purgeable-space concept).
-        if let fs = statfsInfo(path: root.path) {
-            freeBytes = fs.freeBytes
-            totalVolumeBytes = fs.totalBytes
-            mounted = true
-        } else {
-            freeBytes = 0
-            totalVolumeBytes = 0
-            mounted = false
+        volumeTask?.cancel()
+        volumeEpoch += 1
+        let epoch = volumeEpoch
+        volumeTask = Task { [weak self] in
+            let result = await BackgroundWork.run {
+                let fs = statfsInfo(path: root.path)
+                let name = (try? root.resourceValues(forKeys: [.volumeLocalizedNameKey]))?.volumeLocalizedName
+                return (fs?.freeBytes, fs?.totalBytes, name)
+            }
+            guard let self, !Task.isCancelled, self.volumeEpoch == epoch,
+                  self.rootURL == root else { return }
+            self.freeBytes = result.0 ?? 0
+            self.totalVolumeBytes = result.1 ?? 0
+            self.volumeTitle = result.2
+            // NAS availability comes from the engine's identity-aware verdict.
+            if self.source == .card { self.mounted = result.0 != nil }
         }
     }
 
     private func startCount(_ root: URL, force: Bool = false) {
         countTask?.cancel()
+        countUnavailable = false
         let cached = LibraryIndex.load(rootPath: root.path)
         totalMedia = cached?.totalMedia
         totalBytes = cached?.totalBytes ?? 0
@@ -1174,7 +1264,7 @@ final class LibraryModel {
         // caller didn't force it — otherwise every folder open re-counts the whole
         // library over the NAS and starves thumbnail loads. It's invalidated after an
         // offload and by Refresh, so the number stays accurate.
-        if !force, let cached, cached.complete {
+        if !force, let cached, cached.complete, cached.totalMedia > 0 {
             countComplete = true
             return
         }
@@ -1184,23 +1274,32 @@ final class LibraryModel {
         countTask = Task { [weak self] in
             // Bridge the synchronous walk (on a utility thread) to the main
             // actor through a stream — no shared mutable state to race on.
-            let stream = AsyncStream<(Int, Int64)> { continuation in
+            let stream = AsyncStream<(Int, Int64, Bool?)>(bufferingPolicy: .bufferingNewest(1)) { continuation in
                 let worker = Task.detached(priority: .utility) {
-                    browser.countMedia(root: root, isCancelled: { Task.isCancelled }) { count, bytes in
-                        continuation.yield((count, bytes))
+                    let accumulator = LibraryCountAccumulator()
+                    let complete = browser.countMedia(root: root, isCancelled: { Task.isCancelled }) { count, bytes in
+                        accumulator.update(count, bytes)
+                        continuation.yield((count, bytes, nil))
                     }
+                    let final = accumulator.snapshot()
+                    continuation.yield((final.0, final.1, complete))
                     continuation.finish()
                 }
                 continuation.onTermination = { _ in worker.cancel() }
             }
             var final: (count: Int, bytes: Int64) = (0, 0)
-            for await (count, bytes) in stream {
+            var complete = false
+            for await (count, bytes, finished) in stream {
+                guard !Task.isCancelled else { return }
+                if let finished { complete = finished }
                 self?.totalMedia = count
                 self?.totalBytes = bytes
                 final = (count, bytes)
             }
             guard let self, !Task.isCancelled else { return }
-            self.countComplete = true
+            self.countComplete = complete
+            self.countUnavailable = !complete
+            guard complete else { return }
             if isNAS {
                 LibraryIndex(rootPath: root.path, totalMedia: final.count, totalBytes: final.bytes,
                              updatedAt: Date(), complete: true).save()

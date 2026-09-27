@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-106%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-124%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -103,7 +103,7 @@ one being offloaded.
 | Flexible date folders | Seven presets or a reversible custom pattern; safely convert existing folders with preflight, resume, and rollback |
 | Folder collage cards | Date folders render as a photo collage of what's inside, captioned "Saturday, July 4th, 2026" |
 | Fast thumbnails | Embedded-preview extraction (KBs over SMB, not whole RAWs), memory + disk cache, bounded concurrency |
-| In-app viewer | Opens instantly (no Preview), honors portrait orientation, offers non-destructive rotate/zoom/pan, arrow-key paging, and pairs RAW+JPEG as one photo |
+| In-app viewer | Opens in the app (no Preview), honors portrait orientation, offers non-destructive rotate/zoom/pan, arrow-key paging, explanatory hover labels, and pairs RAW+JPEG as one photo |
 | Info inspector | Camera, lens, full exposure, dimensions/megapixels, GPS, and content tags — packed into one panel |
 | Culling workflow | Rate 0–5, mark Pick or Reject, filter the grid, auto-advance in the viewer, and delete rejected photos when ready |
 | Finder access | Visible Show in Finder for selected files and viewer photos; Open Folder in Finder for the current folder |
@@ -113,7 +113,8 @@ one being offloaded.
 
 | | |
 |---|---|
-| Optional photo identification | Run on demand through your logged-in Claude CLI session or your own Anthropic API key to save a description and searchable tags |
+| Optional photo identification | Run on demand through your logged-in Codex or Claude Code session, or your own Anthropic API key to save a description and searchable tags |
+| Editable photo tags | Add, rename, or remove tags in the viewer’s Info panel; saved locally, searchable, and preserved through later AI analysis |
 | Library search | Search saved descriptions and tags, filenames, and assigned people/pet names across the archive |
 | Named faces & pets | Opt-in, on-device detection and embeddings with a suggest-and-confirm flow; names and decisions stay local |
 | Location metadata | View embedded EXIF GPS coordinates in the info inspector and open them in Maps |
@@ -173,7 +174,7 @@ swift run OffloadApp
 
 # Build a signed .app bundle → build/SD Offload.app
 bash Scripts/build-app.sh
-open build/SD Offload.app
+open "build/SD Offload.app"
 
 # Tests
 swift test
@@ -196,8 +197,32 @@ Everything is in **Settings** (from the popover's gear menu):
   safe conversion of existing date folders, and an optional second verified destination.
 - **Card & Offload** — one global insert action, camera-folders-only or whole-card ingest, wipe and
   eject policy, staging retention, parallel uploads, and optional NAS warm-up on insertion.
-- **Library** — thumbnail quality and optional Claude photo analysis through the CLI or Anthropic API.
+- **Library** — thumbnail quality and optional photo analysis through Codex, Claude Code, or Anthropic API.
 - **Notifications** — separate controls for card detection, successful completion, and problems.
+
+### AI setup and photo tags
+
+In **Settings → Library → AI photo analysis**, select **Claude**, **Codex**, or **Anthropic API**.
+For Claude Code or Codex, install the current CLI and sign in from Terminal (`claude` or
+`codex login`). The app uses that account’s usage limits; a ChatGPT or Claude desktop app alone
+is not a substitute for the CLI. For Anthropic API, enter your API key and optionally a model.
+Provider changes apply to the next analysis; a running batch keeps its original provider.
+
+Open a photo’s **Info** panel and choose **Edit Tags…** to add, rename, or remove tags.
+Edits update search and stay intact after later AI analysis. Tags are stored in SD Offload’s
+local index; they are not embedded into the original image or its sidecars.
+
+**Balanced** thumbnail quality is the default for responsive browsing. Higher quality reads
+more image data and uses more network bandwidth and memory. Existing preferences are preserved.
+See the [QA report](docs/QA-2026-09-26.md) for measured local performance and remaining validation;
+local SSD benchmarks are not SD-card or SMB throughput promises.
+
+### Release files
+
+`bash Scripts/release.sh` builds the release app and creates versioned `.dmg` and `.zip`
+files in `build/`. GitHub releases also include `SHA256SUMS.txt`; verify downloaded files with
+`shasum -a 256 -c SHA256SUMS.txt` from the download folder. Builds are for Apple Silicon,
+ad-hoc signed, and not notarized.
 
 ## Under the hood
 
@@ -205,12 +230,12 @@ Everything is in **Settings** (from the popover's gear menu):
 |---|---|
 | Language / build | Swift 6, Swift Package Manager, **no `.xcodeproj`**, ad-hoc codesigned |
 | Concurrency | Swift actors throughout (journal, NAS locator, staging budget, pipeline queues) |
-| Integrity | CryptoKit SHA-256 (ARMv8 SHA-2 instructions — never the bottleneck) |
+| Integrity | CryptoKit SHA-256 with ARMv8 SHA-2 acceleration |
 | IO | Raw-fd chunked copy/hash, `F_NOCACHE` / `F_PREALLOCATE` / `fsync` where they belong |
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
-| Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Claude CLI or Anthropic API (photo identification) |
+| Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 106 unit tests + ten full wipe-path integration harness modes |
+| Tests | 124 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
@@ -221,7 +246,7 @@ launch asks for Removable Volumes and Network Volumes permission.
 
 SD Offload has no app account or telemetry. Transfers, browsing, EXIF handling, face/pet detection,
 and face labels stay local. Photo identification is optional: when you invoke it, the selected image
-is sent to Claude through your logged-in CLI session or through Anthropic's API using your own key;
+is sent to your selected provider through your Codex or Claude Code session, or through Anthropic's API using your own key;
 the API key is stored in the macOS Keychain.
 
 **Security posture:** no App Sandbox (it needs full access to removable + network volumes), no

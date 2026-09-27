@@ -152,6 +152,7 @@ final class PhotoMetaCache: @unchecked Sendable {
         if let box = mem.object(forKey: key) { return box.meta }
         await limiter.acquire()
         defer { Task { await limiter.release() } }
+        if Task.isCancelled { return PhotoMeta() }
         let meta = await Task.detached(priority: .userInitiated) { Self.read(url) }.value
         mem.setObject(MetaBox(meta), forKey: key)
         return meta

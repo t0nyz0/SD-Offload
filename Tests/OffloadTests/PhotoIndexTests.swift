@@ -114,4 +114,56 @@ final class PhotoIndexTests: XCTestCase {
         let label = await b.record("/nas/a.jpg")?.labels.first?.name
         XCTAssertEqual(label, "dog")
     }
+
+    func testEditedTagsReplaceGeneratedTagsAndPersist() async throws {
+        let index = PhotoIndex(file: file)
+        let path = "/nas/a.jpg"
+        await index.put(rec(path, labels: ["grass"], animals: ["Dog"]))
+        await index.setAI(path: path, size: 1000, mtime: Date(), tags: ["beach"], description: "Original description")
+        _ = await index.search("dog") // warm the search cache before editing
+        let saved = try await index.saveUserTags(path: path, size: 1000, mtime: Date(),
+                                               tags: [" Family ", "VACATION", "family", "", "  "])
+        XCTAssertEqual(saved, ["family", "vacation"])
+        let oldMatches = await index.search("dog")
+        let newMatches = await index.search("family vacation")
+        XCTAssertTrue(oldMatches.isEmpty)
+        XCTAssertEqual(newMatches, [path])
+        let reloaded = PhotoIndex(file: file)
+        let record = await reloaded.record(path)
+        XCTAssertEqual(record?.tags, ["family", "vacation"])
+        XCTAssertEqual(record?.aiDescription, "Original description")
+        let suggestions = await reloaded.topTags(underPrefix: "/nas")
+        XCTAssertEqual(Set(suggestions.map(\.tag)), ["family", "vacation"])
+    }
+
+    func testEmptyManualTagsSurviveReanalysisAndPathRemap() async throws {
+        let index = PhotoIndex(file: file)
+        let path = "/nas/a.jpg"
+        _ = try await index.saveUserTags(path: path, size: 1000, mtime: Date(), tags: [])
+        await index.setAI(path: path, size: 1000, mtime: Date(), tags: ["dog"], description: "A dog")
+        await index.put(rec(path, labels: ["grass"]))
+        await index.remapPaths([path: "/nas/new/a.jpg"])
+        await index.save()
+        let record = await PhotoIndex(file: file).record("/nas/new/a.jpg")
+        XCTAssertEqual(record?.userTags, [])
+        XCTAssertEqual(record?.tags, [])
+    }
+
+    func testFailedTagSaveDoesNotPublishUnsavedChanges() async throws {
+        let index = PhotoIndex(file: file)
+        await index.put(rec("/nas/a.jpg", labels: ["dog"]))
+        _ = await index.search("dog")
+        // A directory at the index file path forces an actual write failure.
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        do {
+            _ = try await index.saveUserTags(path: "/nas/a.jpg", size: 1000, mtime: Date(), tags: ["cat"])
+            XCTFail("Saving to a directory must fail")
+        } catch {}
+        let record = await index.record("/nas/a.jpg")
+        let dogs = await index.search("dog")
+        let cats = await index.search("cat")
+        XCTAssertEqual(record?.tags, ["dog"])
+        XCTAssertEqual(dogs, ["/nas/a.jpg"])
+        XCTAssertTrue(cats.isEmpty)
+    }
 }
