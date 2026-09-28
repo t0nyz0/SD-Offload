@@ -5,6 +5,24 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.13] — 2026-09-28
+
+### Fixed
+- Never overwrite a conflicting backup when promoting a transfer on either destination; a second-drive conflict preserves the card and explains how to retry.
+- Revalidate source identity and SHA-256 after exclusively claiming each file for erasure. Changed files are restored; interrupted claims are recoverable without overwriting another file.
+- Preserve face metadata when a folder scan fails, is cancelled, or uses an equivalent macOS path alias.
+- Retain failed photo, face, and identity saves for retry and show save errors in the Library.
+- Persist favorites, ratings, pinned folders, and folder statistics in order; retry failed snapshots and flush queued writes on quit.
+- Include AI descriptions in photo search.
+- Release cancelled queue and pause waiters, join stopped workers, and recheck staging space after external disk cleanup. Oversized files also respect free-space headroom.
+- Track and cancel the initial folder scan for AI analysis; repeated Analyze clicks no longer launch duplicate scans.
+
+### Changed
+- Load metadata on its background actor instead of during Library construction.
+- Use amortized queue removal, indexed journal mutations, and incremental progress totals for large manifests.
+- Trim the thumbnail disk cache during long browsing sessions, every 32 writes, as well as at launch.
+- Add regression coverage for the audit findings, interrupted erasure, storage recovery, and 100,000-record performance.
+
 ## [1.7.12] — 2026-09-26
 
 ### Added

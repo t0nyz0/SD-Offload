@@ -120,7 +120,7 @@ public actor SessionRunner {
                 allSettledContinuation = cont
             }
         }
-        stopWorkers()
+        await stopWorkers()
         samplerTask?.cancel()
 
         await markPhaseEnd("transfer")
@@ -142,10 +142,11 @@ public actor SessionRunner {
         }
     }
 
-    private func stopWorkers() {
-        for task in hop1Tasks + otherTasks { task.cancel() }
-        hop1Tasks.removeAll()
-        otherTasks.removeAll()
+    private func stopWorkers() async {
+        let tasks = hop1Tasks + otherTasks
+        for task in tasks { task.cancel() }
+        hop1Tasks.removeAll(); otherTasks.removeAll()
+        for task in tasks { await task.value }
     }
 
     private func settle() {
@@ -187,7 +188,11 @@ public actor SessionRunner {
 
     private nonisolated func stageOne(_ file: FileRecord) async throws {
         let started = Date()
-        await budget.reserve(file.id, file.size)
+        try await budget.reserve(file.id, file.size) { [emit] in
+            emit(.attention(AttentionItem(severity: .warning, title: "Waiting for local staging space",
+                                          detail: "Free space on the staging drive. The transfer will recheck automatically; recovery copies and the card are retained.")))
+        }
+        try Task.checkCancellation()
         await journal.transition(file: file.id, to: .copying, in: sessionID)
         await setCurrentFile(file.fileName)
 
@@ -404,7 +409,7 @@ public actor SessionRunner {
                 await handleVerifyMismatch(file, stage: "staging re-read")
                 return
             }
-            guard rename(partialURL.path, destURL.path) == 0 else {
+            guard renamex_np(partialURL.path, destURL.path, UInt32(RENAME_EXCL)) == 0 else {
                 let err = errno
                 try? fm.removeItem(at: partialURL)
                 throw OffloadError.posix(err, stage: "rename on NAS")
@@ -498,6 +503,9 @@ public actor SessionRunner {
             if existing == sourceHash { return }
         }
 
+        if fm.fileExists(atPath: destURL.path) {
+            throw OffloadError(.internalError("A different file already exists on the second drive at \(destRelPath). Both files were preserved. Move or rename the existing backup before retrying."))
+        }
         let partial = destURL.deletingLastPathComponent()
             .appendingPathComponent(".offload-\(file.id.uuidString).2.partial")
         var options = ChunkedIO.CopyOptions()
@@ -508,7 +516,7 @@ public actor SessionRunner {
             try? fm.removeItem(at: partial)
             throw OffloadError(.hashMismatch(stage: "second-copy staging re-read"))
         }
-        guard rename(partial.path, destURL.path) == 0 else {
+        guard renamex_np(partial.path, destURL.path, UInt32(RENAME_EXCL)) == 0 else {
             let err = errno; try? fm.removeItem(at: partial)
             throw OffloadError.posix(err, stage: "rename on second drive")
         }
@@ -537,7 +545,11 @@ public actor SessionRunner {
             guard let hash = file.sourceHashHex else { continue }
             let nasURL = nasRoot.appendingPathComponent(file.destRelPath)
             do { try await copyToSecondary(file, from: nasURL, sourceHash: hash, destRelPath: file.destRelPath) }
-            catch { /* leave it; the wipe gate blocks on .secondaryMissing */ }
+            catch {
+                emit(.attention(AttentionItem(severity: .warning, title: "Second copy needs attention",
+                                              detail: error.localizedDescription)))
+                // Final destination verification still blocks erasure.
+            }
         }
     }
 
@@ -558,7 +570,7 @@ public actor SessionRunner {
             await journal.transition(file: file.id, to: .failed(failure), in: sessionID)
             emit(.attention(AttentionItem(severity: .error,
                                           title: "Second copy failed: \(file.fileName)",
-                                          detail: "Couldn't verify \(file.fileName) on your second drive. The card will NOT be wiped.")))
+                                          detail: "Couldn't verify \(file.fileName) on your second drive. The card will NOT be wiped. \(error.localizedDescription)")))
             settle()
         }
     }
@@ -676,7 +688,7 @@ public actor SessionRunner {
 
     private func sampleAndEmit(tick: Int) async {
         meter.sample()
-        guard let record = await journal.session(id: sessionID) else { return }
+        let work = await journal.remainingWork(in: sessionID)
 
         var snapshot = ProgressSnapshot()
         snapshot.hop1BytesTotal = hop1TotalBytes
@@ -690,24 +702,10 @@ public actor SessionRunner {
         snapshot.nasWriteBps = meter.rate(.nasWrite)
 
         // Remaining work per stage, from journal states.
-        var sdRemaining: Int64 = 0, sdFiles = 0
-        var svRemaining: Int64 = 0, svFiles = 0
-        var nwRemaining: Int64 = 0, nwFiles = 0
-        for file in record.files {
-            switch file.state {
-            case .pending, .copying:
-                sdRemaining += file.size; sdFiles += 1
-                svRemaining += file.size; svFiles += 1
-                nwRemaining += file.size; nwFiles += 1
-            case .staged:
-                svRemaining += file.size; svFiles += 1
-                nwRemaining += file.size; nwFiles += 1
-            case .stagedVerified, .uploading:
-                nwRemaining += file.size; nwFiles += 1
-            case .uploaded, .nasVerified, .skippedDuplicate, .wiped, .failed:
-                break
-            }
-        }
+        var sdRemaining = work.sdBytes
+        let sdFiles = work.sdFiles
+        let svRemaining = work.verifyBytes, svFiles = work.verifyFiles
+        let nwRemaining = work.nasBytes, nwFiles = work.nasFiles
         // Subtract in-flight partial progress where the counters run ahead of states.
         sdRemaining = max(0, hop1TotalBytes - hop1BaseBytes - meter.bytesTotal(.sdRead))
 
@@ -825,6 +823,7 @@ public actor SessionRunner {
         await markPhase("wipe")
         guard let record = await journal.session(id: sessionID) else { return }
         do {
+            try Wiper.restoreInterruptedClaims(files: record.files, root: card.mountPath)
             try await journal.flushNow(sessionID)
             guard await nas.validateNow(force: true) == .healthy else {
                 throw OffloadError(.nasUnavailable)
@@ -886,7 +885,7 @@ public actor SessionRunner {
                                                    blockers: [stopped], finishedAt: Date()), in: sessionID)
             emit(.attention(AttentionItem(severity: .warning,
                                           title: "Wipe stopped early",
-                                          detail: "\(result.filesDeleted) files removed, then: \(stopped). Everything is safe on the NAS.")))
+                                          detail: "\(result.filesDeleted) files removed, then: \(stopped). Previously verified copies remain on the NAS. Changed source files are preserved.")))
             await markPhaseEnd("wipe")
             if let record = await journal.session(id: sessionID) {
                 await finalize(state: .doneWipeBlocked, record: record)
@@ -979,7 +978,7 @@ public actor SessionRunner {
     public func cancel() async {
         cancelled = true
         wipeCancelled = true
-        stopWorkers()
+        await stopWorkers()
         wipeConsentContinuation?.resume(returning: false)
         wipeConsentContinuation = nil
         await pauseGate.open()   // let cancelled workers unwind
@@ -991,8 +990,10 @@ public actor SessionRunner {
 
     public func cardGone() async {
         cardPresent = false
-        for task in hop1Tasks { task.cancel() }
+        let stopped = hop1Tasks
+        for task in stopped { task.cancel() }
         hop1Tasks.removeAll()
+        for task in stopped { await task.value }
         await budget.drain()     // wake hop-1 workers parked in reserve() so they exit
         await journal.setSessionState(.pausedCardGone, in: sessionID)
         emit(.phase(.pausedCardGone))

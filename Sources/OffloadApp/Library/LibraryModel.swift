@@ -109,6 +109,7 @@ final class LibraryModel {
     // Set when a delete couldn't complete (read-only volume, locked/in-use file, …)
     // so the UI can surface it, instead of the file silently reappearing on reload.
     var deleteError: String?
+    var persistenceError: String?
 
     // Content search / AI analysis.
     var searchText = "" { didSet { if searchText != oldValue { runSearch() } } }
@@ -310,9 +311,33 @@ final class LibraryModel {
         if source == .favorites { loadFavorites() }
     }
 
+    private func saveSnapshot<T: Encodable & Sendable>(_ value: T, to file: URL) {
+        OrderedJSONWriter.shared.save(value, to: file) { [weak self] message in
+            Task { @MainActor in self?.persistenceError = "Couldn’t save library changes. Retrying automatically. \(message)" }
+        }
+    }
+
+    private func saveMetadata() async {
+        let photoSaved = await photoIndex.save()
+        let facesSaved = await faceIndex.save()
+        let identitiesSaved = await identityIndex.save()
+        if !photoSaved || !facesSaved || !identitiesSaved {
+            persistenceError = "Couldn’t save photo or face metadata. Changes remain in memory. Free local disk space or check folder permissions, then choose Retry Save before quitting."
+        }
+    }
+
+    func retryMetadataSave() {
+        persistenceError = nil
+        Task {
+            await saveMetadata()
+            let saved = await Task.detached { OrderedJSONWriter.shared.flush() }.value
+            if !saved { persistenceError = "Couldn’t save library changes. Free local disk space or check folder permissions and retry." }
+        }
+    }
+
     private func saveFavorites() {
         let arr = Array(favoritePaths)
-        Task.detached(priority: .utility) { try? JSONIO.save(arr, to: Paths.favoritesFile) }
+        saveSnapshot(arr, to: Paths.favoritesFile)
     }
 
     // MARK: - Culling (ratings + flags)
@@ -385,7 +410,7 @@ final class LibraryModel {
 
     private func saveCull() {
         let data = CullData(ratings: ratings, flags: flags)
-        Task.detached(priority: .utility) { try? JSONIO.save(data, to: Paths.cullFile) }
+        saveSnapshot(data, to: Paths.cullFile)
     }
 
     /// Capture date for timeline grouping — parsed from any recognized date-folder
@@ -478,7 +503,7 @@ final class LibraryModel {
 
     private func savePinned() {
         let arr = pinnedFolders
-        Task.detached(priority: .utility) { try? JSONIO.save(arr, to: Paths.pinnedFoldersFile) }
+        saveSnapshot(arr, to: Paths.pinnedFoldersFile)
     }
 
     /// Short sidebar label for a pinned folder — a friendly date for a date folder,
@@ -644,7 +669,7 @@ final class LibraryModel {
         let result = try await makeIdentifier().identify(imageURL: item.primary.url)
         await photoIndex.setAI(path: item.primary.id, size: item.primary.size,
                                mtime: item.primary.modified, tags: result.tags, description: result.description)
-        await photoIndex.save()
+        await saveMetadata()
         tagsByPath[item.primary.id] = Array((await allTags(for: item.primary)).prefix(3))
         aiDonePaths.insert(item.primary.id)
         refreshSuggestions()
@@ -773,7 +798,7 @@ final class LibraryModel {
         }.value
         let removed = targets.subtracting(failed)
         await photoIndex.remove(paths: removed.map(\.path))
-        await photoIndex.save()
+        await saveMetadata()
         // Drop only the files that actually went away from the in-memory lists so
         // the grid/viewer reflect the removal synchronously (the authoritative
         // reload below reconciles the rest).
@@ -904,12 +929,21 @@ final class LibraryModel {
     /// Deep-analyze every photo in the CURRENT folder (recursively, so a month/year
     /// view covers what's inside) — not the whole library.
     func aiAnalyzeAll() {
-        guard let dir = currentDir else { return }
+        guard !analyzing, let dir = currentDir else { return }
+        analyzing = true; analyzeError = nil; analyzeDone = 0; analyzeTotal = 0
+        analyzeEpoch += 1
+        let epoch = analyzeEpoch
         let browser = self.browser
-        Task { [weak self] in
-            let media = await Task.detached(priority: .utility) { browser.allMedia(root: dir) }.value
-            let primaries = Self.primaryEntries(media)
-            await MainActor.run { self?.startAIAnalysis(primaries) }
+        analyzeTask = Task { [weak self] in
+            let result = await BackgroundWork.run {
+                Result { try browser.allMediaChecked(root: dir, isCancelled: { Task.isCancelled }) }
+            }
+            guard let self, !Task.isCancelled, self.analyzeEpoch == epoch else { return }
+            self.analyzing = false
+            switch result {
+            case .success(let media): self.startAIAnalysis(Self.primaryEntries(media))
+            case .failure(let error): self.analyzeError = "Couldn’t scan this folder: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -972,13 +1006,15 @@ final class LibraryModel {
                     }
                 }
                 i += width
-                if i % 10 == 0 { await index.save() }   // persist every ~10 photos, not every batch (whole-file rewrite)
+                if i % 10 == 0, !(await index.save()) { fatal = "Couldn’t save AI results. Free local disk space and retry saving before quitting." }   // persist every ~10 photos, not every batch (whole-file rewrite)
             }
-            await index.save()
+            let indexSaved = await index.save()
+            if !indexSaved { fatal = "Couldn’t save AI results. Free local disk space and retry saving before quitting." }
             guard let self else { return }
             await MainActor.run {
                 guard self.analyzeEpoch == epoch else { return }
                 self.analyzing = false
+                if !indexSaved { self.persistenceError = fatal }
                 self.analyzeError = fatal ?? (failures > 0 ? "\(failures) photo(s) could not be analyzed. \(lastFailure ?? "Try again.")" : nil)
                 self.refreshSuggestions()
                 if self.isSearching { self.runSearch() }
@@ -1008,7 +1044,7 @@ final class LibraryModel {
     func cancelAnalysis() {
         analyzeTask?.cancel()
         analyzing = false
-        Task { await photoIndex.save() }
+        Task { await saveMetadata() }
     }
 
     // MARK: - Faces & pets (opt-in, on-device, local-only)
@@ -1028,9 +1064,16 @@ final class LibraryModel {
         let faces = faceIndex
         let ids = identityIndex
         faceTask = Task { [weak self] in
-            let media = await Task.detached(priority: .utility) { browser.allMedia(root: root) }.value
+            let media: [LibraryEntry]
+            do { media = try await browser.refreshFaceInventory(root: root, index: faces) }
+            catch {
+                guard let self, !Task.isCancelled, self.faceEpoch == epoch else { return }
+                self.persistenceError = "Face scan stopped; existing face data was kept. \(error.localizedDescription)"
+                self.findingFaces = false
+                return
+            }
+            guard !Task.isCancelled else { return }
             let primaries = Self.primaryEntries(media)
-            await faces.pruneMissing(underPrefix: root.path, keeping: Set(media.map(\.id)))
             var todo: [LibraryEntry] = []
             for e in primaries where await faces.needsScan(path: e.id) { todo.append(e) }
             await MainActor.run { [weak self] in self?.facesTotal = todo.count }
@@ -1057,8 +1100,9 @@ final class LibraryModel {
                 }
                 i += width
             }
-            await faces.save()
+            let saved = await faces.save()
             guard let self else { return }
+            if !saved { self.persistenceError = "Couldn’t save face results. Use Retry Save after checking local storage." }
             await self.refreshFaceState()
             await MainActor.run {
                 guard self.faceEpoch == epoch else { return }
@@ -1071,7 +1115,7 @@ final class LibraryModel {
     func cancelFindFaces() {
         faceTask?.cancel()
         findingFaces = false
-        Task { await faceIndex.save() }
+        Task { await saveMetadata() }
     }
 
     /// Reload the named-identity list + unnamed count (after a scan or a label).
@@ -1119,7 +1163,7 @@ final class LibraryModel {
                                             embedderID: det.embedderID, exemplar: det.embedding, coverPath: path).id
         }
         await faceIndex.assign(detection: det.id, in: path, to: id)
-        await identityIndex.save(); await faceIndex.save()
+        await saveMetadata()
         await refreshFaceState()
     }
 
@@ -1127,7 +1171,7 @@ final class LibraryModel {
     func assignDetection(_ det: Detection, in path: String, to identityID: UUID) async {
         await identityIndex.addExemplar(det.embedding, to: identityID, embedderID: det.embedderID)
         await faceIndex.assign(detection: det.id, in: path, to: identityID)
-        await identityIndex.save(); await faceIndex.save()
+        await saveMetadata()
         await refreshFaceState()
     }
 
@@ -1139,13 +1183,13 @@ final class LibraryModel {
     func rejectSuggestion(_ det: Detection, in path: String) async {
         guard let sid = det.suggestedID else { return }
         await faceIndex.reject(detection: det.id, in: path, identity: sid)
-        await faceIndex.save()
+        await saveMetadata()
         await refreshFaceState()
     }
 
     func unnameDetection(_ det: Detection, in path: String) async {
         await faceIndex.assign(detection: det.id, in: path, to: nil)
-        await faceIndex.save()
+        await saveMetadata()
         await refreshFaceState()
     }
 

@@ -102,6 +102,7 @@ public enum ChunkedIO {
             while true {
                 try Task.checkCancellation()
                 if let gate { await gate.whenOpen() }
+                try Task.checkCancellation()
 
                 let bytesRead = try await blocking { [chunk] () -> Int in
                     while true {
@@ -155,6 +156,12 @@ public enum ChunkedIO {
         let fd = open(url.path, O_RDONLY)
         guard fd >= 0 else { throw OffloadError.posix(errno, stage: "open for verify") }
         defer { close(fd) }
+        return try await hashOpenFile(fd, noCache: noCache, gate: gate, progress: progress)
+    }
+
+    /// Caller retains ownership of a freshly opened descriptor positioned at zero.
+    static func hashOpenFile(_ fd: Int32, noCache: Bool, gate: Gate? = nil,
+                             progress: (@Sendable (Int) -> Void)? = nil) async throws -> String {
         if noCache { _ = fcntl(fd, F_NOCACHE, 1) }
 
         let chunk = ChunkBuffer()
@@ -164,6 +171,7 @@ public enum ChunkedIO {
         while true {
             try Task.checkCancellation()
             if let gate { await gate.whenOpen() }
+            try Task.checkCancellation()
 
             let bytesRead = try await blocking { [chunk] () -> Int in
                 while true {

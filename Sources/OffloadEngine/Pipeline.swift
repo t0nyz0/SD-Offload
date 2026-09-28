@@ -5,31 +5,43 @@ import OffloadCore
 /// StagingBudget, not count-based). `receive()` returns nil after `finish()`
 /// drains.
 public actor AsyncQueue<T: Sendable> {
-    private var buffer: [T] = []
-    private var receivers: [CheckedContinuation<T?, Never>] = []
+    private var buffer: [T?] = []
+    private var head = 0
+    private var receivers: [(UUID, CheckedContinuation<T?, Never>)] = []
     private var finished = false
-
     public init() {}
 
     public func send(_ item: T) {
         guard !finished else { return }
-        if !receivers.isEmpty {
-            receivers.removeFirst().resume(returning: item)
-        } else {
-            buffer.append(item)
-        }
+        if !receivers.isEmpty { receivers.removeFirst().1.resume(returning: item) }
+        else { buffer.append(item) }
     }
-
     public func finish() {
         finished = true
-        for receiver in receivers { receiver.resume(returning: nil) }
+        for (_, receiver) in receivers { receiver.resume(returning: nil) }
         receivers.removeAll()
     }
-
     public func receive() async -> T? {
-        if !buffer.isEmpty { return buffer.removeFirst() }
+        guard !Task.isCancelled else { return nil }
+        if head < buffer.count {
+            let item = buffer[head]; buffer[head] = nil; head += 1
+            if head >= 1024 && head * 2 >= buffer.count {
+                buffer.removeFirst(head); head = 0
+            }
+            return item
+        }
         if finished { return nil }
-        return await withCheckedContinuation { receivers.append($0) }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume(returning: nil) }
+                else { receivers.append((id, continuation)) }
+            }
+        } onCancel: { Task { await self.cancelReceiver(id) } }
+    }
+    private func cancelReceiver(_ id: UUID) {
+        guard let index = receivers.firstIndex(where: { $0.0 == id }) else { return }
+        receivers.remove(at: index).1.resume(returning: nil)
     }
 }
 
@@ -37,91 +49,71 @@ public actor AsyncQueue<T: Sendable> {
 /// one chunk (≤ ~30 ms at 8 MiB).
 public actor Gate {
     private var isOpen = true
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     public init() {}
-
     public func close() { isOpen = false }
-
     public func open() {
         isOpen = true
-        for waiter in waiters { waiter.resume() }
-        waiters.removeAll()
+        let pending = waiters; waiters.removeAll()
+        for waiter in pending.values { waiter.resume() }
     }
-
     public func whenOpen() async {
-        guard !isOpen else { return }
-        await withCheckedContinuation { waiters.append($0) }
+        guard !isOpen, !Task.isCancelled else { return }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume() }
+                else { waiters[id] = continuation }
+            }
+        } onCancel: { Task { await self.cancelWaiter(id) } }
     }
+    private func cancelWaiter(_ id: UUID) { waiters.removeValue(forKey: id)?.resume() }
 }
 
 /// Byte-reservation backpressure for staging. Subsumes "batch mode": when the
 /// card is bigger than the budget, hop 1 naturally stalls until hop 2
 /// verifies-and-purges — continuous, adaptive, one mechanism.
 public actor StagingBudget {
-    private let stagingPath: String
     private let capBytes: Int64
     private let headroomBytes: Int64
+    private let availableBytes: @Sendable () -> Int64?
     private var committed: Int64 = 0
-    private var reserved: [UUID: Int64] = [:]   // keyed so release balances reserve exactly
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var reserved: [UUID: Int64] = [:]
     private var draining = false
 
-    public init(stagingPath: String, capBytes: Int64, headroomBytes: Int64) {
-        self.stagingPath = stagingPath
-        self.capBytes = capBytes
-        self.headroomBytes = headroomBytes
+    public init(stagingPath: String, capBytes: Int64, headroomBytes: Int64,
+                availableBytes: (@Sendable () -> Int64?)? = nil) {
+        self.capBytes = max(1, capBytes)
+        self.headroomBytes = max(0, headroomBytes)
+        self.availableBytes = availableBytes ?? { statfsInfo(path: stagingPath)?.freeBytes }
     }
-
-    /// Reserve for a specific file. Idempotent per id (re-reserving replaces the
-    /// prior amount). Returns early without reserving if the session is draining.
-    public func reserve(_ id: UUID, _ bytes: Int64) async {
-        if let old = reserved[id] { committed = max(0, committed - old); reserved[id] = nil }
-        while !draining && !canReserve(bytes) {
-            await withCheckedContinuation { waiters.append($0) }
+    public func reserve(_ id: UUID, _ bytes: Int64,
+                        onWaiting: (@Sendable () -> Void)? = nil) async throws {
+        if let old = reserved.removeValue(forKey: id) { committed = max(0, committed - old) }
+        var notified = false
+        while !canReserve(bytes) {
+            try Task.checkCancellation()
+            if draining { throw CancellationError() }
+            if !notified { onWaiting?(); notified = true }
+            // Disk space may change without another worker releasing a reservation.
+            try await Task.sleep(for: .milliseconds(250))
         }
-        guard !draining else { return }
-        committed += bytes
-        reserved[id] = bytes
+        try Task.checkCancellation()
+        if draining { throw CancellationError() }
+        committed += bytes; reserved[id] = bytes
     }
-
-    /// Release a file's reservation. No-op if it was never reserved (e.g. a file
-    /// preloaded on resume) — so accounting never goes negative or double-counts.
     public func release(_ id: UUID) {
-        guard let bytes = reserved.removeValue(forKey: id) else { return }
-        committed = max(0, committed - bytes)
-        wakeWaiters()
+        if let bytes = reserved.removeValue(forKey: id) { committed = max(0, committed - bytes) }
     }
-
-    /// Session ending (or card removed): unblock everything parked in reserve()
-    /// so cancelled workers can exit instead of leaking a suspended continuation.
-    public func drain() {
-        draining = true
-        wakeWaiters()
-    }
-
-    /// Card re-inserted: allow reservations again after a drain().
-    public func resumeReservations() {
-        draining = false
-    }
-
-    private func wakeWaiters() {
-        let woken = waiters
-        waiters.removeAll()
-        for waiter in woken { waiter.resume() }
-    }
-
+    public func drain() { draining = true }
+    public func resumeReservations() { draining = false }
     public var committedBytes: Int64 { committed }
-
     private func canReserve(_ bytes: Int64) -> Bool {
-        // Oversized-file exception: a file bigger than the whole budget gets
-        // the budget to itself (otherwise it could never transfer).
+        guard bytes >= 0, let free = availableBytes(), free >= headroomBytes,
+              committed <= free - headroomBytes,
+              bytes <= free - headroomBytes - committed else { return false }
         if bytes >= capBytes { return committed == 0 }
-        guard committed + bytes <= capBytes else { return false }
-        if let fs = statfsInfo(path: stagingPath) {
-            return fs.freeBytes - bytes >= headroomBytes
-        }
-        return true
+        return bytes <= capBytes - min(capBytes, committed)
     }
 }
 

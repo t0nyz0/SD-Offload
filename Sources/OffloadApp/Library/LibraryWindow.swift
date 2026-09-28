@@ -189,6 +189,13 @@ struct LibraryWindow: View {
             viewerIndex = nil   // switching source closes the viewer
             if source == .nas { model.setNASAvailable(app.nasGlance.healthy) }
         }
+        .alert("Library changes need attention", isPresented: Binding(
+            get: { model.persistenceError != nil },
+            set: { if !$0 { model.persistenceError = nil } }
+        )) {
+            Button("Retry Save") { model.retryMetadataSave() }
+            Button("OK", role: .cancel) { model.persistenceError = nil }
+        } message: { Text(model.persistenceError ?? "") }
         .alert("Delete failed", isPresented: Binding(
             get: { model.deleteError != nil },
             set: { if !$0 { model.deleteError = nil } }

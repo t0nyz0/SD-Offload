@@ -87,12 +87,25 @@ final class ThumbnailLoader: @unchecked Sendable {
     }()
     private let limiter = ThumbLimiter(limit: 6)
     private let cacheDir: URL
+    private let diskQueue = DispatchQueue(label: "offload.thumbnail-cache", qos: .background)
+    private var writesSinceTrim = 0
+
+    private func persist(_ image: CGImage, to url: URL, compression: CGFloat) {
+        diskQueue.async { [self] in
+            Self.writeJPEG(image, to: url, compression: compression)
+            writesSinceTrim += 1
+            if writesSinceTrim >= 32 {
+                writesSinceTrim = 0
+                Self.trimCache(cacheDir, maxBytes: 500 << 20)
+            }
+        }
+    }
 
     init() {
         cacheDir = Paths.appSupport.appendingPathComponent("ThumbCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
         let dir = cacheDir
-        Task.detached(priority: .background) { Self.trimCache(dir, maxBytes: 500 << 20) }
+        diskQueue.async { Self.trimCache(dir, maxBytes: 500 << 20) }
     }
 
     /// Drop every cached thumbnail — the in-memory bitmaps and the on-disk JPEGs —
@@ -103,7 +116,7 @@ final class ThumbnailLoader: @unchecked Sendable {
     func clearCaches() {
         mem.removeAllObjects()
         let dir = cacheDir
-        Task.detached(priority: .utility) {
+        diskQueue.async {
             let fm = FileManager.default
             guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
             for url in items { try? fm.removeItem(at: url) }
@@ -111,7 +124,7 @@ final class ThumbnailLoader: @unchecked Sendable {
     }
 
     /// Evict the oldest on-disk thumbnails so the cache can't grow forever.
-    private static func trimCache(_ dir: URL, maxBytes: Int64) {
+    static func trimCache(_ dir: URL, maxBytes: Int64) {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
         guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys) else { return }
@@ -195,7 +208,7 @@ final class ThumbnailLoader: @unchecked Sendable {
             let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
             mem.setObject(img, forKey: k as NSString, cost: Self.cost(img))
             let comp = quality.jpegCompression
-            Task.detached(priority: .background) { Self.writeJPEG(cg, to: diskURL, compression: comp) }   // don't block first paint
+            persist(cg, to: diskURL, compression: comp)   // don't block first paint
             return img
         }
         // ImageIO couldn't thumbnail (some RAW/video) → QuickLook fallback.
@@ -204,7 +217,7 @@ final class ThumbnailLoader: @unchecked Sendable {
             mem.setObject(img, forKey: k as NSString, cost: Self.cost(img))
             if let cg2 = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                 let comp = quality.jpegCompression
-                Task.detached(priority: .background) { Self.writeJPEG(cg2, to: diskURL, compression: comp) }
+                persist(cg2, to: diskURL, compression: comp)
             }
             return img
         }

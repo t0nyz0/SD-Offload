@@ -58,7 +58,7 @@ public struct PhotoRecord: Codable, Sendable {
     }
 
     public var searchText: String {
-        (tags + [(path as NSString).lastPathComponent.lowercased()]).joined(separator: " ")
+        (tags + [(path as NSString).lastPathComponent.lowercased(), (aiDescription ?? "").lowercased()]).joined(separator: " ")
     }
 }
 
@@ -77,17 +77,25 @@ public actor PhotoIndex {
 
     public init(file: URL = Paths.photoIndexFile) {
         self.file = file
+    }
+
+    private var loaded = false
+    private func ensureLoaded() {
+        guard !loaded else { return }
+        loaded = true
         if let arr = JSONIO.loadGuarded([PhotoRecord].self, from: file) {
             records = Dictionary(arr.map { ($0.path, $0) }, uniquingKeysWith: { _, b in b })
         }
     }
 
     public func needsAnalysis(path: String, mtime: Date) -> Bool {
+        ensureLoaded()
         guard let r = records[path] else { return true }
         return abs(r.mtime.timeIntervalSince(mtime)) > 2
     }
 
     public func put(_ record: PhotoRecord) {
+        ensureLoaded()
         var record = record
         if record.userTags == nil { record.userTags = records[record.path]?.userTags }
         records[record.path] = record
@@ -98,6 +106,7 @@ public actor PhotoIndex {
     /// Store on-demand AI identification for a photo, creating a record if it hasn't
     /// been analyzed on-device yet. Leaves any existing labels/GPS intact.
     public func setAI(path: String, size: Int64, mtime: Date, tags: [String], description: String) {
+        ensureLoaded()
         var r = records[path] ?? PhotoRecord(path: path, size: size, mtime: mtime, labels: [], animals: [])
         r.aiTags = tags
         r.aiDescription = description
@@ -110,6 +119,7 @@ public actor PhotoIndex {
     /// Persist before publishing success. A failed write leaves the prior tags and
     /// search cache intact, so the editor can truthfully offer a retry.
     public func saveUserTags(path: String, size: Int64, mtime: Date, tags: [String]) throws -> [String] {
+        ensureLoaded()
         var record = records[path] ?? PhotoRecord(path: path, size: size, mtime: mtime, labels: [], animals: [])
         let normalized = PhotoRecord.normalizedTags(tags)
         record.userTags = normalized
@@ -123,6 +133,7 @@ public actor PhotoIndex {
     }
 
     public func remove(paths: [String]) {
+        ensureLoaded()
         for p in paths where records[p] != nil {
             records.removeValue(forKey: p)
             haystack.removeValue(forKey: p)
@@ -131,6 +142,7 @@ public actor PhotoIndex {
     }
 
     public func remapPaths(_ mapping: [String: String]) {
+        ensureLoaded()
         guard !mapping.isEmpty else { return }
         for (old, new) in mapping where old != new {
             guard var record = records.removeValue(forKey: old) else { continue }
@@ -145,6 +157,7 @@ public actor PhotoIndex {
     /// Drop entries under `prefix` whose file is no longer in `keeping` (deleted
     /// or moved outside the app) so the index doesn't grow stale forever.
     public func pruneMissing(underPrefix prefix: String, keeping: Set<String>) {
+        ensureLoaded()
         for path in records.keys where Self.isUnder(path, prefix) && !keeping.contains(path) {
             records.removeValue(forKey: path)
             haystack.removeValue(forKey: path)
@@ -160,26 +173,32 @@ public actor PhotoIndex {
         return path.hasPrefix(p)
     }
 
-    public func record(_ path: String) -> PhotoRecord? { records[path] }
+    public func record(_ path: String) -> PhotoRecord? { ensureLoaded(); return records[path] }
 
     public func records(forPaths paths: [String]) -> [String: PhotoRecord] {
+        ensureLoaded()
         var out: [String: PhotoRecord] = [:]
         for p in paths where records[p] != nil { out[p] = records[p] }
         return out
     }
 
-    public func save() {
-        guard dirty else { return }
-        try? JSONIO.save(Array(records.values), to: file)
+    @discardableResult
+    public func save() -> Bool {
+        ensureLoaded()
+        guard dirty else { return true }
+        do { try JSONIO.save(Array(records.values), to: file) } catch { return false }
         dirty = false
+        return true
     }
 
     public func analyzedCount(underPrefix prefix: String) -> Int {
-        records.keys.filter { Self.isUnder($0, prefix) }.count
+        ensureLoaded()
+        return records.keys.filter { Self.isUnder($0, prefix) }.count
     }
 
     /// Paths whose contents match ALL space-separated query terms.
     public func search(_ query: String, underPrefix prefix: String? = nil) -> Set<String> {
+        ensureLoaded()
         let terms = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
         guard !terms.isEmpty else { return [] }
         var out = Set<String>()
@@ -199,6 +218,7 @@ public actor PhotoIndex {
 
     /// Top content tags with counts — the "what's in your library" suggestions.
     public func topTags(underPrefix prefix: String, limit: Int = 24) -> [(tag: String, count: Int)] {
+        ensureLoaded()
         var counts: [String: Int] = [:]
         for (path, rec) in records where Self.isUnder(path, prefix) {
             for t in rec.tags.prefix(4) { counts[t, default: 0] += 1 }

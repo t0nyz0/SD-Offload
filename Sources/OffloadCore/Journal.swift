@@ -11,6 +11,42 @@ public actor Journal {
     private let historyDir: URL
     private var active: [UUID: SessionRecord] = [:]
     private var dirty: Set<UUID> = []
+    private var fileOffsets: [UUID: [UUID: Int]] = [:]
+    private var workCache: [UUID: RemainingWork] = [:]
+
+    public struct RemainingWork: Sendable {
+        public var sdBytes: Int64 = 0, verifyBytes: Int64 = 0, nasBytes: Int64 = 0
+        public var sdFiles = 0, verifyFiles = 0, nasFiles = 0
+        fileprivate mutating func adjust(state: FileState, bytes: Int64, direction: Int) {
+            let delta = bytes * Int64(direction)
+            switch state {
+            case .pending, .copying:
+                sdBytes += delta; sdFiles += direction
+                fallthrough
+            case .staged:
+                verifyBytes += delta; verifyFiles += direction
+                fallthrough
+            case .stagedVerified, .uploading:
+                nasBytes += delta; nasFiles += direction
+            default: break
+            }
+        }
+    }
+
+    public func remainingWork(in id: UUID) -> RemainingWork {
+        if let cached = workCache[id] { return cached }
+        var result = RemainingWork()
+        for file in active[id]?.files ?? [] {
+            result.adjust(state: file.state, bytes: file.size, direction: 1)
+        }
+        workCache[id] = result
+        return result
+    }
+
+    private func indexFiles(_ id: UUID) {
+        fileOffsets[id] = Dictionary((active[id]?.files ?? []).enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        workCache[id] = nil
+    }
     private var flushScheduled = false
 
     public init(directory: URL = Paths.journalDir, historyDir: URL = Paths.historyDir) {
@@ -29,6 +65,7 @@ public actor Journal {
     /// Durable flush before any IO on the card starts.
     public func begin(_ session: SessionRecord) throws {
         active[session.id] = session
+        indexFiles(session.id)
         try JSONIO.saveDurable(session, to: fileURL(session.id))
     }
 
@@ -41,6 +78,7 @@ public actor Journal {
         if var found = active.values.first(where: { $0.cardVolumeUUID == cardUUID && $0.isIncomplete }) {
             found = Self.applyingCrashRemap(found)
             active[found.id] = found
+            indexFiles(found.id)
             return found
         }
         let fm = FileManager.default
@@ -50,6 +88,7 @@ public actor Journal {
             if record.cardVolumeUUID == cardUUID && record.isIncomplete {
                 record = Self.applyingCrashRemap(record)
                 active[record.id] = record
+                indexFiles(record.id)
                 dirty.insert(record.id)
                 return record
             }
@@ -71,6 +110,8 @@ public actor Journal {
         try JSONIO.saveDurable(record, to: historyDir.appendingPathComponent("session-\(id.uuidString).json"))
         try? FileManager.default.removeItem(at: fileURL(id))
         active.removeValue(forKey: id)
+        fileOffsets[id] = nil
+        workCache[id] = nil
         dirty.remove(id)
         trimHistory(keepLast: 300)
     }
@@ -121,41 +162,42 @@ public actor Journal {
     // MARK: - Mutation
 
     public func transition(file fileID: UUID, to newState: FileState, in sessionID: UUID) {
-        guard var record = active[sessionID],
-              let idx = record.files.firstIndex(where: { $0.id == fileID }) else { return }
-        let old = record.files[idx].state
-        if old == newState { return }   // idempotent rollbacks are no-ops
-        guard FileState.isLegal(from: old, to: newState) else {
-            // Never crash mid-transfer: coerce to failed (which blocks the wipe)
-            // and leave the evidence in the journal.
-            print("[journal] ILLEGAL transition \(old) → \(newState) for \(record.files[idx].relPath)")
-            record.files[idx].state = .failed(.internalError("illegal transition \(old) → \(newState)"))
+        guard let idx = fileOffsets[sessionID]?[fileID],
+              let old = active[sessionID]?.files[idx].state else { return }
+        if old == newState { return }
+        mutate(sessionID) { record in
+            guard FileState.isLegal(from: old, to: newState) else {
+                record.files[idx].state = .failed(.internalError("illegal transition \(old) → \(newState)"))
+                record.files[idx].stateChangedAt = Date()
+                return
+            }
+            record.files[idx].state = newState
             record.files[idx].stateChangedAt = Date()
-            active[sessionID] = record
-            markDirty(sessionID)
-            return
+            if case .failed = newState { record.stats.filesFailed += 1 }
+            if newState == .nasVerified { record.stats.filesNASVerified += 1 }
+            if newState == .skippedDuplicate { record.stats.filesSkippedDuplicate += 1 }
+            if newState == .wiped { record.stats.filesWiped += 1 }
         }
-        record.files[idx].state = newState
-        record.files[idx].stateChangedAt = Date()
-        if case .failed = newState { record.stats.filesFailed += 1 }
-        if newState == .nasVerified { record.stats.filesNASVerified += 1 }
-        if newState == .skippedDuplicate { record.stats.filesSkippedDuplicate += 1 }
-        if newState == .wiped { record.stats.filesWiped += 1 }
-        active[sessionID] = record
-        markDirty(sessionID)
+        if var cached = workCache[sessionID], let file = active[sessionID]?.files[idx] {
+            cached.adjust(state: old, bytes: file.size, direction: -1)
+            cached.adjust(state: file.state, bytes: file.size, direction: 1)
+            workCache[sessionID] = cached
+        }
     }
 
     public func bumpAttempts(file fileID: UUID, in sessionID: UUID) {
+        let offset = fileOffsets[sessionID]?[fileID]
         mutate(sessionID) { record in
-            if let idx = record.files.firstIndex(where: { $0.id == fileID }) {
+            if let idx = offset {
                 record.files[idx].attempts += 1
             }
         }
     }
 
     public func setSourceHash(file fileID: UUID, hex: String, in sessionID: UUID) {
+        let offset = fileOffsets[sessionID]?[fileID]
         mutate(sessionID) { record in
-            if let idx = record.files.firstIndex(where: { $0.id == fileID }) {
+            if let idx = offset {
                 record.files[idx].sourceHashHex = hex
             }
         }
@@ -164,8 +206,9 @@ public actor Journal {
     }
 
     public func setDestRelPath(file fileID: UUID, rel: String, in sessionID: UUID) {
+        let offset = fileOffsets[sessionID]?[fileID]
         mutate(sessionID) { record in
-            if let idx = record.files.firstIndex(where: { $0.id == fileID }) {
+            if let idx = offset {
                 record.files[idx].destRelPath = rel
             }
         }
@@ -191,6 +234,7 @@ public actor Journal {
             record.stats.filesPlanned = files.count
             record.stats.bytesPlanned = files.reduce(0) { $0 + $1.size }
         }
+        indexFiles(sessionID)
         try? flushNow(sessionID)
     }
 
@@ -199,9 +243,8 @@ public actor Journal {
     }
 
     private func mutate(_ sessionID: UUID, _ body: (inout SessionRecord) -> Void) {
-        guard var record = active[sessionID] else { return }
-        body(&record)
-        active[sessionID] = record
+        guard active[sessionID] != nil else { return }
+        body(&active[sessionID]!)
         markDirty(sessionID)
     }
 

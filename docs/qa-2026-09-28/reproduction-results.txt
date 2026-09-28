@@ -1,0 +1,39 @@
+Building for debugging...
+[0/7] Write sources
+[1/7] Write swift-version--58304C5D6DBC2206.txt
+[3/5] Compiling OffloadTests AuditReproductionTests.swift
+[4/5] Emitting module OffloadTests
+[4/6] Write Objects.LinkFileList
+[5/6] Linking OffloadPackageTests
+Build complete! (1.48s)
+Test Suite 'Selected tests' started at 2026-09-28 09:19:12.432.
+Test Suite 'OffloadPackageTests.xctest' started at 2026-09-28 09:19:12.433.
+Test Suite 'AuditReproductionTests' started at 2026-09-28 09:19:12.433.
+Test Case '-[OffloadTests.AuditReproductionTests testCancelledQueueWaiterMustExit]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:23: error: -[OffloadTests.AuditReproductionTests testCancelledQueueWaiterMustExit] : XCTAssertTrue failed - Cancellation did not release the suspended queue worker
+Test Case '-[OffloadTests.AuditReproductionTests testCancelledQueueWaiterMustExit]' failed (0.487 seconds).
+Test Case '-[OffloadTests.AuditReproductionTests testChangedSourceAfterGateMustSurvive]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:37: error: -[OffloadTests.AuditReproductionTests testChangedSourceAfterGateMustSurvive] : XCTAssertTrue failed - Unbacked-up replacement was deleted
+Test Case '-[OffloadTests.AuditReproductionTests testChangedSourceAfterGateMustSurvive]' failed (0.002 seconds).
+Test Case '-[OffloadTests.AuditReproductionTests testDescriptionIsSearchable]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:63: error: -[OffloadTests.AuditReproductionTests testDescriptionIsSearchable] : XCTAssertEqual failed: ("[]") is not equal to ("["/photos/a.jpg"]")
+Test Case '-[OffloadTests.AuditReproductionTests testDescriptionIsSearchable]' failed (0.001 seconds).
+Test Case '-[OffloadTests.AuditReproductionTests testIncompleteEnumerationMustNotPurgeFaceScan]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:85: error: -[OffloadTests.AuditReproductionTests testIncompleteEnumerationMustNotPurgeFaceScan] : XCTAssertFalse failed - Offline scan discarded existing face data
+Test Case '-[OffloadTests.AuditReproductionTests testIncompleteEnumerationMustNotPurgeFaceScan]' failed (0.001 seconds).
+Test Case '-[OffloadTests.AuditReproductionTests testIndexSaveRetriesAfterStorageRecovers]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:75: error: -[OffloadTests.AuditReproductionTests testIndexSaveRetriesAfterStorageRecovers] : XCTAssertTrue failed - Failed save cleared dirty state; retry did nothing
+Test Case '-[OffloadTests.AuditReproductionTests testIndexSaveRetriesAfterStorageRecovers]' failed (0.001 seconds).
+Test Case '-[OffloadTests.AuditReproductionTests testSecondaryCollisionMustPreserveExistingFile]' started.
+/Users/tony/Development/offload/Tests/OffloadTests/AuditReproductionTests.swift:57: error: -[OffloadTests.AuditReproductionTests testSecondaryCollisionMustPreserveExistingFile] : XCTAssertEqual failed: ("16 bytes") is not equal to ("22 bytes") - Existing unrelated secondary file was overwritten
+Test Case '-[OffloadTests.AuditReproductionTests testSecondaryCollisionMustPreserveExistingFile]' failed (0.007 seconds).
+Test Suite 'AuditReproductionTests' failed at 2026-09-28 09:19:12.933.
+	 Executed 6 tests, with 6 failures (0 unexpected) in 0.499 (0.500) seconds
+Test Suite 'OffloadPackageTests.xctest' failed at 2026-09-28 09:19:12.933.
+	 Executed 6 tests, with 6 failures (0 unexpected) in 0.499 (0.500) seconds
+Test Suite 'Selected tests' failed at 2026-09-28 09:19:12.933.
+	 Executed 6 tests, with 6 failures (0 unexpected) in 0.499 (0.501) seconds
+◇ Test run started.
+↳ Testing Library Version: 1085
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

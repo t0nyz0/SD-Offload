@@ -41,19 +41,53 @@ public struct LibraryBrowser: Sendable {
 
     /// Every media file under a root (for bulk content analysis).
     public func allMedia(root: URL, isCancelled: @Sendable () -> Bool = { false }) -> [LibraryEntry] {
+        (try? allMediaChecked(root: root, isCancelled: isCancelled)) ?? []
+    }
+
+    public func allMediaChecked(root: URL, isCancelled: @Sendable () -> Bool = { false }) throws -> [LibraryEntry] {
+        if isCancelled() { throw CancellationError() }
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
-        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return [] }
+        var scanError: Error?
+        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles], errorHandler: { _, error in
+            scanError = error
+            return false
+        }) else { throw CocoaError(.fileReadUnknown) }
         var out: [LibraryEntry] = []
         for case let url as URL in e {
-            if isCancelled() { break }
+            if isCancelled() { throw CancellationError() }
             guard let kind = MediaKind.classify(ext: url.pathExtension) else { continue }
-            let v = try? url.resourceValues(forKeys: Set(keys))
-            guard v?.isRegularFile == true else { continue }
+            let v = try url.resourceValues(forKeys: Set(keys))
+            guard v.isRegularFile == true else { continue }
             out.append(LibraryEntry(id: url.path, name: url.lastPathComponent, kind: .media(kind),
-                                    size: Int64(v?.fileSize ?? 0), modified: v?.contentModificationDate ?? .distantPast))
+                                    size: Int64(v.fileSize ?? 0), modified: v.contentModificationDate ?? .distantPast))
         }
+        if let scanError { throw scanError }
+        if isCancelled() { throw CancellationError() }
         return out
+    }
+
+    /// Pruning is permitted only after a complete, uncancelled inventory.
+    public func refreshFaceInventory(root: URL, index: FaceIndex) async throws -> [LibraryEntry] {
+        let result = await BackgroundWork.run {
+            Result { try allMediaChecked(root: root, isCancelled: { Task.isCancelled }) }
+        }
+        let media = try result.get()
+        try Task.checkCancellation()
+        // Foundation may enumerate /var through its /private/var alias. Preserve
+        // records under either spelling of the selected root.
+        let canonical: String
+        if let resolved = realpath(root.path, nil) {
+            canonical = String(cString: resolved); free(resolved)
+        } else { throw CocoaError(.fileReadUnknown) }
+        var keeping = Set(media.map(\.id))
+        if canonical != root.path {
+            for entry in media where entry.id.hasPrefix(canonical + "/") {
+                keeping.insert(root.path + entry.id.dropFirst(canonical.count))
+            }
+        }
+        await index.pruneMissing(underPrefix: root.path, keeping: keeping)
+        return media
     }
 
     /// Up to `limit` representative media files under `folder`, for a folder

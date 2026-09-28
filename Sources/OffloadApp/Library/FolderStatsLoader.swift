@@ -31,7 +31,7 @@ private final class FolderStatsAccumulator: @unchecked Sendable {
 final class FolderStatsLoader: @unchecked Sendable {
     static let shared = FolderStatsLoader()
 
-    private struct Entry: Codable { let mtime: Double; let stats: FolderStats }
+    private struct Entry: Codable, Sendable { let mtime: Double; let stats: FolderStats }
     private let lock = NSLock()
     private var cache: [String: Entry]        // folder path → {mtime, stats}
     private let file: URL
@@ -68,9 +68,9 @@ final class FolderStatsLoader: @unchecked Sendable {
     /// Forget all cached stats — used by the Library's Refresh so a stale (deep-added)
     /// count can be rebuilt on demand.
     func invalidateAll() {
-        lock.lock(); cache.removeAll(); lock.unlock()
-        let f = file
-        Task.detached(priority: .background) { try? FileManager.default.removeItem(at: f) }
+        lock.lock(); cache.removeAll()
+        OrderedJSONWriter.shared.remove(file)
+        lock.unlock()
     }
 
     private func peek(path: String, mtime: Double) -> FolderStats? {
@@ -83,8 +83,7 @@ final class FolderStatsLoader: @unchecked Sendable {
         lock.lock()
         cache[path] = Entry(mtime: mtime, stats: stats)
         let snapshot = cache
+        OrderedJSONWriter.shared.save(snapshot, to: file)
         lock.unlock()
-        let f = file
-        Task.detached(priority: .background) { try? JSONIO.save(snapshot, to: f) }
     }
 }

@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-124%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-143%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -60,7 +60,7 @@ flowchart LR
    `max(card read, NAS write)`. Files land in your selected reversible date-folder layout (using EXIF
    *DateTimeOriginal*), then the NAS copy is **read back uncached** and its hash compared to the
    original card-read hash — true end-to-end integrity.
-3. **Wipe gate.** Before erasure, reread the entire NAS batch and any configured second copy
+3. **Wipe gate.** Each source is exclusively claimed and checked again (identity, metadata, and SHA-256) before deletion; changed files are restored and erasure stops. Interrupted claims can be restored on retry. Before erasure, reread the entire NAS batch and any configured second copy
    and compare SHA-256 hashes again. Missing or changed destinations block erasure; the gate also
    checks source identity and NAS health.
 4. **Recovery copies.** Keep local staging after completion, cancellation, and app restart.
@@ -235,7 +235,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 124 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 143 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
@@ -271,3 +271,9 @@ or other similarly-named tools.
 
 [MIT](LICENSE) © [t0nyz0](https://github.com/t0nyz0). Zero third-party dependencies — only Apple
 system frameworks, so there are no bundled licenses to track.
+
+### September 2026 audit fixes
+
+Version 1.7.13 addresses the [code audit findings](docs/qa-2026-09-28/REPORT.md): backup collisions, changed-source erasure, incomplete face scans, failed/out-of-order metadata saves, description search, cancellation, and low-space recovery. Library save failures show a **Retry Save** action; favorites, ratings, and pinned-folder snapshots also retry automatically. Conflicting secondary backups are preserved and block erasure until resolved.
+
+The regression suite includes a 100,000-record synthetic performance check. These local measurements and temporary-directory transfer tests do not replace physical SD-card and SMB validation. Exclusive-rename support is required on destination filesystems; an unsupported operation fails safely instead of replacing an existing file. The final source hash check adds one card read before erasure.

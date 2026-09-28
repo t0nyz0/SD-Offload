@@ -22,15 +22,21 @@ public struct WipeGate {
         public let isDirectory: Bool
         public let size: Int64
         public let mtime: Date
-        public init(isRegularFile: Bool, isSymlink: Bool, isDirectory: Bool, size: Int64, mtime: Date) {
+        public let device: Int32?
+        public let inode: UInt64?
+        public init(isRegularFile: Bool, isSymlink: Bool, isDirectory: Bool, size: Int64, mtime: Date, device: Int32? = nil, inode: UInt64? = nil) {
             self.isRegularFile = isRegularFile; self.isSymlink = isSymlink
-            self.isDirectory = isDirectory; self.size = size; self.mtime = mtime
+            self.isDirectory = isDirectory; self.size = size; self.mtime = mtime; self.device = device; self.inode = inode
         }
     }
 
     public struct PlannedDeletion: Sendable, Equatable {
         public let fileID: UUID
         public let absolutePath: String
+        public let cardRoot: String
+        public let relativePath: String
+        public let expected: LStatResult
+        public let sourceHash: String?
     }
 
     public enum Blocker: Equatable, Sendable, CustomStringConvertible {
@@ -196,7 +202,7 @@ public struct WipeGate {
                     continue
                 }
             }
-            deletions.append(PlannedDeletion(fileID: file.id, absolutePath: absolute))
+            deletions.append(PlannedDeletion(fileID: file.id, absolutePath: absolute, cardRoot: root, relativePath: rel, expected: st, sourceHash: file.sourceHashHex))
         }
 
         // 8. Journal durably on disk before anything is destroyed.
@@ -212,7 +218,11 @@ public struct WipeGate {
     /// Live lstat closure for production use.
     public static func liveStat(_ path: String) -> LStatResult? {
         var st = stat()
-        guard lstat(path, &st) == 0 else { return nil }
+        guard lstat(path, &st) == 0 else {
+            if errno == ENOENT { return nil }
+            // Unknown is not absent: fail closed on I/O and permission errors.
+            return LStatResult(isRegularFile: false, isSymlink: false, isDirectory: false, size: 0, mtime: .distantPast)
+        }
         let mode = st.st_mode & S_IFMT
         return LStatResult(
             isRegularFile: mode == S_IFREG,
@@ -220,7 +230,8 @@ public struct WipeGate {
             isDirectory: mode == S_IFDIR,
             size: Int64(st.st_size),
             mtime: Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) +
-                        TimeInterval(st.st_mtimespec.tv_nsec) / 1e9)
+                        TimeInterval(st.st_mtimespec.tv_nsec) / 1e9),
+            device: st.st_dev, inode: st.st_ino
         )
     }
 }

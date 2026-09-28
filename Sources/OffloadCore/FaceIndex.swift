@@ -17,6 +17,12 @@ public actor FaceIndex {
 
     public init(file: URL = Paths.faceIndexFile) {
         self.file = file
+    }
+
+    private var loaded = false
+    private func ensureLoaded() {
+        guard !loaded else { return }
+        loaded = true
         if let arr = JSONIO.loadGuarded([Entry].self, from: file) {
             byPath = Dictionary(arr.map { ($0.path, $0.detections) }, uniquingKeysWith: { _, b in b })
         }
@@ -26,21 +32,24 @@ public actor FaceIndex {
 
     /// A photo needs a face scan if we've never recorded a result for it (even an
     /// empty one — a face-less photo gets an empty array so it isn't re-scanned).
-    public func needsScan(path: String) -> Bool { byPath[path] == nil }
+    public func needsScan(path: String) -> Bool { ensureLoaded(); return byPath[path] == nil }
 
     /// Record the scan result for a photo (empty array = scanned, nothing found).
     public func setDetections(_ detections: [Detection], for path: String) {
+        ensureLoaded()
         byPath[path] = detections
         dirty = true
     }
 
-    public func detections(for path: String) -> [Detection] { byPath[path] ?? [] }
+    public func detections(for path: String) -> [Detection] { ensureLoaded(); return byPath[path] ?? [] }
 
     public func remove(paths: [String]) {
+        ensureLoaded()
         for p in paths where byPath[p] != nil { byPath.removeValue(forKey: p); dirty = true }
     }
 
     public func remapPaths(_ mapping: [String: String]) {
+        ensureLoaded()
         for (old, new) in mapping where old != new {
             guard let detections = byPath.removeValue(forKey: old) else { continue }
             byPath[new] = detections
@@ -49,6 +58,8 @@ public actor FaceIndex {
     }
 
     public func pruneMissing(underPrefix prefix: String, keeping: Set<String>) {
+        guard !Task.isCancelled else { return }
+        ensureLoaded()
         for path in byPath.keys where Self.isUnder(path, prefix) && !keeping.contains(path) {
             byPath.removeValue(forKey: path)
             dirty = true
@@ -58,6 +69,7 @@ public actor FaceIndex {
     // MARK: - Labeling mutations
 
     public func assign(detection detID: UUID, in path: String, to identityID: UUID?) {
+        ensureLoaded()
         mutate(detID, in: path) {
             $0.assignedID = identityID
             if identityID != nil { $0.suggestedID = nil }
@@ -65,12 +77,14 @@ public actor FaceIndex {
     }
 
     public func setSuggestion(detection detID: UUID, in path: String, to identityID: UUID?) {
+        ensureLoaded()
         mutate(detID, in: path) { $0.suggestedID = identityID }
     }
 
     /// "Not this one": remember the rejection so it's never re-suggested, and drop
     /// the current suggestion if it was the rejected identity.
     public func reject(detection detID: UUID, in path: String, identity identityID: UUID) {
+        ensureLoaded()
         mutate(detID, in: path) {
             if !$0.rejectedIDs.contains(identityID) { $0.rejectedIDs.append(identityID) }
             if $0.suggestedID == identityID { $0.suggestedID = nil }
@@ -88,6 +102,7 @@ public actor FaceIndex {
 
     /// Photos containing a confirmed detection of `identity`.
     public func photos(withIdentity id: UUID, underPrefix prefix: String? = nil) -> Set<String> {
+        ensureLoaded()
         var out = Set<String>()
         for (path, dets) in byPath {
             if let prefix, !Self.isUnder(path, prefix) { continue }
@@ -100,6 +115,7 @@ public actor FaceIndex {
     /// best-quality first, optionally filtered by kind and root.
     public func unassigned(kind: Detection.Kind? = nil, underPrefix prefix: String? = nil)
         -> [(path: String, detection: Detection)] {
+        ensureLoaded()
         var out: [(String, Detection)] = []
         for (path, dets) in byPath {
             if let prefix, !Self.isUnder(path, prefix) { continue }
@@ -111,6 +127,7 @@ public actor FaceIndex {
     }
 
     public func counts(underPrefix prefix: String? = nil) -> (detections: Int, named: Int, unnamed: Int) {
+        ensureLoaded()
         var total = 0, named = 0
         for (path, dets) in byPath {
             if let prefix, !Self.isUnder(path, prefix) { continue }
@@ -123,6 +140,7 @@ public actor FaceIndex {
     /// per identity — the naive loop is O(identities · photos) with one actor
     /// round-trip per identity; this is O(photos).
     public func identityCounts(underPrefix prefix: String? = nil) -> [UUID: Int] {
+        ensureLoaded()
         var byID: [UUID: Set<String>] = [:]
         for (path, dets) in byPath {
             if let prefix, !Self.isUnder(path, prefix) { continue }
@@ -137,6 +155,7 @@ public actor FaceIndex {
     /// Replaces N sequential photos(withIdentity:) calls when filtering by a
     /// whole kind ("all people" / "all pets").
     public func photos(withIdentities ids: Set<UUID>, underPrefix prefix: String? = nil) -> Set<String> {
+        ensureLoaded()
         guard !ids.isEmpty else { return [] }
         var out = Set<String>()
         for (path, dets) in byPath {
@@ -154,16 +173,20 @@ public actor FaceIndex {
         return path.hasPrefix(p)
     }
 
-    public func save() {
-        guard dirty else { return }
+    @discardableResult
+    public func save() -> Bool {
+        ensureLoaded()
+        guard dirty else { return true }
         let arr = byPath.map { Entry(path: $0.key, detections: $0.value) }
-        try? JSONIO.save(arr, to: file)
+        do { try JSONIO.save(arr, to: file) } catch { return false }
         JSONIO.harden(file)   // biometric data: owner-only, never backed up/synced
         dirty = false
+        return true
     }
 
     /// Erase all stored detections (and the on-disk file). For "Delete all face data".
     public func deleteAll() {
+        ensureLoaded()
         byPath.removeAll()
         dirty = false
         JSONIO.purge(file)   // main + .bak + .damaged — leave no biometric residue

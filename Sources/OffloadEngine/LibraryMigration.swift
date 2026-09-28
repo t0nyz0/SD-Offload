@@ -158,6 +158,9 @@ public actor LibraryMigrator {
             throw LibraryMigrationError.conflict("Another library migration is awaiting resume or rollback.")
         }
         if hasIncompleteSessions() { throw LibraryMigrationError.incompleteSession }
+        guard OrderedJSONWriter.shared.flush() else {
+            throw LibraryMigrationError.io("Save pending library edits before reorganizing folders.")
+        }
         var state = LibraryMigrationState(plan: plan, moves: Array(repeating: .init(), count: plan.moves.count))
         try backupMetadata(state: &state)
         try save(&state, notify: onProgress)
@@ -457,9 +460,9 @@ public actor LibraryMigrator {
             try JSONIO.saveDurable(cull, to: cullFile)
         }
 
-        let photos = PhotoIndex(file: supportURL("photo-index.json")); await photos.remapPaths(absolute); await photos.save()
-        let faces = FaceIndex(file: supportURL("face-index.json")); await faces.remapPaths(absolute); await faces.save()
-        let identities = IdentityIndex(file: supportURL("identity-index.json")); await identities.remapPaths(absolute); await identities.save()
+        let photos = PhotoIndex(file: supportURL("photo-index.json")); await photos.remapPaths(absolute); guard await photos.save() else { throw LibraryMigrationError.io("Couldn’t save photo index") }
+        let faces = FaceIndex(file: supportURL("face-index.json")); await faces.remapPaths(absolute); guard await faces.save() else { throw LibraryMigrationError.io("Couldn’t save face index") }
+        let identities = IdentityIndex(file: supportURL("identity-index.json")); await identities.remapPaths(absolute); guard await identities.save() else { throw LibraryMigrationError.io("Couldn’t save identity index") }
 
         let relative = Dictionary(uniqueKeysWithValues: plan.moves.map { ($0.oldRelativePath, $0.newRelativePath) })
         let historyFiles = (try? fm.contentsOfDirectory(at: supportURL("History", isDirectory: true), includingPropertiesForKeys: nil)) ?? []
