@@ -8,6 +8,7 @@ on:
 jobs:
   build-test:
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Swift version
@@ -16,3 +17,6 @@ jobs:
         run: swift build
       - name: Test
         run: swift test
+      - name: Transfer safety integration tests (disposable fixtures)
+        timeout-minutes: 10
+        run: bash Scripts/harness.sh

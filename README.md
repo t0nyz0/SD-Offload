@@ -188,6 +188,12 @@ destinations. Its ten modes cover the happy path, NAS and file failures, crash-a
 card on a colliding UUID, a required second verified copy, second-destination failure, and resuming
 to backfill a missing second copy before wiping, plus missing/corrupted destinations at the final erasure check.
 
+GitHub CI runs the unit tests and all ten integration modes on every push to `main` and every
+pull request. Regression tests cover SMB-safe exclusive creation, preserving existing files,
+corrupt-copy detection, stalled verification, and retry progress that must not claim completion.
+CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
+the NAS probes described below.
+
 ## Configuration
 
 Everything is in **Settings** (from the popover's gear menu):
