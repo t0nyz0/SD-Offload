@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-143%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-149%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -235,7 +235,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 143 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 149 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
@@ -276,4 +276,17 @@ system frameworks, so there are no bundled licenses to track.
 
 Version 1.7.13 addresses the [code audit findings](docs/qa-2026-09-28/REPORT.md): backup collisions, changed-source erasure, incomplete face scans, failed/out-of-order metadata saves, description search, cancellation, and low-space recovery. Library save failures show a **Retry Save** action; favorites, ratings, and pinned-folder snapshots also retry automatically. Conflicting secondary backups are preserved and block erasure until resolved.
 
-The regression suite includes a 100,000-record synthetic performance check. These local measurements and temporary-directory transfer tests do not replace physical SD-card and SMB validation. Exclusive-rename support is required on destination filesystems; an unsupported operation fails safely instead of replacing an existing file. The final source hash check adds one card read before erasure.
+The regression suite includes a 100,000-record synthetic performance check. These local measurements and temporary-directory transfer tests do not replace physical SD-card and SMB validation. Version 1.7.14 uses exclusive file creation on network filesystems, including SMB shares that do not support exclusive rename. Local supported filesystems retain atomic partial-file promotion. A network filename can be visible while copying; only a successful complete hash read-back makes it verified. A process crash may leave an unfinished network copy, which a retry preserves and bypasses with a collision-safe name. The final source hash check adds one card read before erasure.
+
+### NAS verification visibility and compatibility
+
+Version 1.7.14 fixes the 1.7.13 exclusive-rename incompatibility observed on SMB. The transfer UI distinguishes saving files from checking them, shows verification read speed and byte/file progress, and keeps reporting through the final safety check. Full copy progress alone is never presented as a finished transfer. An active read without reported bytes for ten seconds displays a waiting message; this is a stall indicator, not proof of a disconnected NAS.
+
+For an explicitly selected, mounted SMB test share, these optional checks create and remove only uniquely named disposable fixtures:
+
+```bash
+swift run offload-harness nas-probe /Volumes/Photos
+swift run offload-harness smb-run /Volumes/Photos
+```
+
+The first checks exclusive creation, collision protection, and uncached SHA-256 verification. The second runs the full offload pipeline with a generated fake card and an isolated folder on that share. Never substitute a real card for the generated fixture.

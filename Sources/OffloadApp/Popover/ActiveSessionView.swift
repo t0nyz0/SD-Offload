@@ -13,9 +13,9 @@ struct ActiveSessionView: View {
             header
 
             HStack(spacing: 18) {
-                CardProgressView(progress: vm.overallFraction)
+                CardProgressView(progress: vm.isChecking ? (vm.verification?.fraction ?? 0) : min(0.99, vm.overallFraction))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(vm.percentInt)%")
+                    Text("\(vm.headlinePercent)%")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                         .monospacedDigit()
                     Text(statusWord)
@@ -30,6 +30,10 @@ struct ActiveSessionView: View {
                     Text("Card removed — re-insert to finish")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.orange)
+                } else if vm.isChecking {
+                    etaLine("Check remaining", Fmt.eta(vm.verification?.eta))
+                    Text("Your card is kept until every safety check passes")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
                 } else {
                     etaLine("Card free in", vm.etaCardFreeText)
                     etaLine("All on NAS in", vm.etaAllSafeText)
@@ -38,26 +42,46 @@ struct ActiveSessionView: View {
 
             VStack(spacing: 6) {
                 StageProgressRow(label: "CARD → MAC", fraction: vm.hop1Fraction,
-                                 speedText: vm.hop1SpeedText, tint: Theme.accent)
+                                 speedText: vm.isChecking ? "Copied" : vm.hop1SpeedText, tint: Theme.accent)
                 StageProgressRow(label: "MAC → NAS", fraction: vm.hop2Fraction,
-                                 speedText: vm.hop2SpeedText, tint: Theme.safe)
+                                 speedText: vm.isChecking ? "Copied" : vm.hop2SpeedText, tint: Theme.safe)
             }
             .padding(.horizontal, 16)
 
-            if vm.samples.count >= 2 {
+            if let v = vm.verification {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(v.label).fontWeight(.semibold)
+                        Spacer()
+                        Text(Fmt.speed(v.bytesPerSecond)).monospacedDigit()
+                    }
+                    ProgressView(value: v.fraction).tint(Theme.safe)
+                    Text("\(v.filesDone) / \(v.filesTotal) files verified · \(Fmt.bytes(v.bytesDone)) / \(Fmt.bytes(v.bytesTotal)) read")
+                        .monospacedDigit()
+                    if let detail = vm.verificationDetail {
+                        Text(detail).foregroundStyle(v.secondsWithoutProgress >= 10 && v.activeFiles > 0 ? .orange : .secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .font(.system(size: 10.5))
+                .padding(.horizontal, 16)
+                .accessibilityElement(children: .combine)
+            }
+
+            if vm.samples.count >= 2 && !vm.isChecking {
                 ThroughputSparkline(samples: vm.samples)
                     .frame(height: 56)
                     .padding(.horizontal, 16)
             }
 
             VStack(spacing: 1) {
-                if !vm.filesText.isEmpty {
+                if !vm.isChecking && !vm.filesText.isEmpty {
                     Text("\(vm.filesText) · \(vm.bytesText)")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                if let name = vm.currentFileName {
+                if !vm.isChecking, let name = vm.currentFileName {
                     Text(name)
                         .font(.system(size: 10.5))
                         .foregroundStyle(.tertiary)
@@ -101,6 +125,12 @@ struct ActiveSessionView: View {
                 .help("Cancel — nothing is deleted")
                 .accessibilityLabel("Cancel offload — nothing is deleted")
             }
+            if vm.phase == .verifyingDestination {
+                Button { app.cancelTapped() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .help("Stop checking — keep the card unchanged")
+                    .accessibilityLabel("Stop verification — keep card")
+            }
         }
         .padding(.horizontal, 16)
     }
@@ -117,9 +147,7 @@ struct ActiveSessionView: View {
             // Name the phase the user is actually in. The card read (hop1)
             // finishes well before the NAS upload (hop2); once it's done the
             // work is uploading, then verifying — never "complete" mid-transfer.
-            if vm.hop1Fraction < 1 { "copying from card" }
-            else if vm.hop2Fraction < 1 { "uploading to NAS" }
-            else { "verifying on NAS" }
+            vm.transferStatus
         }
     }
 

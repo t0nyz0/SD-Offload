@@ -33,16 +33,18 @@ public typealias ConfigMutator = @Sendable (_ mutate: @Sendable @escaping (inout
 /// destination IO error, and inside the wipe gate.
 public actor NASLocator {
     private let configProvider: ConfigProvider
+    private let allowTestSubdirectory: Bool
     private var cached: (health: NASHealth, at: Date)?
     private var remountBackoff: TimeInterval = 5
     private var remountInProgress = false
     private var remountWaiters: [CheckedContinuation<Bool, Never>] = []
 
-    public init(configProvider: @escaping ConfigProvider) {
+    public init(configProvider: @escaping ConfigProvider, allowTestSubdirectory: Bool = false) {
         self.configProvider = configProvider
+        self.allowTestSubdirectory = allowTestSubdirectory
     }
 
-    public static func evaluate(config: AppConfig) -> NASHealth {
+    public static func evaluate(config: AppConfig, allowTestSubdirectory: Bool = false) -> NASHealth {
         guard let fs = statfsInfo(path: config.nasRootPath) else { return .notMounted }
         let networkTypes = ["smbfs", "afpfs", "nfs", "webdav"]
         guard networkTypes.contains(fs.fsTypeName) else {
@@ -54,7 +56,9 @@ public actor NASLocator {
             return .ghostLocalFolder(fstype: fs.fsTypeName)
         }
         // Must be mounted exactly at our root, not merely under some other share.
-        guard fs.mntOnName == config.nasRootPath else { return .notMounted }
+        let fixtureSubdirectory = allowTestSubdirectory && config.testAllowLocalNAS
+            && config.nasRootPath.hasPrefix(fs.mntOnName + "/.offload-session-test-")
+        guard fs.mntOnName == config.nasRootPath || fixtureSubdirectory else { return .notMounted }
         if let expected = config.nasExpectedMntFromName, fs.mntFromName != expected {
             return .wrongShare(mntFrom: fs.mntFromName)
         }
@@ -66,7 +70,7 @@ public actor NASLocator {
         if !force, let cached, Date().timeIntervalSince(cached.at) < 5 {
             return cached.health
         }
-        let health = Self.evaluate(config: await configProvider())
+        let health = Self.evaluate(config: await configProvider(), allowTestSubdirectory: allowTestSubdirectory)
         cached = (health, Date())
         if health == .healthy { remountBackoff = 5 }
         return health

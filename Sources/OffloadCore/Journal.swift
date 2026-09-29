@@ -16,7 +16,7 @@ public actor Journal {
 
     public struct RemainingWork: Sendable {
         public var sdBytes: Int64 = 0, verifyBytes: Int64 = 0, nasBytes: Int64 = 0
-        public var sdFiles = 0, verifyFiles = 0, nasFiles = 0
+        public var sdFiles = 0, verifyFiles = 0, nasFiles = 0, failedFiles = 0
         fileprivate mutating func adjust(state: FileState, bytes: Int64, direction: Int) {
             let delta = bytes * Int64(direction)
             switch state {
@@ -28,6 +28,7 @@ public actor Journal {
                 fallthrough
             case .stagedVerified, .uploading:
                 nasBytes += delta; nasFiles += direction
+            case .failed: failedFiles += direction
             default: break
             }
         }

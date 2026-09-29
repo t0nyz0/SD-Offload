@@ -14,6 +14,31 @@ final class SessionViewModel {
     let resumed: Bool
 
     var phase: EnginePhase = .scanning
+    var verification: VerificationProgress?
+    var uploadFilesRemaining = 0
+    var isChecking: Bool {
+        phase == .verifyingDestination || (phase == .transferring && hop1Fraction >= 1 && hop2Fraction >= 1 && uploadFilesRemaining == 0)
+    }
+    var transferStatus: String {
+        if isChecking { return verification?.label ?? "Checking NAS copies" }
+        if hop1Fraction < 1 { return "Copying from card" }
+        return "Saving to NAS"
+    }
+    var headlinePercent: Int {
+        if phase == .done { return 100 }
+        if isChecking, let verification { return min(99, Int(verification.fraction * 100)) }
+        return min(99, percentInt)
+    }
+    var verificationDetail: String? {
+        guard let v = verification else { return nil }
+        if v.activeFiles > 0 && v.secondsWithoutProgress >= 10 {
+            return "Waiting for NAS data · no bytes received for \(Int(v.secondsWithoutProgress))s"
+        }
+        if let file = v.currentFile {
+            return v.activeFiles > 1 ? "\(file) + \(v.activeFiles - 1) more" : file
+        }
+        return v.filesDone == v.filesTotal ? "This check passed" : "Waiting for files to finish uploading"
+    }
     var percentInt = 0
     var overallFraction: Double = 0
     var hop1Fraction: Double = 0
@@ -47,6 +72,8 @@ final class SessionViewModel {
     /// Called at 4 Hz by AppState while a session is live.
     func applyScratchTick() {
         let s = scratch
+        set(\.verification, s.verification)
+        set(\.uploadFilesRemaining, s.uploadFilesRemaining)
         // Monotonic clamps — progress never moves backwards on retries.
         set(\.hop1Fraction, max(hop1Fraction, s.hop1Fraction))
         set(\.hop2Fraction, max(hop2Fraction, s.hop2Fraction))
@@ -58,7 +85,9 @@ final class SessionViewModel {
         set(\.etaCardFreeText, Fmt.eta(s.etaCardFree))
         set(\.etaAllSafeText, Fmt.eta(s.etaAllSafe))
         if s.filesTotal > 0 {
-            set(\.filesText, "\(s.filesSettled) / \(s.filesTotal) files")
+            set(\.filesText, s.filesFailed > 0
+                ? "\(max(0, s.filesSettled - s.filesFailed)) verified · \(s.filesFailed) need attention"
+                : "\(s.filesSettled) / \(s.filesTotal) files verified")
         }
         if s.hop1BytesTotal > 0 {
             set(\.bytesText, "\(Fmt.bytes(s.hop1BytesDone)) of \(Fmt.bytes(s.hop1BytesTotal))")

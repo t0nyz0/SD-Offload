@@ -19,6 +19,7 @@ import OffloadCore
 ///   in async-land for Task.checkCancellation() + gate parking.
 public enum ChunkedIO {
     public static let chunkSize = 16 << 20
+    public static let verificationChunkSize = 1 << 20
 
     public struct CopyResult: Sendable {
         public let bytes: Int64
@@ -28,6 +29,8 @@ public enum ChunkedIO {
     public struct CopyOptions: Sendable {
         public var sourceNoCache = true
         public var preallocate = true
+        /// Create a new destination atomically; never truncate an existing backup.
+        public var exclusiveCreate = false
         /// F_FULLFSYNC — only for the afterStagingVerify wipe policy, where the
         /// staged copy becomes the only copy.
         public var fullFsync = false
@@ -74,14 +77,17 @@ public enum ChunkedIO {
         guard fstat(srcFD, &st) == 0 else { throw OffloadError.posix(errno, stage: "stat source") }
         let totalSize = st.st_size
 
-        let dstFD = open(dst.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        let dstFD = open(dst.path, O_WRONLY | O_CREAT | (options.exclusiveCreate ? O_EXCL : O_TRUNC), 0o644)
         guard dstFD >= 0 else { throw OffloadError.posix(errno, stage: "open destination") }
         var dstOpen = true
         defer { if dstOpen { close(dstFD) } }
 
         func cleanupPartial() {
+            var owned = stat(), named = stat()
+            let stillOwned = fstat(dstFD, &owned) == 0 && lstat(dst.path, &named) == 0
+                && owned.st_dev == named.st_dev && owned.st_ino == named.st_ino
             if dstOpen { close(dstFD); dstOpen = false }
-            unlink(dst.path)
+            if stillOwned { unlink(dst.path) }
         }
 
         if options.preallocate && totalSize > 0 {
@@ -175,7 +181,7 @@ public enum ChunkedIO {
 
             let bytesRead = try await blocking { [chunk] () -> Int in
                 while true {
-                    let n = read(fd, chunk.pointer, chunkSize)
+                    let n = read(fd, chunk.pointer, verificationChunkSize)
                     if n >= 0 { return n }
                     if errno == EINTR { continue }
                     throw OffloadError.posix(errno, stage: "read for verify")

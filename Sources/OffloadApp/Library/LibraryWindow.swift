@@ -260,15 +260,16 @@ private struct LibraryProgressBanner: View {
                     Text(vm.cardTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                     Text(statusWord).font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    if let eta = vm.etaAllSafeText {
-                        Text("all safe in \(eta)").font(.system(size: 11))
+                    if let eta = vm.isChecking ? Fmt.eta(vm.verification?.eta) : vm.etaAllSafeText {
+                        Text(vm.isChecking ? "check in \(eta)" : "all safe in \(eta)").font(.system(size: 11))
                             .foregroundStyle(.secondary).monospacedDigit()
                     }
-                    Text("\(vm.percentInt)%").font(.system(size: 12, weight: .bold)).monospacedDigit()
+                    Text("\(vm.headlinePercent)%").font(.system(size: 12, weight: .bold)).monospacedDigit()
                 }
                 HStack(spacing: 10) {
                     MiniBar(label: "CARD", fraction: vm.hop1Fraction, tint: Theme.accent)
                     MiniBar(label: "NAS", fraction: vm.hop2Fraction, tint: Theme.safe)
+                    if let v = vm.verification { MiniBar(label: "CHECK", fraction: v.fraction, tint: Theme.safe) }
                 }
             }
             if vm.phase == .transferring || vm.phase == .pausedByUser {
@@ -293,9 +294,7 @@ private struct LibraryProgressBanner: View {
         case .ejecting: return "ejecting"
         case .done: return "done"
         default:
-            if vm.hop1Fraction < 1 { return "copying from card" }
-            else if vm.hop2Fraction < 1 { return "uploading to NAS" }
-            else { return "verifying on NAS" }
+            return vm.transferStatus
         }
     }
 }

@@ -5,6 +5,22 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.14] — 2026-09-29
+
+### Fixed
+- Fix an SMB regression introduced in 1.7.13: network destinations use exclusive file creation because many SMB shares reject exclusive rename. Existing files remain protected, and copied files still require complete SHA-256 read-back verification.
+- Stop retrying unsupported destination operations instead of repeatedly uploading the same file.
+- Stop labeling upload retries as NAS verification or showing 100% overall completion before safety checks finish.
+
+### Added
+- Separate NAS verification progress with verified bytes, completed file count, current file, read speed, and a warning when an active read reports no progress for ten seconds.
+- Visible, cancellable final destination checks with their own progress and estimated remaining time. Progress sampling continues through the final checks.
+- Disposable SMB compatibility and full-session harness modes, plus verification/collision regression tests.
+
+### Changed
+- Report verification progress after each 1 MiB read instead of waiting for 16 MiB.
+- Show failed files separately from verified files.
+
 ## [1.7.13] — 2026-09-28
 
 ### Fixed

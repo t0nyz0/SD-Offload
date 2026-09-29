@@ -12,6 +12,11 @@ import OffloadEngine
 //   swift run offload-harness chaos-nas  # NAS disappears mid-upload, then returns
 
 let mode = CommandLine.arguments.dropFirst().first ?? "run"
+if mode == "nas-probe" {
+    guard CommandLine.arguments.count == 3 else { fatalError("Usage: offload-harness nas-probe /Volumes/Photos") }
+    try await NASProbe.run(root: CommandLine.arguments[2])
+    exit(0)
+}
 if mode == "benchmark" {
     try await PerformanceBaseline.run()
     exit(0)
@@ -20,7 +25,16 @@ if mode == "benchmark" {
 let workspace = FileManager.default.temporaryDirectory
     .appendingPathComponent("offload-harness-\(UUID().uuidString.prefix(8))", isDirectory: true)
 try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-let nasRoot = workspace.appendingPathComponent("nas", isDirectory: true)
+let nasRoot: URL
+if mode == "smb-run" {
+    guard CommandLine.arguments.count == 3,
+          statfsInfo(path: CommandLine.arguments[2])?.fsTypeName == "smbfs" else {
+        fatalError("Usage: offload-harness smb-run /Volumes/Photos (mounted SMB share)")
+    }
+    nasRoot = URL(fileURLWithPath: CommandLine.arguments[2])
+        .appendingPathComponent(".offload-session-test-\(UUID())", isDirectory: true)
+} else { nasRoot = workspace.appendingPathComponent("nas", isDirectory: true) }
+defer { if mode == "smb-run" { try? FileManager.default.removeItem(at: nasRoot) } }
 let staging = workspace.appendingPathComponent("staging", isDirectory: true)
 let secondary = workspace.appendingPathComponent("secondary", isDirectory: true)
 try FileManager.default.createDirectory(at: nasRoot, withIntermediateDirectories: true)
@@ -113,7 +127,7 @@ let historyDir = workspace.appendingPathComponent("history", isDirectory: true)
 let journal = Journal(directory: journalDir, historyDir: historyDir)
 let stagingStore = StagingStore(rootPath: staging.path)
 let cfg = config             // immutable snapshot for the Sendable provider closure
-let nas = NASLocator(configProvider: { cfg })
+let nas = NASLocator(configProvider: { cfg }, allowTestSubdirectory: mode == "smb-run")
 let watcher = CardWatcher()   // not started; autoEject off so eject is never called
 
 let cardInfo = CardInfo(volumeUUID: "\(volName)#test", bsdName: cardDev ?? "disk-test",
@@ -327,4 +341,5 @@ guard stagingLeft == final.files.count else { fail("Recovery copies missing: \(s
 log("local recovery copies retained")
 
 print("\n✅ PASS — \(verified) files offloaded, verified end-to-end, card wiped. (\(mode), \(String(format: "%.1f", elapsed))s)")
+if mode == "smb-run" { try FileManager.default.removeItem(at: nasRoot) }
 exit(0)

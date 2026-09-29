@@ -39,6 +39,23 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
         emit(.phase(.scanning))
         try? await Task.sleep(for: .seconds(1.5))
 
+        if ProcessInfo.processInfo.environment["OFFLOAD_DEMO_VERIFY"] == "1" {
+            emit(.planned(files: 6, bytes: 240_000_000))
+            emit(.phase(.verifyingDestination))
+            for step in 0..<120 {
+                if Task.isCancelled { return }
+                var snap = ProgressSnapshot()
+                snap.hop1BytesTotal = 240_000_000; snap.hop1BytesDone = 240_000_000
+                snap.hop2BytesTotal = 240_000_000; snap.hop2BytesDone = 240_000_000
+                snap.filesTotal = 6; snap.filesSettled = 6
+                snap.verification = VerificationProgress(label: "Final NAS safety check", bytesDone: Int64(40_000_000 + step * 1_000_000),
+                    bytesTotal: 240_000_000, filesDone: 1 + step / 40, filesTotal: 6,
+                    currentFile: "DSCF1162.RAF", activeFiles: 1, bytesPerSecond: 8_500_000, secondsWithoutProgress: 0)
+                emit(.progress(snap))
+                try? await Task.sleep(for: .seconds(1))
+            }
+            return
+        }
         let totalBytes: Int64 = 41_200_000_000
         let totalFiles = 412
         emit(.planned(files: totalFiles, bytes: totalBytes))

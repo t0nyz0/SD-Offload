@@ -37,6 +37,8 @@ public actor SessionRunner {
     private var hop1Tasks: [Task<Void, Never>] = []
     private var otherTasks: [Task<Void, Never>] = []
     private var samplerTask: Task<Void, Never>?
+    private var finalVerificationTask: Task<Void, Error>?
+    private nonisolated let verification = VerificationTracker()
     private var allSettledContinuation: CheckedContinuation<Void, Never>?
     private var wipeConsentContinuation: CheckedContinuation<Bool, Never>?
     private var power: PowerAssertion?
@@ -77,6 +79,7 @@ public actor SessionRunner {
         power = PowerAssertion(reason: "Offloading \(card.volumeName)")
         defer { power?.end() }
 
+        verification.reset(files: record.files, label: "Checking NAS copies", acceptingRecorded: true)
         totalFiles = record.files.count
         hop1TotalBytes = record.files.reduce(0) { $0 + $1.size }
         for file in record.files {
@@ -110,9 +113,8 @@ public actor SessionRunner {
         // where the second drive was enabled after files were NAS-verified in a
         // prior (interrupted) run. No-op on a fresh session (nothing is verified yet)
         // and cheap for files already mirrored (an uncached read-back only).
-        await reconcileSecondaries(record: record)
-
         startSampler()
+        await reconcileSecondaries(record: record)
         if settledFiles < totalFiles {
             spawnHop1Workers()
             spawnPipelineWorkers()
@@ -121,10 +123,10 @@ public actor SessionRunner {
             }
         }
         await stopWorkers()
-        samplerTask?.cancel()
 
         await markPhaseEnd("transfer")
         await wrapUp()
+        samplerTask?.cancel()
     }
 
     private func spawnHop1Workers() {
@@ -375,6 +377,7 @@ public actor SessionRunner {
                         // before the file counts as safe.
                         do { try await copyToSecondary(file, from: stagedURL, sourceHash: sourceHash, destRelPath: destRelPath) }
                         catch { await handleSecondaryFailure(file, error); return }
+                        verification.finish(file, verified: true)
                         await journal.transition(file: file.id, to: .skippedDuplicate, in: sessionID)
                         await finishFile(file)
                         return
@@ -394,22 +397,27 @@ public actor SessionRunner {
             // Data-fork-only write via a hidden partial, then atomic rename.
             let partialURL = destURL.deletingLastPathComponent()
                 .appendingPathComponent(".offload-\(file.id.uuidString).partial")
+            // SMB rejects RENAME_EXCL. Exclusive creation provides the same
+            // no-replacement guarantee without re-uploading a completed partial.
+            let direct = DestinationWriter.requiresExclusiveCreate(at: nasRoot)
+            let writeURL = direct ? destURL : partialURL
             var options = ChunkedIO.CopyOptions()
+            options.exclusiveCreate = direct
             options.preallocate = false   // smbfs returns ENOTSUP; skip the wasted fcntl per file
             let meter = self.meter
-            let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: partialURL, options: options,
+            let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: writeURL, options: options,
                                                          gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
             // Bonus integrity: the bytes we just read from staging must still
             // hash to the SD-read hash. Staging rot ⇒ re-copy from the card.
             guard result.sha256Hex == sourceHash else {
-                try? fm.removeItem(at: partialURL)
+                try? fm.removeItem(at: writeURL)
                 staging.purgeFile(session: sessionID, file: file)
                 await budget.release(file.id)
                 await journal.transition(file: file.id, to: .pending, in: sessionID)
                 await handleVerifyMismatch(file, stage: "staging re-read")
                 return
             }
-            guard renamex_np(partialURL.path, destURL.path, UInt32(RENAME_EXCL)) == 0 else {
+            if !direct, renamex_np(partialURL.path, destURL.path, UInt32(RENAME_EXCL)) != 0 {
                 let err = errno
                 try? fm.removeItem(at: partialURL)
                 throw OffloadError.posix(err, stage: "rename on NAS")
@@ -436,9 +444,14 @@ public actor SessionRunner {
         // isn't reachable there — F_FULLFSYNC is ENOTSUP.)
         let verifyStarted = Date()
         let meter = self.meter
-        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
+        verification.begin(file)
+        var verified = false
+        defer { verification.finish(file, verified: verified) }
+        let nasHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) { [verification] in
             meter.addBytes($0, stage: .nasVerify)
+            verification.add($0, file: file.id)
         }
+        verified = nasHash == sourceHash
         if nasHash == sourceHash {
             meter.fileCompleted(stage: .nasVerify, wall: Date().timeIntervalSince(verifyStarted), size: file.size)
             // Mirror to the second drive and read it back BEFORE the file becomes
@@ -508,15 +521,18 @@ public actor SessionRunner {
         }
         let partial = destURL.deletingLastPathComponent()
             .appendingPathComponent(".offload-\(file.id.uuidString).2.partial")
+        let direct = DestinationWriter.requiresExclusiveCreate(at: URL(fileURLWithPath: root))
+        let writeURL = direct ? destURL : partial
         var options = ChunkedIO.CopyOptions()
         options.preallocate = false
-        let result = try await ChunkedIO.copyAndHash(from: sourceURL, to: partial, options: options,
+        options.exclusiveCreate = direct
+        let result = try await ChunkedIO.copyAndHash(from: sourceURL, to: writeURL, options: options,
                                                      gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
         guard result.sha256Hex == sourceHash else {
-            try? fm.removeItem(at: partial)
+            try? fm.removeItem(at: writeURL)
             throw OffloadError(.hashMismatch(stage: "second-copy staging re-read"))
         }
-        guard renamex_np(partial.path, destURL.path, UInt32(RENAME_EXCL)) == 0 else {
+        if !direct, renamex_np(partial.path, destURL.path, UInt32(RENAME_EXCL)) != 0 {
             let err = errno; try? fm.removeItem(at: partial)
             throw OffloadError.posix(err, stage: "rename on second drive")
         }
@@ -654,7 +670,10 @@ public actor SessionRunner {
             return
         }
 
-        let attempts = file.attempts + 1
+        let unsupported: Bool
+        if case .ioError(let code, _) = failure { unsupported = code == ENOTSUP }
+        else { unsupported = false }
+        let attempts = unsupported ? RetryPolicy.maxAttempts : file.attempts + 1
         await journal.bumpAttempts(file: file.id, in: sessionID)
         if attempts < RetryPolicy.maxAttempts {
             await journal.transition(file: file.id, to: .stagedVerified, in: sessionID)
@@ -697,7 +716,10 @@ public actor SessionRunner {
         snapshot.hop2BytesDone = min(hop1TotalBytes, hop2BaseBytes + meter.bytesTotal(.nasWrite))
         snapshot.filesTotal = totalFiles
         snapshot.filesSettled = settledFiles
-        snapshot.currentFileName = currentFileName
+        snapshot.verification = verification.snapshot()
+        snapshot.uploadFilesRemaining = work.nasFiles
+        snapshot.filesFailed = work.failedFiles
+        snapshot.currentFileName = snapshot.verification?.currentFile ?? currentFileName
         snapshot.sdReadBps = meter.rate(.sdRead)
         snapshot.nasWriteBps = meter.rate(.nasWrite)
 
@@ -828,10 +850,18 @@ public actor SessionRunner {
             guard await nas.validateNow(force: true) == .healthy else {
                 throw OffloadError(.nasUnavailable)
             }
-            try await DestinationVerifier.verify(files: record.files, root: config.nasRootPath)
-            if let secondary = config.secondaryDestPath {
-                try await DestinationVerifier.verify(files: record.files, root: secondary)
+            emit(.phase(.verifyingDestination))
+            let task = Task { [verification, config] in
+                verification.reset(files: record.files, label: "Final NAS safety check")
+                try await DestinationVerifier.verify(files: record.files, root: config.nasRootPath, tracker: verification)
+                if let secondary = config.secondaryDestPath {
+                    verification.reset(files: record.files, label: "Checking second backup")
+                    try await DestinationVerifier.verify(files: record.files, root: secondary, tracker: verification)
+                }
             }
+            finalVerificationTask = task
+            defer { finalVerificationTask = nil }
+            try await task.value
             guard !cancelled, !wipeCancelled else { throw CancellationError() }
         } catch {
             let reason = "Final destination verification blocked erasure: \(error)"
@@ -978,6 +1008,7 @@ public actor SessionRunner {
     public func cancel() async {
         cancelled = true
         wipeCancelled = true
+        finalVerificationTask?.cancel()
         await stopWorkers()
         wipeConsentContinuation?.resume(returning: false)
         wipeConsentContinuation = nil

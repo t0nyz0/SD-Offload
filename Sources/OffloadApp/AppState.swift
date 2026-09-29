@@ -212,17 +212,17 @@ final class AppState {
             case .awaitingConsent, .scanning:
                 newState = .scanning
             case .transferring:
-                newState = vm.hop1Fraction >= 1.0 ? .uploading(vm.percentInt) : .transferring(vm.percentInt)
+                newState = vm.hop1Fraction >= 1.0 ? .uploading(vm.headlinePercent) : .transferring(vm.headlinePercent)
             case .waitingForNAS:
-                newState = .uploading(vm.percentInt)
-            case .wipeCountdown, .awaitingWipeConsent, .wiping, .ejecting:
-                newState = .verifying(vm.percentInt)
+                newState = .uploading(vm.headlinePercent)
+            case .wipeCountdown, .awaitingWipeConsent, .verifyingDestination, .wiping, .ejecting:
+                newState = .verifying(vm.headlinePercent)
             case .done:
                 newState = .doneFlash
             case .doneWipeBlocked, .failed:
                 newState = .attention
             case .pausedByUser, .pausedCardGone:
-                newState = .paused(vm.percentInt)
+                newState = .paused(vm.headlinePercent)
             }
         } else if pendingConsent != nil {
             newState = .scanning
