@@ -22,6 +22,7 @@ final class SessionViewModel {
     var transferStatus: String {
         if isChecking { return verification?.label ?? "Checking NAS copies" }
         if hop1Fraction < 1 { return "Copying from card" }
+        if (verification?.activeFiles ?? 0) > 0 { return "Saving and checking NAS" }
         return "Saving to NAS"
     }
     var headlinePercent: Int {

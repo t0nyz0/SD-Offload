@@ -369,8 +369,17 @@ public actor SessionRunner {
                 let existingSize = (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
                 if existingSize == file.size {
                     let meter = self.meter
-                    let existingHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) {
-                        meter.addBytes($0, stage: .nasVerify)
+                    verification.begin(file)
+                    let existingHash: String
+                    do {
+                        existingHash = try await ChunkedIO.hashFile(destURL, noCache: true, gate: pauseGate) { [verification] in
+                            meter.addBytes($0, stage: .nasVerify)
+                            verification.add($0, file: file.id)
+                        }
+                        verification.finish(file, verified: existingHash == sourceHash)
+                    } catch {
+                        verification.finish(file, verified: false)
+                        throw error
                     }
                     if existingHash == sourceHash {
                         // Already on the NAS — still mirror to the second drive
