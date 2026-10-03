@@ -15,6 +15,7 @@ final class SessionViewModel {
 
     var phase: EnginePhase = .scanning
     var verification: VerificationProgress?
+    var nasActivityDetail: String?
     var uploadFilesRemaining = 0
     var isChecking: Bool {
         phase == .verifyingDestination || (phase == .transferring && hop1Fraction >= 1 && hop2Fraction >= 1 && uploadFilesRemaining == 0)
@@ -74,6 +75,7 @@ final class SessionViewModel {
     func applyScratchTick() {
         let s = scratch
         set(\.verification, s.verification)
+        set(\.nasActivityDetail, s.nasActivityDetail)
         set(\.uploadFilesRemaining, s.uploadFilesRemaining)
         // Monotonic clamps — progress never moves backwards on retries.
         set(\.hop1Fraction, max(hop1Fraction, s.hop1Fraction))

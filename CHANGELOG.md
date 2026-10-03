@@ -5,6 +5,16 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.15] — 2026-10-03
+
+### Fixed
+- Keep card detection responsive by replacing device filesystem calls on the DiskArbitration queue with cached kernel mount snapshots. Reconcile immediately after wake, recognize mount identity changes, and allow one bounded replacement for a probe stuck longer than 30 seconds.
+- Restore large sequential verification reads to reduce SMB round trips while preserving uncached SHA-256 verification. Slow file opens now run off Swift's cooperative executor.
+
+### Added
+- Show when the NAS is taking time to open a file, return file information, or finish flushing saved data, with elapsed wait time in the popover and Library.
+- Regression coverage for stuck probes, another reader remaining detectable, remount identity, large read boundaries, durable-flush phases, and cleared NAS wait messages.
+
 ## [1.7.14] — 2026-09-29
 
 ### Fixed

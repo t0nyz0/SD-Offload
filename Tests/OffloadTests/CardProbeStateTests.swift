@@ -51,4 +51,32 @@ final class CardProbeStateTests: XCTestCase {
         XCTAssertFalse(state.complete(device: "disk4", probe: first, ready: true))
         XCTAssertNotNil(state.begin(device: "disk4", identity: identity).probe)
     }
+
+    func testHungProbeRetriesOnceWithoutSpawningUnboundedWork() throws {
+        var state = CardProbeState()
+        let first = try XCTUnwrap(state.begin(device: "disk4", identity: identity, now: 0).probe)
+        XCTAssertNil(state.begin(device: "disk4", identity: identity, now: 29).probe)
+        let replacement = try XCTUnwrap(state.begin(device: "disk4", identity: identity, now: 30).probe)
+        for time in [60.0, 3600, 86400] {
+            XCTAssertNil(state.begin(device: "disk4", identity: identity, now: time).probe)
+        }
+        XCTAssertFalse(state.complete(device: "disk4", probe: first, ready: true))
+        XCTAssertTrue(state.complete(device: "disk4", probe: replacement, ready: true))
+        XCTAssertNil(state.begin(device: "disk4", identity: identity, now: 86401).probe)
+    }
+
+    func testHungCardDoesNotBlockAnotherReader() throws {
+        var state = CardProbeState()
+        _ = state.begin(device: "disk4", identity: identity, now: 0)
+        let other = try XCTUnwrap(state.begin(device: "disk5", identity: identity, now: 100).probe)
+        XCTAssertTrue(state.complete(device: "disk5", probe: other, ready: true))
+    }
+
+    func testKernelMountSnapshotRejectsNetworkAndDistinguishesRemounts() throws {
+        XCTAssertNil(CardMountSnapshot(source: "//server/Photos", path: "/Volumes/Photos", mountID: "1"))
+        let first = try XCTUnwrap(CardMountSnapshot(source: "/dev/disk4s1", path: "/Volumes/Card", mountID: "1"))
+        XCTAssertEqual(first.device, "disk4s1")
+        XCTAssertNotEqual(first, CardMountSnapshot(source: "/dev/disk4s1", path: first.path, mountID: "2"))
+        XCTAssertNotEqual(first, CardMountSnapshot(source: "/dev/disk4s1", path: "/Volumes/Card 1", mountID: "1"))
+    }
 }

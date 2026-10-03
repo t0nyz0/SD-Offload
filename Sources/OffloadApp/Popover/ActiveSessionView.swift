@@ -48,6 +48,12 @@ struct ActiveSessionView: View {
             }
             .padding(.horizontal, 16)
 
+            if let detail = vm.nasActivityDetail {
+                Text(detail).font(.system(size: 10.5)).foregroundStyle(.orange)
+                    .padding(.horizontal, 16)
+                    .accessibilityLabel(detail)
+            }
+
             if let v = vm.verification {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {

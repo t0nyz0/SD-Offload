@@ -6,8 +6,9 @@ import OffloadCore
 ///
 /// Discipline:
 /// - 16 MiB chunks: halves write() syscalls vs 8 MiB and hands smbfs larger
-///   sequential runs to pack into SMB2 WRITEs / fill the credit window; overhead
-///   still invisible and pause/cancel latency stays ≤ ~60 ms.
+///   sequential runs to pack into SMB2 requests. Verification uses the same
+///   large reads; cancellation is checked between calls (a slow server can
+///   delay a single call).
 /// - F_NOCACHE on one-pass reads so multi-GB transfers don't evict the page
 ///   cache (our explicit big reads replace kernel readahead).
 /// - F_PREALLOCATE on staging (contiguous APFS extents + up-front ENOSPC);
@@ -15,11 +16,13 @@ import OffloadCore
 /// - SHA-256 (CryptoKit, ARMv8 SHA-2 instructions — multi-GB/s, never the
 ///   bottleneck) updated per chunk BEFORE that chunk is written: hop-1 reads
 ///   are the canonical bytes.
-/// - Blocking syscalls run on a GCD utility queue; between chunks we're back
+/// - Data reads/writes and opens run on a GCD user-initiated queue; between chunks we're back
 ///   in async-land for Task.checkCancellation() + gate parking.
 public enum ChunkedIO {
     public static let chunkSize = 16 << 20
-    public static let verificationChunkSize = 1 << 20
+    public static let verificationChunkSize = 16 << 20
+
+    public enum CopyPhase: Sendable { case openingDestination, writing, flushing }
 
     public struct CopyResult: Sendable {
         public let bytes: Int64
@@ -37,7 +40,7 @@ public enum ChunkedIO {
         public init() {}
     }
 
-    /// One 8 MiB buffer per in-flight file, allocated once and reused across
+    /// One 16 MiB buffer per in-flight file, allocated once and reused across
     /// chunks. The wrapper is what makes the cross-queue captures explicit:
     /// exactly one blocking op touches the buffer at a time.
     private final class ChunkBuffer: @unchecked Sendable {
@@ -67,9 +70,13 @@ public enum ChunkedIO {
     public static func copyAndHash(from src: URL, to dst: URL,
                                    options: CopyOptions = CopyOptions(),
                                    gate: Gate? = nil,
+                                   phase: (@Sendable (CopyPhase) -> Void)? = nil,
                                    progress: (@Sendable (Int) -> Void)? = nil) async throws -> CopyResult {
-        let srcFD = open(src.path, O_RDONLY)
-        guard srcFD >= 0 else { throw OffloadError.posix(errno, stage: "open source") }
+        let srcFD = try await blocking {
+            let fd = open(src.path, O_RDONLY)
+            guard fd >= 0 else { throw OffloadError.posix(errno, stage: "open source") }
+            return fd
+        }
         defer { close(srcFD) }
         if options.sourceNoCache { _ = fcntl(srcFD, F_NOCACHE, 1) }
 
@@ -77,8 +84,12 @@ public enum ChunkedIO {
         guard fstat(srcFD, &st) == 0 else { throw OffloadError.posix(errno, stage: "stat source") }
         let totalSize = st.st_size
 
-        let dstFD = open(dst.path, O_WRONLY | O_CREAT | (options.exclusiveCreate ? O_EXCL : O_TRUNC), 0o644)
-        guard dstFD >= 0 else { throw OffloadError.posix(errno, stage: "open destination") }
+        phase?(.openingDestination)
+        let dstFD = try await blocking {
+            let fd = open(dst.path, O_WRONLY | O_CREAT | (options.exclusiveCreate ? O_EXCL : O_TRUNC), 0o644)
+            guard fd >= 0 else { throw OffloadError.posix(errno, stage: "open destination") }
+            return fd
+        }
         var dstOpen = true
         defer { if dstOpen { close(dstFD) } }
 
@@ -105,6 +116,7 @@ public enum ChunkedIO {
         var totalCopied: Int64 = 0
 
         do {
+            phase?(.writing)
             while true {
                 try Task.checkCancellation()
                 if let gate { await gate.whenOpen() }
@@ -126,7 +138,8 @@ public enum ChunkedIO {
                     var written = 0
                     while written < bytesRead {
                         let n = write(dstFD, chunk.pointer.advanced(by: written), bytesRead - written)
-                        if n >= 0 { written += n; continue }
+                        if n > 0 { written += n; continue }
+                        if n == 0 { throw OffloadError.posix(EIO, stage: "write destination made no progress") }
                         if errno == EINTR { continue }
                         throw OffloadError.posix(errno, stage: "write destination")
                     }
@@ -136,6 +149,7 @@ public enum ChunkedIO {
                 progress?(bytesRead)
             }
 
+            phase?(.flushing)
             try await blocking {
                 guard fsync(dstFD) == 0 else { throw OffloadError.posix(errno, stage: "fsync destination") }
             }
@@ -159,8 +173,11 @@ public enum ChunkedIO {
     public static func hashFile(_ url: URL, noCache: Bool,
                                 gate: Gate? = nil,
                                 progress: (@Sendable (Int) -> Void)? = nil) async throws -> String {
-        let fd = open(url.path, O_RDONLY)
-        guard fd >= 0 else { throw OffloadError.posix(errno, stage: "open for verify") }
+        let fd = try await blocking {
+            let fd = open(url.path, O_RDONLY)
+            guard fd >= 0 else { throw OffloadError.posix(errno, stage: "open for verify") }
+            return fd
+        }
         defer { close(fd) }
         return try await hashOpenFile(fd, noCache: noCache, gate: gate, progress: progress)
     }

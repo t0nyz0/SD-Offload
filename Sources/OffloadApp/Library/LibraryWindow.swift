@@ -271,6 +271,9 @@ private struct LibraryProgressBanner: View {
                     MiniBar(label: "NAS", fraction: vm.hop2Fraction, tint: Theme.safe)
                     if let v = vm.verification { MiniBar(label: "CHECK", fraction: v.fraction, tint: Theme.safe) }
                 }
+                if let detail = vm.nasActivityDetail {
+                    Text(detail).font(.system(size: 11)).foregroundStyle(.orange)
+                }
             }
             if vm.phase == .transferring || vm.phase == .pausedByUser {
                 Button { vm.phase == .pausedByUser ? app.resumeTapped() : app.pauseTapped() } label: {

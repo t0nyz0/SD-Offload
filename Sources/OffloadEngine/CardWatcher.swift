@@ -1,5 +1,6 @@
 import Foundation
 import DiskArbitration
+import AppKit
 import OffloadCore
 
 /// Raw volume signals from DiskArbitration. Classification happens upstream
@@ -52,6 +53,7 @@ public final class CardWatcher: @unchecked Sendable {
     /// volume to be gone for a few consecutive polls before we believe it, so a
     /// sub-second FSKit path-flap can't be mistaken for a real removal.
     private var reconcileTimer: DispatchSourceTimer?
+    private var wakeObserver: NSObjectProtocol?
     private var absentPolls: [String: Int] = [:]
     private let reconcileInterval: TimeInterval = 1.5
     private let absentPollsBeforeUnmount = 2          // ~3 s gone ⇒ real removal, not a flap
@@ -76,7 +78,7 @@ public final class CardWatcher: @unchecked Sendable {
             Unmanaged<CardWatcher>.fromOpaque(ctx).takeUnretainedValue().diskAppeared(disk)
         }, ctx)
 
-        let watchKeys = [kDADiskDescriptionVolumePathKey] as CFArray
+        let watchKeys = [kDADiskDescriptionVolumePathKey, kDADiskDescriptionVolumeUUIDKey] as CFArray
         DARegisterDiskDescriptionChangedCallback(session, nil, watchKeys, { disk, _, ctx in
             guard let ctx else { return }
             Unmanaged<CardWatcher>.fromOpaque(ctx).takeUnretainedValue().diskDescriptionChanged(disk)
@@ -93,6 +95,11 @@ public final class CardWatcher: @unchecked Sendable {
         timer.setEventHandler { [weak self] in self?.reconcile() }
         timer.resume()
         reconcileTimer = timer
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.daQueue.async { [weak self] in self?.reconcile() }
+        }
     }
 
     /// Force a re-check of every currently-mounted volume, dropping the dedup state
@@ -107,7 +114,7 @@ public final class CardWatcher: @unchecked Sendable {
             self.pendingUnmounts.removeAll()
             self.probes.reset()                     // forget dedup so every mount re-emits
             self.absentPolls.removeAll()
-            for bsdName in Self.mountedBSDNames() {
+            for bsdName in Self.mountedVolumes().keys {
                 if let disk = DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsdName) {
                     self.handlePossibleMount(disk)
                 }
@@ -141,10 +148,10 @@ public final class CardWatcher: @unchecked Sendable {
     /// consecutive misses, so a sub-second FSKit path-flap isn't mistaken for removal.
     private func reconcile() {
         guard let session = daSession else { return }
-        let mounted = Self.mountedBSDNames()
+        let mounted = Self.mountedVolumes()
         // Reconcile BOTH directions: a missed insertion must be discovered even
         // when we currently know about no cards at all.
-        for bsdName in probes.devices where !mounted.contains(bsdName) {
+        for bsdName in probes.devices where mounted[bsdName] == nil {
             let misses = (absentPolls[bsdName] ?? 0) + 1
             absentPolls[bsdName] = misses
             guard misses >= absentPollsBeforeUnmount else { continue }
@@ -154,7 +161,7 @@ public final class CardWatcher: @unchecked Sendable {
                 continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
             }
         }
-        for bsdName in mounted {
+        for bsdName in mounted.keys {
             absentPolls.removeValue(forKey: bsdName)
             if let disk = DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsdName) {
                 handlePossibleMount(disk)
@@ -165,8 +172,10 @@ public final class CardWatcher: @unchecked Sendable {
     /// BSD names ("disk4s1") of every currently-mounted LOCAL volume, read straight
     /// from the kernel mount table. Network mounts (f_mntfromname like
     /// "//user@host/share", no "/dev/" prefix) are skipped — they're never cards.
-    private static func mountedBSDNames() -> Set<String> {
-        var out = Set<String>()
+    /// MNT_NOWAIT reads cached kernel metadata without asking a slow device to
+    /// respond. Never call statfs(path) on the DiskArbitration event queue.
+    private static func mountedVolumes() -> [String: CardMountSnapshot] {
+        var out: [String: CardMountSnapshot] = [:]
         var buf: UnsafeMutablePointer<statfs>?
         let count = getmntinfo(&buf, MNT_NOWAIT)
         guard count > 0, let buf else { return out }
@@ -175,7 +184,13 @@ public final class CardWatcher: @unchecked Sendable {
             let from = withUnsafePointer(to: &fs.f_mntfromname) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(MNAMELEN)) { String(cString: $0) }
             }
-            if from.hasPrefix("/dev/") { out.insert(String(from.dropFirst(5))) }
+            let path = withUnsafePointer(to: &fs.f_mntonname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MNAMELEN)) { String(cString: $0) }
+            }
+            if let mount = CardMountSnapshot(source: from, path: path,
+                                             mountID: "\(fs.f_fsid.val.0):\(fs.f_fsid.val.1)") {
+                out[mount.device] = mount
+            }
         }
         return out
     }
@@ -184,9 +199,9 @@ public final class CardWatcher: @unchecked Sendable {
         guard let desc = DADiskCopyDescription(disk) as? [CFString: Any] else { return }
         guard let bsdName = DADiskGetBSDName(disk).map({ String(cString: $0) }) else { return }
 
-        guard let pathURL = desc[kDADiskDescriptionVolumePathKey] as? URL else {
-            // Path went away without a DiskDisappeared. On exFAT/FSKit this is
-            // often a transient flap, not a real unmount — confirm after a short
+        guard let mountedVolume = Self.mountedVolumes()[bsdName] else {
+            // No kernel mount remains, even if DiskArbitration still reports a
+            // path. Confirm after a short
             // grace period. A real removal arrives via diskDisappeared (which
             // cancels this); if the path returns first, the follow-up
             // handlePossibleMount cancels this timer. (insertion state is cleared only
@@ -196,6 +211,7 @@ public final class CardWatcher: @unchecked Sendable {
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.pendingUnmounts.removeValue(forKey: bsdName)
+                guard Self.mountedVolumes()[bsdName] == nil else { return }
                 guard let uuid = self.probes.remove(device: bsdName) else { return }
                 self.continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
             }
@@ -204,6 +220,7 @@ public final class CardWatcher: @unchecked Sendable {
             return
         }
 
+        let pathURL = URL(fileURLWithPath: mountedVolume.path, isDirectory: true)
         let name = desc[kDADiskDescriptionVolumeNameKey] as? String ?? "Untitled"
         let removable = (desc[kDADiskDescriptionMediaRemovableKey] as? Bool) ?? false
         let ejectable = (desc[kDADiskDescriptionMediaEjectableKey] as? Bool) ?? false
@@ -224,11 +241,8 @@ public final class CardWatcher: @unchecked Sendable {
 
         pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // path is back — cancel any pending flap unmount
         absentPolls.removeValue(forKey: bsdName)
-        var mount = statfs()
-        guard statfs(pathURL.path, &mount) == 0,
-              Self.mountedBSDNames().contains(bsdName) else { return }
         let identity = CardProbeState.Identity(uuid: uuid, path: pathURL.path,
-                                               mountID: "\(mount.f_fsid.val.0):\(mount.f_fsid.val.1)")
+                                               mountID: mountedVolume.mountID)
         let observation = probes.begin(device: bsdName, identity: identity)
         if let removed = observation.removed {
             continuation.yield(.volumeUnmounted(volumeUUID: removed, bsdName: bsdName))
@@ -256,10 +270,7 @@ public final class CardWatcher: @unchecked Sendable {
                                             isNetwork: network)
             self?.daQueue.async { [weak self] in
                 guard let self else { return }
-                var currentMount = statfs()
-                let stillMounted = Self.mountedBSDNames().contains(bsdName)
-                    && statfs(pathURL.path, &currentMount) == 0
-                    && "\(currentMount.f_fsid.val.0):\(currentMount.f_fsid.val.1)" == identity.mountID
+                let stillMounted = Self.mountedVolumes()[bsdName] == mountedVolume
                 if self.probes.complete(device: bsdName, probe: probe,
                                         ready: hasMediaRoot && stillMounted) {
                     self.continuation.yield(.volumeMounted(candidate))

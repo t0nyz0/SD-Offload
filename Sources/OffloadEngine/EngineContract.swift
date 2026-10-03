@@ -16,6 +16,7 @@ public struct ProgressSnapshot: Sendable, Equatable {
     public var hop2BytesDone: Int64 = 0
     public var hop2BytesTotal: Int64 = 0
     public var verification: VerificationProgress?
+    public var nasActivityDetail: String?
     public var uploadFilesRemaining = 0
     public var filesFailed = 0
     public var filesSettled: Int = 0        // nasVerified + skippedDuplicate + failed

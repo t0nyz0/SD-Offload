@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-149%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-155%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -191,6 +191,8 @@ to backfill a missing second copy before wiping, plus missing/corrupted destinat
 GitHub CI runs the unit tests and all ten integration modes on every push to `main` and every
 pull request. Regression tests cover SMB-safe exclusive creation, preserving existing files,
 corrupt-copy detection, stalled verification, and retry progress that must not claim completion.
+They also cover bounded recovery of stuck card probes, mount identity changes, large sequential
+verification reads, and NAS flush-wait status.
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
 
@@ -241,7 +243,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 149 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 155 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
@@ -287,6 +289,12 @@ The regression suite includes a 100,000-record synthetic performance check. Thes
 ### NAS verification visibility and compatibility
 
 Version 1.7.14 fixes the 1.7.13 exclusive-rename incompatibility observed on SMB. The transfer UI distinguishes saving files from checking them, shows verification read speed and byte/file progress, and keeps reporting through the final safety check. Full copy progress alone is never presented as a finished transfer. An active read without reported bytes for ten seconds displays a waiting message; this is a stall indicator, not proof of a disconnected NAS.
+
+Version 1.7.15 restores 16 MiB sequential verification reads and reports slow NAS metadata,
+file-open, and flush operations separately. Card detection uses cached kernel mount information,
+rechecks after wake, and permits one bounded replacement for a stuck card probe. See the
+[performance and detection checks](docs/qa-2026-10-03/PERFORMANCE.md). Slow server responses can
+still limit transfer speed; the app retains full uncached verification and durable flushes.
 
 For an explicitly selected, mounted SMB test share, these optional checks create and remove only uniquely named disposable fixtures:
 

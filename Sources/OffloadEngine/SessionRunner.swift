@@ -39,6 +39,7 @@ public actor SessionRunner {
     private var samplerTask: Task<Void, Never>?
     private var finalVerificationTask: Task<Void, Error>?
     private nonisolated let verification = VerificationTracker()
+    private nonisolated let nasActivity = NASActivityTracker()
     private var allSettledContinuation: CheckedContinuation<Void, Never>?
     private var wipeConsentContinuation: CheckedContinuation<Bool, Never>?
     private var power: PowerAssertion?
@@ -339,6 +340,8 @@ public actor SessionRunner {
     }
 
     private nonisolated func uploadOne(_ file: FileRecord) async throws {
+        nasActivity.set(file.id, "Waiting for NAS file information")
+        defer { nasActivity.set(file.id, nil) }
         guard let sourceHash = file.sourceHashHex else {
             // Should not happen (hash is a milestone flush) — recover by re-copy.
             await budget.release(file.id)   // free this file's reservation; stageOne re-reserves
@@ -369,6 +372,7 @@ public actor SessionRunner {
                 let existingSize = (try? destURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init)
                 if existingSize == file.size {
                     let meter = self.meter
+                    nasActivity.set(file.id, nil)
                     verification.begin(file)
                     let existingHash: String
                     do {
@@ -415,7 +419,7 @@ public actor SessionRunner {
             options.preallocate = false   // smbfs returns ENOTSUP; skip the wasted fcntl per file
             let meter = self.meter
             let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: writeURL, options: options,
-                                                         gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
+                                                         gate: pauseGate, phase: { [nasActivity] in nasActivity.copyPhase($0, file: file.id) }) { meter.addBytes($0, stage: .nasWrite) }
             // Bonus integrity: the bytes we just read from staging must still
             // hash to the SD-read hash. Staging rot ⇒ re-copy from the card.
             guard result.sha256Hex == sourceHash else {
@@ -453,6 +457,7 @@ public actor SessionRunner {
         // isn't reachable there — F_FULLFSYNC is ENOTSUP.)
         let verifyStarted = Date()
         let meter = self.meter
+        nasActivity.set(file.id, nil)
         verification.begin(file)
         var verified = false
         defer { verification.finish(file, verified: verified) }
@@ -726,6 +731,7 @@ public actor SessionRunner {
         snapshot.filesTotal = totalFiles
         snapshot.filesSettled = settledFiles
         snapshot.verification = verification.snapshot()
+        snapshot.nasActivityDetail = nasActivity.detail()
         snapshot.uploadFilesRemaining = work.nasFiles
         snapshot.filesFailed = work.failedFiles
         snapshot.currentFileName = snapshot.verification?.currentFile ?? currentFileName
