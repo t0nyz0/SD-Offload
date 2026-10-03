@@ -16,7 +16,7 @@ public enum TransferFailure: Codable, Equatable, Sendable {
     public var summary: String {
         switch self {
         case .ioError(let errno, let stage):
-            return "I/O error during \(stage) (\(String(cString: strerror(errno))))"
+            return "I/O error during \(stage) (errno \(errno): \(String(cString: strerror(errno))))"
         case .hashMismatch(let stage):
             return "Checksum mismatch during \(stage)"
         case .sourceMissing:
@@ -37,10 +37,11 @@ public enum TransferFailure: Codable, Equatable, Sendable {
     }
 }
 
-public struct OffloadError: Error, CustomStringConvertible {
+public struct OffloadError: Error, LocalizedError, CustomStringConvertible {
     public let failure: TransferFailure
     public init(_ failure: TransferFailure) { self.failure = failure }
     public var description: String { failure.summary }
+    public var errorDescription: String? { failure.summary }
 
     public static func posix(_ err: Int32, stage: String) -> OffloadError {
         OffloadError(.ioError(errno: err, stage: stage))

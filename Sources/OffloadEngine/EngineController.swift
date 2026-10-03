@@ -37,7 +37,7 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     public func rescan() { Task { await coordinator.rescan() } }
 }
 
-private actor Coordinator {
+actor Coordinator {
     let configProvider: ConfigProvider
     let configMutator: ConfigMutator
     let journal: Journal
@@ -63,6 +63,7 @@ private actor Coordinator {
     // instead of re-scanning a card just sitting in the reader. Cleared on a REAL
     // volumeUnmounted so genuine re-insertion re-checks.
     private var handledThisInsertion: Set<String> = []
+    private var awaitingReinsert: Set<String> = []
     private var eventsTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
 
@@ -127,13 +128,20 @@ private actor Coordinator {
         watcher.rescan()
     }
 
-    private func handle(_ event: RawCardEvent) async {
+    func handle(_ event: RawCardEvent) async {
         switch event {
         case .volumeMounted(let volume):
             let config = await configProvider()
-            // Same card back mid-session → resume, regardless of policy.
+            // Recovery follows the same consent policy as a fresh insertion.
             if let runner, runner.card.volumeUUID == volume.info.volumeUUID {
-                await resumeAfterReinsert(volume)
+                guard awaitingReinsert.contains(volume.info.volumeUUID) else { return }
+                switch CardClassifier.classify(volume, config: config) {
+                case .ignore: break
+                case .ask:
+                    pendingCandidates[volume.info.volumeUUID] = volume
+                    emit(.cardAwaitingConsent(volume.info))
+                case .ingest: await resumeAfterReinsert(volume)
+                }
                 return
             }
             if libraryMigrationBlocksIngest() {
@@ -144,17 +152,8 @@ private actor Coordinator {
                     detail: "The card was left untouched. Finish or roll back the folder conversion, then it will be checked again.")))
                 return
             }
-            // Unfinished work for this card resumes even if its policy is now
-            // "ignore"/"ask" — otherwise an interrupted session would be
-            // stranded forever, its card never wiped.
-            if runner == nil, !startingSession, await journal.hasIncompleteSession(cardUUID: volume.info.volumeUUID) {
-                await startSession(volume)
-                return
-            }
-            // Already handled this insertion and nothing to resume → ignore the
-            // duplicate mount instead of re-ingesting. (Sits after the runner-match
-            // and the incomplete-session check, so it never blocks a resume; a real
-            // unmount clears the marker so a genuine re-insert re-checks.)
+            // Suppress duplicate mount signals. A real unmount clears this marker
+            // so the next insertion is classified under the current setting.
             if runner == nil, !startingSession, handledThisInsertion.contains(volume.info.volumeUUID) {
                 return
             }
@@ -179,6 +178,7 @@ private actor Coordinator {
             pendingCandidates.removeValue(forKey: uuid)
             queue.removeAll { $0.info.volumeUUID == uuid }   // a queued card pulled before its turn
             if let runner, runner.card.volumeUUID == uuid {
+                awaitingReinsert.insert(uuid)
                 await runner.cardGone()
             } else {
                 emit(.cardGone)
@@ -188,6 +188,10 @@ private actor Coordinator {
 
     func consent(cardUUID: String) async {
         guard let volume = pendingCandidates.removeValue(forKey: cardUUID) else { return }
+        if runner?.card.volumeUUID == cardUUID {
+            await resumeAfterReinsert(volume)
+            return
+        }
         await startSession(volume)
     }
 
@@ -353,6 +357,7 @@ private actor Coordinator {
     }
 
     private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore) {
+        awaitingReinsert.remove(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
                                    cardWatcher: watcher, emit: emit)
@@ -397,6 +402,7 @@ private actor Coordinator {
         let plan = await planner.merge(scanned: scanned, into: record.files)
         await journal.replaceFiles(plan.files, in: runner.sessionID)
         await runner.cardReturned()
+        awaitingReinsert.remove(volume.info.volumeUUID)
     }
 
     // MARK: - Misc intents

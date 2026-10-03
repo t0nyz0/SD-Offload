@@ -49,8 +49,8 @@ print("  workspace: \(workspace.path)")
 
 // --- Build the fake card -----------------------------------------------------
 // Prefer a real attached exFAT DMG; fall back to a plain directory where disk
-// images are forbidden. Either way the engine sees a mount path it reads and
-// wipes — the safety-critical path is identical.
+// images are unavailable. A directory exercises engine logic but does NOT prove
+// exFAT compatibility; the strict mode refuses that substitution.
 let volName = "OFFLOADTEST-1"
 let dmg = workspace.appendingPathComponent("card.dmg")
 let cardMountPath: String
@@ -60,6 +60,10 @@ if let attached = Fixtures.attachExFATCard(dmgPath: dmg, volName: volName, sizeM
     cardDev = attached.dev
     log("card: real exFAT DMG at \(attached.mount)")
 } else {
+    if ProcessInfo.processInfo.environment["OFFLOAD_REQUIRE_EXFAT"] == "1" {
+        try? FileManager.default.removeItem(at: workspace)
+        fail("exFAT validation required; refusing to substitute a local directory")
+    }
     let dir = workspace.appendingPathComponent("card", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     cardMountPath = dir.path

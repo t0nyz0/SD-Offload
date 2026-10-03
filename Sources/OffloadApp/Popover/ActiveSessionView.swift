@@ -107,10 +107,12 @@ struct ActiveSessionView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
             if vm.resumed {
-                Text("RESUMED")
+                Text("RECOVERED")
                     .font(.system(size: 8, weight: .bold))
                     .padding(.horizontal, 4).padding(.vertical, 1.5)
                     .background(Theme.accent.opacity(0.2), in: Capsule())
+                    .help("Continuing saved progress from an unfinished transfer. Completed work is checked before continuing.")
+                    .accessibilityLabel("Recovered progress from an unfinished transfer")
             }
             Spacer()
             if vm.phase == .transferring || isPaused {

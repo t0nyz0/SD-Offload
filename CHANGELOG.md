@@ -5,6 +5,16 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.16] — 2026-10-03
+
+### Fixed
+- Interrupted-transfer recovery and card reinsertion respect the current Ask / Ignore / Automatic insertion policy instead of bypassing consent.
+- Preserve the operation and POSIX error code in wipe errors shown in the UI and saved in history, replacing the unhelpful generic error message.
+
+### Changed
+- Clarify the recovered-transfer badge with an explanation of saved progress.
+- Add strict exFAT harness validation that refuses a local-directory fallback. The observed physical-card erasure failure remains undiagnosed; this release does not claim to fix it or weaken deletion safeguards.
+
 ## [1.7.15] — 2026-10-03
 
 ### Fixed

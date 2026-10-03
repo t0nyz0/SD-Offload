@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-155%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-158%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -193,6 +193,12 @@ pull request. Regression tests cover SMB-safe exclusive creation, preserving exi
 corrupt-copy detection, stalled verification, and retry progress that must not claim completion.
 They also cover bounded recovery of stuck card probes, mount identity changes, large sequential
 verification reads, and NAS flush-wait status.
+Recovery also respects Ask and Ignore for unfinished sessions; POSIX errors retain their operation and code.
+To require an actual disposable exFAT image instead of accepting a local-directory fallback, run
+`OFFLOAD_REQUIRE_EXFAT=1 swift run offload-harness run`. A failure to create the image is a failed
+compatibility check, not a passing wipe test. The observed physical-card erasure failure is still
+undiagnosed; version 1.7.16 improves its diagnostics without changing the deletion algorithm.
+
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
 
@@ -243,7 +249,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 155 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 158 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 

@@ -29,7 +29,10 @@ enum Fixtures {
     static func attachExFATCard(dmgPath: URL, volName: String, sizeMB: Int) -> (dev: String, mount: String)? {
         let create = Sh.run("/usr/bin/hdiutil", ["create", "-size", "\(sizeMB)m", "-fs", "ExFAT",
                                                  "-volname", volName, "-ov", dmgPath.path])
-        guard create.status == 0 else { return nil }
+        guard create.status == 0 else {
+            print("  exFAT image creation unavailable: \(create.out.trimmingCharacters(in: .whitespacesAndNewlines))")
+            return nil
+        }
         let (status, out) = Sh.run("/usr/bin/hdiutil", ["attach", dmgPath.path, "-nobrowse", "-plist"])
         guard status == 0, let data = out.data(using: .utf8),
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
