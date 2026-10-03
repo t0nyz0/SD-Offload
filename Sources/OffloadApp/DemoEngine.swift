@@ -50,7 +50,7 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
                 snap.hop2BytesTotal = 240_000_000; snap.hop2BytesDone = slowNAS ? 80_000_000 : 240_000_000
                 snap.uploadFilesRemaining = slowNAS ? 4 : 0
                 snap.nasActivityDetail = slowNAS ? "Waiting for NAS to finish saving · \(10 + step)s" : nil
-                snap.filesTotal = 6; snap.filesSettled = 6
+                snap.filesTotal = 6; snap.filesSettled = slowNAS ? 1 + step / 40 : 6
                 snap.verification = VerificationProgress(label: slowNAS ? "Checking NAS copies" : "Final NAS safety check", bytesDone: Int64(40_000_000 + step * 1_000_000),
                     bytesTotal: 240_000_000, filesDone: 1 + step / 40, filesTotal: 6,
                     currentFile: "DSCF1162.RAF", activeFiles: 1, bytesPerSecond: 8_500_000, secondsWithoutProgress: 0)

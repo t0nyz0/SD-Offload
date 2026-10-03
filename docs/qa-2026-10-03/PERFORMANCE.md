@@ -45,5 +45,7 @@ the app changes alone cannot establish that NAS/network latency is resolved.
 - Coverage checks complete byte hashing across large read boundaries, flush phase
   ordering, cleared wait messages, bounded stuck-probe recovery, independent readers,
   and changed mount identities.
+- Native demo UI smoke check confirmed the NAS flush-wait message is visible, readable,
+  and exposed in the accessibility tree. The demo used isolated application data.
 - Physical long-duration sleep/wake and repeated card insertion still require hardware
   validation. The user's real card was not used for destructive development tests.
