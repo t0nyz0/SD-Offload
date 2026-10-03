@@ -211,7 +211,7 @@ public actor SessionRunner {
 
         let meter = self.meter
         let result = try await ChunkedIO.copyAndHash(from: src, to: partial, options: options,
-                                                     gate: pauseGate) { meter.addBytes($0, stage: .sdRead) }
+                                                     gate: pauseGate, progress: { meter.addBytes($0, stage: .sdRead) })
         guard result.bytes == file.size else {
             try? FileManager.default.removeItem(at: partial)
             throw OffloadError(.sourceChangedDuringCopy)
@@ -541,7 +541,7 @@ public actor SessionRunner {
         options.preallocate = false
         options.exclusiveCreate = direct
         let result = try await ChunkedIO.copyAndHash(from: sourceURL, to: writeURL, options: options,
-                                                     gate: pauseGate) { meter.addBytes($0, stage: .nasWrite) }
+                                                     gate: pauseGate, progress: { meter.addBytes($0, stage: .nasWrite) })
         guard result.sha256Hex == sourceHash else {
             try? fm.removeItem(at: writeURL)
             throw OffloadError(.hashMismatch(stage: "second-copy staging re-read"))
