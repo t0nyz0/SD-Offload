@@ -283,6 +283,16 @@ struct ImageViewer: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Pick marks a photo to keep; Reject marks it for review. Neither changes Favorites or deletes the file.")
+            if canDelete {
+                Divider().frame(height: 18).overlay(.white.opacity(0.2))
+                Button(role: .destructive) { confirmingDelete = true } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .help("Move to Trash — review which photo files to remove (⌦)")
+                .accessibilityLabel("Delete photo — review files to move to Trash")
+            }
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)

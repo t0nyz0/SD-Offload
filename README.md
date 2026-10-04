@@ -202,6 +202,10 @@ undiagnosed; version 1.7.16 improves its diagnostics without changing the deleti
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
 
+The photo viewer includes a labeled **Delete** button beside Pick / Reject. It opens the same
+confirmation and JPEG/RAW choices as the Library and moves files to Trash; if Trash is
+unavailable, originals are preserved. Deletion is available while browsing the NAS.
+
 ## Configuration
 
 Everything is in **Settings** (from the popover's gear menu):

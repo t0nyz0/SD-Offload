@@ -5,6 +5,11 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.17] — 2026-10-03
+
+### Added
+- Visible Delete button beside Pick / Reject in the photo viewer's bottom toolbar. It opens the existing confirmation with JPEG/RAW choices and uses the Library's move-to-Trash behavior; card browsing remains read-only.
+
 ## [1.7.16] — 2026-10-03
 
 ### Fixed
