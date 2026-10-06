@@ -33,6 +33,7 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     public func cancelWipe() { Task { await coordinator.runner?.cancelWipe() } }
     public func eject() { Task { await coordinator.eject() } }
     public func retry() { Task { await coordinator.retry() } }
+    public func retryWipe(sessionID: UUID) { Task { await coordinator.retryWipe(sessionID: sessionID) } }
     public func refreshNASGlance() { Task { await coordinator.refreshNASGlance() } }
     public func rescan() { Task { await coordinator.rescan() } }
 }
@@ -44,6 +45,7 @@ actor Coordinator {
     let emit: @Sendable (EngineEvent) -> Void
     let watcher = CardWatcher()
     let nas: NASLocator
+    private let cardPresenceCheck: @Sendable (CardInfo) -> Bool
 
     private(set) var runner: SessionRunner?
     // Set synchronously the instant a start is committed to — BEFORE the first
@@ -70,12 +72,14 @@ actor Coordinator {
     init(configProvider: @escaping ConfigProvider,
          configMutator: @escaping ConfigMutator,
          journal: Journal,
+         cardPresenceCheck: @escaping @Sendable (CardInfo) -> Bool = { CardWatcher.isMounted($0) },
          emit: @escaping @Sendable (EngineEvent) -> Void) {
         self.configProvider = configProvider
         self.configMutator = configMutator
         self.journal = journal
         self.emit = emit
         self.nas = NASLocator(configProvider: configProvider)
+        self.cardPresenceCheck = cardPresenceCheck
     }
 
     func start() async {
@@ -356,14 +360,16 @@ actor Coordinator {
         return state.status != .completed && state.status != .rolledBack
     }
 
-    private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore) {
+    private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore,
+                              wipeOnly: Bool = false) {
         awaitingReinsert.remove(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
                                    cardWatcher: watcher, emit: emit)
         self.runner = runner
         Task { [weak self] in
-            await runner.run()
+            if wipeOnly { await runner.runWipeRetry() }
+            else { await runner.run() }
             await self?.runnerFinished(runner)
         }
     }
@@ -420,5 +426,43 @@ actor Coordinator {
         // Fresh session over the same card: files already on the NAS settle as
         // hash-proven skippedDuplicate, so a retry only pays a card re-read.
         await startSession(lastVolume)
+    }
+
+    func retryWipe(sessionID: UUID) async {
+        guard runner == nil, !startingSession, !libraryMigrationBlocksIngest() else { return }
+        startingSession = true
+        defer { startingSession = false }
+        guard var record = await journal.historySession(id: sessionID), record.canRetryWipe else {
+            emit(.attention(AttentionItem(severity: .error, title: "Cannot retry erasure",
+                detail: "This transfer is not fully verified. Retry the transfer before erasing the card.")))
+            return
+        }
+        let volume = lastVolume?.info.volumeUUID == record.cardVolumeUUID ? lastVolume
+            : pendingCandidates[record.cardVolumeUUID]
+        guard let volume, cardPresenceCheck(volume.info),
+              await Task.detached(priority: .userInitiated, operation: {
+                  (try? String(contentsOf: URL(fileURLWithPath: volume.info.mountPath)
+                    .appendingPathComponent(Paths.cardSessionMarkerName), encoding: .utf8))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+              }).value == record.cardSessionToken else {
+            emit(.attention(AttentionItem(severity: .error, title: "Insert the original card",
+                detail: "Retry wipe only works on the card from this transfer. Nothing was copied or erased.")))
+            return
+        }
+        let config = await configProvider()
+        record.wipeReport = nil
+        record.endedAt = nil
+        do { try await journal.begin(record) }
+        catch {
+            emit(.attention(AttentionItem(severity: .error, title: "Cannot retry erasure",
+                detail: "The saved file list could not be written safely. \(error.localizedDescription)")))
+            return
+        }
+        lastVolume = volume
+        pendingCandidates.removeValue(forKey: record.cardVolumeUUID)
+        emit(.sessionStarted(sessionID: record.id, card: volume.info, resumed: false))
+        emit(.planned(files: record.fileCount, bytes: record.files.reduce(0) { $0 + $1.size }))
+        launchRunner(sessionID: record.id, card: volume.info, config: config,
+                     staging: StagingStore(rootPath: config.stagingRootPath), wipeOnly: true)
     }
 }

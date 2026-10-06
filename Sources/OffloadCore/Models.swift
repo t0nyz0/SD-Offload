@@ -259,6 +259,12 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
     /// back to the journal's file list for older records without stats.
     public var fileCount: Int { stats.filesPlanned > 0 ? stats.filesPlanned : files.count }
 
+    /// A wipe retry reuses this manifest; incomplete transfers still need copying.
+    public var canRetryWipe: Bool {
+        state == .doneWipeBlocked && cardSessionToken != nil && !files.isEmpty
+            && files.allSatisfy { $0.state.isWipeEligible && !($0.sourceHashHex ?? "").isEmpty }
+    }
+
     public init(id: UUID = UUID(), startedAt: Date = Date(), cardVolumeUUID: String,
                 cardVolumeName: String, cardCapacityBytes: Int64, nasMntFromName: String? = nil,
                 cardSessionToken: String? = nil,

@@ -137,6 +137,7 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
     func cancelWipe() { emit(.phase(.transferring)) }
     func eject() {}
     func retry() {}
+    func retryWipe(sessionID: UUID) {}
     func rescan() {}
     func refreshNASGlance() {
         emit(.nasGlance(NASGlance(mounted: true, healthy: true,

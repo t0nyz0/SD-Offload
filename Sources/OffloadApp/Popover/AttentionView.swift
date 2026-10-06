@@ -43,15 +43,24 @@ struct AttentionView: View {
                 Button {
                     app.retryTapped()
                 } label: {
-                    Text("Retry").frame(maxWidth: .infinity)
+                    Text(vm.retryButtonTitle).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .help(vm.completed?.canRetryWipe == true
+                    ? "Check the saved NAS copies and retry erasure. Photos will not be copied again."
+                    : "Retry copying and verifying photos that did not finish transferring.")
 
                 Button("Show staged…") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: app.settings.config.stagingRootPath))
                 }
             }
             .padding(.horizontal, 30)
+
+            if vm.completed?.canRetryWipe == true {
+                Text("Checks your NAS copies, then retries erasure. No photos are copied again.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 24)
+            }
         }
         .padding(.vertical, 14)
     }

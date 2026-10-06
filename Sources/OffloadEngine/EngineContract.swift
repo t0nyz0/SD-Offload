@@ -104,6 +104,7 @@ public protocol EngineControlling: AnyObject {
     func cancelWipe()
     func eject()
     func retry()
+    func retryWipe(sessionID: UUID)
     func refreshNASGlance()
     /// Force a re-check of every mounted volume, ignoring the per-insertion dedup.
     /// Recovery for a card whose insert was swallowed because its previous removal

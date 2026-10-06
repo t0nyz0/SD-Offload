@@ -64,6 +64,10 @@ public final class CardWatcher: @unchecked Sendable {
         continuation = cont
     }
 
+    static func isMounted(_ card: CardInfo) -> Bool {
+        mountedVolumes()[card.bsdName]?.path == card.mountPath
+    }
+
     public func start() {
         guard daSession == nil, let session = DASessionCreate(kCFAllocatorDefault) else { return }
         daSession = session

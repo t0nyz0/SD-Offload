@@ -59,6 +59,8 @@ final class SessionViewModel {
     var plannedFiles = 0
     var plannedBytes: Int64 = 0
 
+    var retryButtonTitle: String { completed?.canRetryWipe == true ? "Retry wipe" : "Retry transfer" }
+
     @ObservationIgnored var scratch = ProgressSnapshot()
 
     init(sessionID: UUID, card: CardInfo, resumed: Bool) {

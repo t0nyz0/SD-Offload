@@ -131,7 +131,14 @@ final class AppState {
             session?.phase = phase
             recomputeMenuBar()
             if phase == .done || phase == .doneWipeBlocked || phase == .cancelled || phase == .failed {
-                scheduleIdleReset(after: phase == .done ? 6 : 60)
+                session?.applyScratchTick()
+                tickTask?.cancel()
+                if phase == .doneWipeBlocked || phase == .failed {
+                    // Keep the recovery action available until the user acts.
+                    doneResetTask?.cancel()
+                } else {
+                    scheduleIdleReset(after: phase == .done ? 6 : 60)
+                }
                 refreshRecent()
                 refreshNASGlance()
             }
@@ -313,7 +320,13 @@ final class AppState {
     func pauseTapped() { engine.pause() }
     func resumeTapped() { engine.resume() }
     func cancelTapped() { engine.cancel() }
-    func retryTapped() { engine.retry() }
+    func retryTapped() {
+        if let record = session?.completed, record.canRetryWipe {
+            engine.retryWipe(sessionID: record.id)
+        } else {
+            engine.retry()
+        }
+    }
     func confirmWipeTapped() { engine.confirmWipe() }
     func cancelWipeTapped() { engine.cancelWipe() }
     func ejectTapped() { engine.eject() }

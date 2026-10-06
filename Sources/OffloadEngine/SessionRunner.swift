@@ -47,6 +47,7 @@ public actor SessionRunner {
     private var userPaused = false
     private var cancelled = false
     private var wipeCancelled = false
+    private var isWipeRetry = false
     private var waitingForNAS = false
     private var sessionStartedAt = Date()
     // Creates each NAS date dir once per session (photos cluster in 1–3 dirs),
@@ -73,6 +74,29 @@ public actor SessionRunner {
     }
 
     // MARK: - Lifecycle
+
+    /// Reuse the verified manifest without scanning, staging, uploading, or
+    /// backfilling destinations. All normal final destination and source checks
+    /// still run; missing/changed backups block erasure instead of being copied.
+    public func runWipeRetry() async {
+        guard let record = await journal.session(id: sessionID), record.canRetryWipe else {
+            emit(.attention(AttentionItem(severity: .error, title: "Cannot retry erasure",
+                detail: "The saved transfer is not fully verified. Your card was left untouched.")))
+            return
+        }
+        isWipeRetry = true
+        sessionStartedAt = Date()
+        power = PowerAssertion(reason: "Retrying erasure of \(card.volumeName)")
+        defer { power?.end(); samplerTask?.cancel() }
+        totalFiles = record.files.count
+        settledFiles = totalFiles
+        hop1TotalBytes = record.files.reduce(0) { $0 + $1.size }
+        hop1BaseBytes = hop1TotalBytes
+        hop2BaseBytes = hop1TotalBytes
+        verification.reset(files: record.files, label: "Checking saved NAS copies", acceptingRecorded: true)
+        startSampler()
+        await wrapUp()
+    }
 
     public func run() async {
         guard let record = await journal.session(id: sessionID) else { return }
@@ -960,14 +984,16 @@ public actor SessionRunner {
 
     private func finalize(state: SessionState, record: SessionRecord) async {
         let finals = meter.finals()
-        await journal.updateStats(in: sessionID) { stats in
-            stats.avgSDReadBps = finals.avgSDReadBps
-            stats.peakSDReadBps = finals.peakSDReadBps
-            stats.avgNASWriteBps = finals.avgNASWriteBps
-            stats.peakNASWriteBps = finals.peakNASWriteBps
-            stats.timeline = finals.timeline
-            stats.bytesRead = self.meter.bytesTotal(.sdRead)
-            stats.bytesUploaded = self.meter.bytesTotal(.nasWrite)
+        if !isWipeRetry {
+            await journal.updateStats(in: sessionID) { stats in
+                stats.avgSDReadBps = finals.avgSDReadBps
+                stats.peakSDReadBps = finals.peakSDReadBps
+                stats.avgNASWriteBps = finals.avgNASWriteBps
+                stats.peakNASWriteBps = finals.peakNASWriteBps
+                stats.timeline = finals.timeline
+                stats.bytesRead = self.meter.bytesTotal(.sdRead)
+                stats.bytesUploaded = self.meter.bytesTotal(.nasWrite)
+            }
         }
         await journal.setEnded(in: sessionID)
         await journal.setSessionState(state, in: sessionID)

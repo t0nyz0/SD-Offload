@@ -5,6 +5,16 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.19] — 2026-10-06
+
+### Fixed
+- Failed erasure now offers **Retry wipe**, using the saved verified manifest and destination names without rescanning, staging, uploading, or backfilling backups. Fresh NAS/second-backup checks and source validation still run before erasure; only remaining approved files are removed.
+- Preserve transfer statistics and staged recovery data when retrying erasure. A missing, changed, or different card cannot start the wipe retry; repeated clicks start one attempt.
+
+### Changed
+- Distinguish **Retry wipe** from **Retry transfer**, explain the action, and keep failure recovery visible until the user acts. Stop the display timer when a session finishes.
+- Add ten focused wipe-retry regressions; the full suite now has 176 passing tests plus one optional live-provider test.
+
 ## [1.7.18] — 2026-10-06
 
 ### Fixed

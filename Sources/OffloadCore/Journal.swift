@@ -72,6 +72,12 @@ public actor Journal {
 
     public func session(id: UUID) -> SessionRecord? { active[id] }
 
+    public func historySession(id: UUID) -> SessionRecord? {
+        let record = JSONIO.loadGuarded(SessionRecord.self,
+            from: historyDir.appendingPathComponent("session-\(id.uuidString).json"))
+        return record?.id == id ? record : nil
+    }
+
     /// Find an incomplete session for this card on disk (after crash/relaunch or
     /// re-insert), apply the crash remap, and adopt it as active.
     public func openIncompleteSession(cardUUID: String) -> SessionRecord? {

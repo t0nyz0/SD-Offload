@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-166%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-176%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -205,6 +205,12 @@ An explicitly authorized physical-card test on October 6 erased all 168 verified
 read-back, countdown, and erasure took 121.8 seconds; this is a wipe validation, not an upload
 benchmark. See the [erasure QA report](docs/qa-2026-10-06/EXFAT-ERASURE.md).
 
+After a fully verified transfer fails erasure, **Retry wipe** checks the saved NAS copies and
+retries only the remaining approved deletions. It does not rescan, stage, upload, or backfill
+photos, and new photos added afterward are preserved. Fresh backup hash checks still take
+time. Incomplete transfers offer **Retry transfer** instead. The failure and its recovery
+action stay visible until you act. See the [wipe-retry QA report](docs/qa-2026-10-06/WIPE-RETRY.md).
+
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
 
@@ -259,7 +265,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 166 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 176 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
