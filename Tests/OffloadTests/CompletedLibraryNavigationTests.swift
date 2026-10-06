@@ -39,7 +39,7 @@ final class CompletedLibraryNavigationTests: XCTestCase {
     }
 
     @MainActor
-    func testLegacyRecordsUseActualDateFoldersForEveryLayout() {
+    func testCaptureDatesAndLegacyFoldersSupportEveryLayout() {
         let named = DateFolderLayout(id: "month-name", name: "Month name", pattern: "{MMMM}/{DD}/{YYYY}")
         for layout in DateFolderLayout.presets + [named] {
             // Folder dates must win over the camera's misleading filesystem dates.
@@ -50,6 +50,16 @@ final class CompletedLibraryNavigationTests: XCTestCase {
             XCTAssertEqual(AppState.uploadedFolder(from: session, nasRoot: nasRoot, layouts: [layout]),
                            nasRoot + "/" + newest, layout.pattern)
         }
+        // A previously recognized numeric layout can parse a custom day/month
+        // layout as a different day. The planner's saved capture date resolves it.
+        let reversed = DateFolderLayout(id: "day-month", name: "Day / month", pattern: "{YYYY}/{DD}/{MM}")
+        let olderDate = date(2026, 6, 10), newestDate = date(2026, 10, 6)
+        let newestFolder = reversed.folderPath(for: newestDate)
+        let session = record([file(reversed.folderPath(for: olderDate), captured: olderDate),
+                              file(newestFolder, captured: newestDate)])
+        XCTAssertEqual(AppState.uploadedFolder(from: session, nasRoot: nasRoot,
+                                              layouts: [.nestedNumeric, reversed]),
+                       nasRoot + "/" + newestFolder)
     }
 
     @MainActor

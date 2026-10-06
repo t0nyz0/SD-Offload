@@ -7,16 +7,17 @@ failed on the old code with `/fixture/nas/2026/09/29` instead of the expected Oc
 
 Version 1.7.20 opens the newest verified capture day **in the completed batch**.
 The saved destination folder is retained rather than rebuilding a path, so custom
-layouts and resolved filenames remain correct. Folder dates determine chronology;
-saved capture/creation/modification metadata provides a fallback for unrecognized paths.
+layouts and resolved filenames remain correct. The planner's saved capture date
+determines chronology, including ambiguous day/month layouts. Legacy records fall back
+to parsed folder dates, then creation/modification metadata for unrecognized paths.
 Only NAS-verified, skipped-duplicate, and wiped records participate. No new filesystem
-or network reads are needed to choose the folder; each unique folder is parsed once.
+or network reads are needed to choose the folder; only unique legacy folders need parsing.
 
 | Regression | Result |
 | --- | --- |
 | One newer photo wins over 20 older photos | PASS; failed before the fix |
 | File order and equal counts across a year boundary | PASS |
-| Legacy records, seven presets, and non-alphabetical custom month folders | PASS |
+| Legacy records, seven presets, named months, and ambiguous custom day/month layouts | PASS |
 | Wiped/duplicate records included; unfinished/failed copies excluded; saved path retained | PASS |
 | Empty or unverified batch does not request navigation | PASS |
 | Library loads the newest folder's photos while older navigation is pending | PASS |

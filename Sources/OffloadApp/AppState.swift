@@ -341,18 +341,24 @@ final class AppState {
     static func uploadedFolder(from record: SessionRecord, nasRoot: String,
                                layouts: [DateFolderLayout] = DateFolderLayout.presets) -> String? {
         var folderDates: [String: Date] = [:]
+        var captureDates: [String: Date] = [:]
         for file in record.files where file.state.isWipeEligible {
             let folder = (file.destRelPath as NSString).deletingLastPathComponent
             guard folder != ".", !folder.isEmpty else { continue }
             let date = file.captureDate ?? file.creationDate ?? file.mtime
             folderDates[folder] = max(folderDates[folder] ?? .distantPast, date)
+            if let captured = file.captureDate {
+                captureDates[folder] = max(captureDates[folder] ?? .distantPast, captured)
+            }
         }
-        // Parse once per unique folder, not once per photo. The actual destination
-        // day is authoritative even if legacy records lack captureDate or camera
-        // filesystem timestamps disagree. Saved metadata covers unrecognized paths.
+        // The planner's saved capture day resolves ambiguous custom layouts.
+        // Legacy records fall back to the folder date before camera filesystem
+        // timestamps. Parse only unique folders lacking a recorded capture date.
+        let calendar = Calendar.current
+        let recognizedLayouts = layouts + DateFolderLayout.presets
         let candidates = folderDates.map { folder, fallback in
-            (folder: folder, date: DateFolderLayout.firstParse(folderPath: folder,
-                layouts: layouts + DateFolderLayout.presets)?.date ?? fallback)
+            (folder: folder, date: captureDates[folder].map { calendar.startOfDay(for: $0) }
+                ?? DateFolderLayout.firstParse(folderPath: folder, layouts: recognizedLayouts)?.date ?? fallback)
         }
         guard let newest = candidates.max(by: {
             $0.date == $1.date ? $0.folder < $1.folder : $0.date < $1.date
