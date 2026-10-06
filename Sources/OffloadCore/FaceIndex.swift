@@ -102,10 +102,14 @@ public actor FaceIndex {
 
     /// Photos containing a confirmed detection of `identity`.
     public func photos(withIdentity id: UUID, underPrefix prefix: String? = nil) -> Set<String> {
+        photos(withIdentity: id, underPrefixes: prefix.map { [$0] })
+    }
+
+    public func photos(withIdentity id: UUID, underPrefixes prefixes: [String]?) -> Set<String> {
         ensureLoaded()
         var out = Set<String>()
         for (path, dets) in byPath {
-            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if let prefixes, !prefixes.contains(where: { Self.isUnder(path, $0) }) { continue }
             if dets.contains(where: { $0.assignedID == id }) { out.insert(path) }
         }
         return out
@@ -115,10 +119,15 @@ public actor FaceIndex {
     /// best-quality first, optionally filtered by kind and root.
     public func unassigned(kind: Detection.Kind? = nil, underPrefix prefix: String? = nil)
         -> [(path: String, detection: Detection)] {
+        unassigned(kind: kind, underPrefixes: prefix.map { [$0] })
+    }
+
+    public func unassigned(kind: Detection.Kind? = nil, underPrefixes prefixes: [String]?)
+        -> [(path: String, detection: Detection)] {
         ensureLoaded()
         var out: [(String, Detection)] = []
         for (path, dets) in byPath {
-            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if let prefixes, !prefixes.contains(where: { Self.isUnder(path, $0) }) { continue }
             for d in dets where d.assignedID == nil && (kind == nil || d.kind == kind) {
                 out.append((path, d))
             }
@@ -127,10 +136,14 @@ public actor FaceIndex {
     }
 
     public func counts(underPrefix prefix: String? = nil) -> (detections: Int, named: Int, unnamed: Int) {
+        counts(underPrefixes: prefix.map { [$0] })
+    }
+
+    public func counts(underPrefixes prefixes: [String]?) -> (detections: Int, named: Int, unnamed: Int) {
         ensureLoaded()
         var total = 0, named = 0
         for (path, dets) in byPath {
-            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if let prefixes, !prefixes.contains(where: { Self.isUnder(path, $0) }) { continue }
             for d in dets { total += 1; if d.assignedID != nil { named += 1 } }
         }
         return (total, named, total - named)
@@ -155,11 +168,15 @@ public actor FaceIndex {
     /// Replaces N sequential photos(withIdentity:) calls when filtering by a
     /// whole kind ("all people" / "all pets").
     public func photos(withIdentities ids: Set<UUID>, underPrefix prefix: String? = nil) -> Set<String> {
+        photos(withIdentities: ids, underPrefixes: prefix.map { [$0] })
+    }
+
+    public func photos(withIdentities ids: Set<UUID>, underPrefixes prefixes: [String]?) -> Set<String> {
         ensureLoaded()
         guard !ids.isEmpty else { return [] }
         var out = Set<String>()
         for (path, dets) in byPath {
-            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if let prefixes, !prefixes.contains(where: { Self.isUnder(path, $0) }) { continue }
             if dets.contains(where: { $0.assignedID.map(ids.contains) ?? false }) {
                 out.insert(path)
             }

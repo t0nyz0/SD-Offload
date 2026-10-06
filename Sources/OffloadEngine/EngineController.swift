@@ -365,7 +365,7 @@ actor Coordinator {
         awaitingReinsert.remove(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
-                                   cardWatcher: watcher, emit: emit)
+                                   cardWatcher: watcher, wipeOnly: wipeOnly, emit: emit)
         self.runner = runner
         Task { [weak self] in
             if wipeOnly { await runner.runWipeRetry() }
@@ -396,6 +396,23 @@ actor Coordinator {
 
     private func resumeAfterReinsert(_ volume: CandidateVolume) async {
         guard let runner else { return }
+        if runner.wipeOnly {
+            guard let record = await journal.session(id: runner.sessionID),
+                  volume.info.mountPath == runner.card.mountPath, cardPresenceCheck(volume.info),
+                  await Task.detached(priority: .userInitiated, operation: {
+                      (try? String(contentsOf: URL(fileURLWithPath: volume.info.mountPath)
+                        .appendingPathComponent(Paths.cardSessionMarkerName), encoding: .utf8))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                  }).value == record.cardSessionToken else {
+                emit(.attention(AttentionItem(severity: .error, title: "Insert the original card",
+                    detail: "The wipe retry is still waiting for its original card. Nothing was copied or erased.")))
+                return
+            }
+            lastVolume = volume
+            await runner.cardReturned()
+            awaitingReinsert.remove(volume.info.volumeUUID)
+            return
+        }
         let config = await configProvider()
         emit(.phase(.scanning))
         guard let record = await journal.session(id: runner.sessionID) else { return }

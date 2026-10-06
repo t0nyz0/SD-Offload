@@ -7,6 +7,17 @@ import OffloadCore
 public struct LibraryBrowser: Sendable {
     public init() {}
 
+    /// Index IDs retain their original spelling. Resolve the root once, off the
+    /// UI thread, so both legacy alias IDs and canonical enumeration IDs match.
+    public func indexPrefixes(root: URL) -> [String] {
+        var prefixes = Set([root.path, root.resolvingSymlinksInPath().path])
+        if let resolved = realpath(root.path, nil) {
+            prefixes.insert(String(cString: resolved))
+            free(resolved)
+        }
+        return prefixes.sorted()
+    }
+
     /// List one directory: subfolders first (newest-name first, so date folders
     /// read chronologically), then media files (by name). Non-media and hidden
     /// files are skipped.

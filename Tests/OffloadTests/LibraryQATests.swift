@@ -64,6 +64,81 @@ final class LibraryQATests: XCTestCase {
     }
 
     @MainActor
+    func testTagSearchAndSuggestionsIncludeCanonicalAndLegacyRootPaths() async throws {
+        let library = root.appendingPathComponent("photos").resolvingSymlinksInPath()
+        let alias = root.appendingPathComponent("photos-link")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: library)
+        let model = LibraryModel(nasRootPath: alias.path, cardRootPath: nil)
+        model.openPinned(alias.path)
+        let canonical = try XCTUnwrap(realpath(library.path, nil))
+        let canonicalPath = String(cString: canonical)
+        free(canonical)
+        let paths = [canonicalPath + "/canonical.JPG",
+                     alias.appendingPathComponent("legacy.JPG").path,
+                     library.path + "Backup/outside.JPG"]
+        for path in paths {
+            let entry = LibraryEntry(id: path, name: (path as NSString).lastPathComponent,
+                                     kind: .media(.photo), size: 7, modified: Date())
+            _ = try await model.saveTags(["QA audit"], for: entry)
+        }
+        model.searchText = "qa audit"
+        for _ in 0..<200 {
+            if model.isSearching && model.suggestions.first?.count == 2 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.isSearching)
+        XCTAssertEqual(Set(model.displayedEntries.map(\.id)), Set(paths.prefix(2)))
+        XCTAssertEqual(model.suggestions.map(\.tag), ["qa audit"])
+        XCTAssertEqual(model.suggestions.map(\.count), [2])
+    }
+
+    @MainActor
+    func testFaceSearchAndReviewIncludeRootAliasesWithoutCrossingLibraryBoundary() async throws {
+        let library = root.appendingPathComponent("photos")
+        let alias = root.appendingPathComponent("photos-link")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: library)
+        let canonical = try XCTUnwrap(realpath(library.path, nil))
+        let canonicalPath = String(cString: canonical)
+        free(canonical)
+        let model = LibraryModel(nasRootPath: alias.path, cardRootPath: nil)
+        model.openPinned(alias.path)
+        let person = await model.identityIndex.create(name: "Audit Person", kind: .person,
+                                                      embedderID: "fixture", exemplar: [1, 0])
+        let paths = [canonicalPath + "/named.JPG", alias.appendingPathComponent("unnamed.JPG").path,
+                     canonicalPath + "Backup/outside.JPG"]
+        for (i, path) in paths.enumerated() {
+            await model.photoIndex.put(PhotoRecord(path: path, size: 7, mtime: Date(), labels: [], animals: []))
+            let detection = Detection(kind: .face, bbox: NormRect(x: 0, y: 0, w: 0.2, h: 0.2),
+                                      embedding: [1, 0], embedderID: "fixture", quality: 1,
+                                      assignedID: i == 1 ? nil : person.id)
+            await model.faceIndex.setDetections([detection], for: path)
+        }
+        await model.refreshFaceState()
+        XCTAssertEqual(model.faceUnnamed, 1)
+        model.reviewUnnamedFaces()
+        for _ in 0..<200 {
+            if model.displayedEntries.map(\.id) == [paths[1]] { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.displayedEntries.map(\.id), [paths[1]])
+        model.filterByIdentity(person.id)
+        for _ in 0..<200 {
+            if model.displayedEntries.map(\.id) == [paths[0]] { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.displayedEntries.map(\.id), [paths[0]])
+        model.clearFaceFilter()
+        model.searchText = "Audit Person"
+        for _ in 0..<200 {
+            if model.isSearching { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.displayedEntries.map(\.id), [paths[0]])
+    }
+
+    @MainActor
     func testCompletedBatchOpensNewestDayAndLoadsItsPhotos() async throws {
         let oldDay = root.appendingPathComponent("2026/09/29")
         let newDay = root.appendingPathComponent("2026/10/06")

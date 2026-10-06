@@ -5,6 +5,16 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.21] — 2026-10-06
+
+### Fixed
+- Keep a wipe-only retry on its original verified manifest if the card is removed and reinserted. Recheck the card token and mount before continuing the saved consent/countdown/checks; never rescan, start staging workers, or include newly added photos.
+- Search edited tags and named faces, show tag suggestions, and review unnamed faces through either the configured library path or its canonical filesystem alias. Preserve existing index IDs and scope results to the selected library. Resolve the root once in background work rather than touching the filesystem for each photo or keystroke.
+
+### Added
+- Six regressions for reinsertion during a wipe retry, a different card token on reinsertion, NAS corruption while awaiting consent, empty interrupted recovery directories with an unsupported-system-call fallback, and tag/face searches across library aliases. The full suite has 188 passing tests plus an opt-in live-provider test, also exercised successfully against both Claude and Codex.
+- Follow-up QA report covering destructive-path regressions, native Library/settings checks, local performance, a live SMB probe, and the verified physical-card erasure evidence.
+
 ## [1.7.20] — 2026-10-06
 
 ### Fixed

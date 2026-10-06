@@ -52,6 +52,22 @@ final class ExFATErasureTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: source), original)
     }
 
+    func testEmptyInterruptedRecoveryDirectoryAndENOSYSFallback() async throws {
+        let (file, session, journal, verdict) = try await fixture()
+        let source = root.appendingPathComponent(file.relPath), original = try Data(contentsOf: source)
+        let recovery = root.appendingPathComponent(Wiper.recoveryName(fileID: file.id, name: file.relPath))
+        try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
+        try await Wiper.restoreInterruptedClaims(files: [file], root: root.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recovery.path))
+        XCTAssertEqual(try Data(contentsOf: source), original)
+        let result = await Wiper.execute(deletions: verdict.deletions, journal: journal,
+            sessionID: session.id, fileIDs: [:], exclusiveRename: { _, _, _, _ in ENOSYS })
+        XCTAssertNil(result.stoppedEarly)
+        XCTAssertEqual(result.filesDeleted, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recovery.path))
+    }
+
     func testExistingRecoveryDirectoryAndSourceArePreserved() async throws {
         let (file, session, journal, verdict) = try await fixture()
         let recovery = root.appendingPathComponent(Wiper.recoveryName(fileID: file.id, name: file.relPath))

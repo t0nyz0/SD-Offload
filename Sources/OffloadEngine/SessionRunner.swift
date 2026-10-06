@@ -14,6 +14,7 @@ import OffloadCore
 public actor SessionRunner {
     public let sessionID: UUID
     public let card: CardInfo
+    public nonisolated let wipeOnly: Bool
     let config: AppConfig
     let journal: Journal
     let staging: StagingStore
@@ -48,6 +49,8 @@ public actor SessionRunner {
     private var cancelled = false
     private var wipeCancelled = false
     private var isWipeRetry = false
+    private var wipePhase: EnginePhase = .verifyingDestination
+    private var stateBeforeCardLoss: SessionState?
     private var waitingForNAS = false
     private var sessionStartedAt = Date()
     // Creates each NAS date dir once per session (photos cluster in 1–3 dirs),
@@ -58,10 +61,11 @@ public actor SessionRunner {
     private let nasDirCache = NASDirCache()
 
     public init(sessionID: UUID, card: CardInfo, config: AppConfig, journal: Journal,
-                staging: StagingStore, nas: NASLocator, cardWatcher: CardWatcher,
+                staging: StagingStore, nas: NASLocator, cardWatcher: CardWatcher, wipeOnly: Bool = false,
                 emit: @escaping @Sendable (EngineEvent) -> Void) {
         self.sessionID = sessionID
         self.card = card
+        self.wipeOnly = wipeOnly
         self.config = config
         self.journal = journal
         self.staging = staging
@@ -852,14 +856,14 @@ public actor SessionRunner {
         switch config.wipePolicy {
         case .askEachTime:
             await journal.setSessionState(.awaitingWipeConsent, in: sessionID)
-            emit(.phase(.awaitingWipeConsent))
+            publishWipePhase(.awaitingWipeConsent)
             proceed = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
                 wipeConsentContinuation = cont
             }
         case .afterNASVerify, .afterStagingVerify:
             if config.wipeCountdownSeconds > 0 {
                 await journal.setSessionState(.wipeCountdown, in: sessionID)
-                emit(.phase(.wipeCountdown))
+                publishWipePhase(.wipeCountdown)
                 for second in stride(from: config.wipeCountdownSeconds, through: 1, by: -1) {
                     if wipeCancelled { proceed = false; break }
                     emit(.wipeCountdown(secondsRemaining: second))
@@ -889,7 +893,7 @@ public actor SessionRunner {
             guard await nas.validateNow(force: true) == .healthy else {
                 throw OffloadError(.nasUnavailable)
             }
-            emit(.phase(.verifyingDestination))
+            publishWipePhase(.verifyingDestination)
             let task = Task { [verification, config] in
                 verification.reset(files: record.files, label: "Final NAS safety check")
                 try await DestinationVerifier.verify(files: record.files, root: config.nasRootPath, tracker: verification)
@@ -945,7 +949,7 @@ public actor SessionRunner {
         }
 
         await journal.setSessionState(.wiping, in: sessionID)
-        emit(.phase(.wiping))
+        publishWipePhase(.wiping)
         let result = await Wiper.execute(deletions: verdict.deletions, journal: journal,
                                          sessionID: sessionID, fileIDs: [:])
 
@@ -971,7 +975,7 @@ public actor SessionRunner {
         if config.autoEject {
             await markPhase("eject")
             await journal.setSessionState(.ejecting, in: sessionID)
-            emit(.phase(.ejecting))
+            publishWipePhase(.ejecting)
             try? await cardWatcher.unmountAndEject(bsdName: card.bsdName)
             await markPhaseEnd("eject")
         }
@@ -1030,6 +1034,11 @@ public actor SessionRunner {
 
     // MARK: - External control (via EngineController)
 
+    private func publishWipePhase(_ phase: EnginePhase) {
+        wipePhase = phase
+        emit(.phase(phase))
+    }
+
     public func pause() async {
         guard !userPaused else { return }
         userPaused = true
@@ -1062,6 +1071,7 @@ public actor SessionRunner {
 
     public func cardGone() async {
         cardPresent = false
+        stateBeforeCardLoss = await journal.session(id: sessionID)?.state
         let stopped = hop1Tasks
         for task in stopped { task.cancel() }
         hop1Tasks.removeAll()
@@ -1075,6 +1085,16 @@ public actor SessionRunner {
     /// manifest into the journal. Rebuild the copy queue from journal state.
     public func cardReturned() async {
         cardPresent = true
+        if wipeOnly || isWipeRetry {
+            // Reinsertion cannot expand a wipe retry into a new transfer. Its
+            // original consent/countdown and fresh destination checks continue.
+            if let stateBeforeCardLoss {
+                await journal.setSessionState(stateBeforeCardLoss, in: sessionID)
+            }
+            stateBeforeCardLoss = nil
+            emit(.phase(wipePhase))
+            return
+        }
         await budget.resumeReservations()
         guard let record = await journal.session(id: sessionID) else { return }
         totalFiles = record.files.count

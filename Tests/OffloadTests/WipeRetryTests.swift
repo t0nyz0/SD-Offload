@@ -215,6 +215,80 @@ final class WipeRetryTests: XCTestCase {
         try assertNoTransfer(f, events: events)
     }
 
+    func testCardReinsertDuringWipeRetryDoesNotRestartTransferOrExpandManifest() async throws {
+        var f = try await fixture(); let events = Events()
+        f.config.wipePolicy = .askEachTime
+        let c = await coordinator(f, events: events)
+        await c.retryWipe(sessionID: f.record.id)
+        for _ in 0..<200 {
+            if events.phases.contains(.awaitingWipeConsent) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(events.phases.contains(.awaitingWipeConsent))
+        await c.handle(.volumeUnmounted(volumeUUID: "fixture", bsdName: "fixture-not-a-device"))
+        let added = f.card.appendingPathComponent("DCIM/new-after-reinsert.JPG")
+        try Data("new unplanned photo".utf8).write(to: added)
+        await c.handle(.volumeMounted(f.volume))
+        await c.consent(cardUUID: "fixture")
+        let active = await f.journal.session(id: f.record.id)
+        let resumed = try XCTUnwrap(active)
+        XCTAssertEqual(resumed.files.map(\.id), f.record.files.map(\.id))
+        XCTAssertFalse(events.phases.contains(.scanning))
+        XCTAssertFalse(events.phases.contains(.transferring))
+        if let runner = await c.runner { await runner.confirmWipe() }
+        await fulfillment(of: [events.finished], timeout: 5)
+        XCTAssertEqual(events.completion?.state, .done)
+        XCTAssertEqual(events.completion?.wipeReport?.filesDeleted, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.source.path))
+        XCTAssertEqual(try Data(contentsOf: added), Data("new unplanned photo".utf8))
+        try assertNoTransfer(f, events: events)
+    }
+
+    func testDifferentCardTokenOnReinsertCannotResumeWipeRetry() async throws {
+        var f = try await fixture(); let events = Events()
+        f.config.wipePolicy = .askEachTime
+        let c = await coordinator(f, events: events)
+        await c.retryWipe(sessionID: f.record.id)
+        for _ in 0..<200 {
+            if events.phases.contains(.awaitingWipeConsent) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(events.phases.contains(.awaitingWipeConsent))
+        await c.handle(.volumeUnmounted(volumeUUID: "fixture", bsdName: "fixture-not-a-device"))
+        try Data("another-card-token".utf8).write(to: f.card.appendingPathComponent(Paths.cardSessionMarkerName))
+        await c.handle(.volumeMounted(f.volume))
+        await c.consent(cardUUID: "fixture")
+        XCTAssertEqual(events.phases.last, .pausedCardGone)
+        if let runner = await c.runner { await runner.confirmWipe() }
+        await fulfillment(of: [events.finished], timeout: 5)
+        XCTAssertEqual(events.completion?.state, .doneWipeBlocked)
+        XCTAssertEqual(events.completion?.wipeReport?.ran, false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+        XCTAssertEqual(events.completion?.files.map(\.id), f.record.files.map(\.id))
+        try assertNoTransfer(f, events: events)
+    }
+
+    func testNASChangedWhileRetryWaitsForConsentBlocksAllErasure() async throws {
+        var f = try await fixture(); let events = Events()
+        f.config.wipePolicy = .askEachTime
+        let c = await coordinator(f, events: events)
+        await c.retryWipe(sessionID: f.record.id)
+        for _ in 0..<200 {
+            if events.phases.contains(.awaitingWipeConsent) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(events.phases.contains(.awaitingWipeConsent))
+        let original = try Data(contentsOf: f.source)
+        try Data(repeating: 0x99, count: original.count).write(to: f.backup)
+        if let runner = await c.runner { await runner.confirmWipe() }
+        await fulfillment(of: [events.finished], timeout: 5)
+        XCTAssertEqual(events.completion?.state, .doneWipeBlocked)
+        XCTAssertEqual(events.completion?.wipeReport?.ran, false)
+        XCTAssertFalse(events.phases.contains(.wiping))
+        XCTAssertEqual(try Data(contentsOf: f.source), original)
+        try assertNoTransfer(f, events: events)
+    }
+
     @MainActor
     func testRetryLabelDistinguishesErasureFromIncompleteTransfer() async throws {
         let f = try await fixture()

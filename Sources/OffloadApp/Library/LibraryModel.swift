@@ -156,6 +156,8 @@ final class LibraryModel {
     @ObservationIgnored private var analyzeTask: Task<Void, Never>?
     @ObservationIgnored private var analyzeEpoch = 0
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var suggestionTask: Task<Void, Never>?
+    @ObservationIgnored private var indexScopeTasks: [String: Task<[String], Never>] = [:]
     @ObservationIgnored private var nasRootPath: String
     @ObservationIgnored private var cardRootPath: String?
     @ObservationIgnored private(set) var dateFolderLayouts: [DateFolderLayout]
@@ -222,6 +224,7 @@ final class LibraryModel {
     func update(nasRootPath: String, cardRootPath: String?, dateFolderLayouts: [DateFolderLayout]? = nil,
                 activeDateFolderLayout: DateFolderLayout? = nil) {
         let cardChanged = self.cardRootPath != cardRootPath
+        if self.nasRootPath != nasRootPath || cardChanged { indexScopeTasks.removeAll() }
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
         if let dateFolderLayouts { self.dateFolderLayouts = dateFolderLayouts }
@@ -241,6 +244,7 @@ final class LibraryModel {
     func setNASAvailable(_ available: Bool) {
         guard source == .nas, let root = rootURL else { return }
         if !available {
+            indexScopeTasks.removeAll()
             countTask?.cancel()
             browseTask?.cancel()
             browseEpoch += 1
@@ -554,6 +558,7 @@ final class LibraryModel {
     /// the library total, volume stats, and search prefixes all still key off the
     /// real root, only the *displayed* folder is the deeper one.
     private func openRoot(_ root: URL, drillTo target: URL? = nil, deferBrowse: Bool = false) {
+        indexScopeTasks.removeAll()
         volumeTitle = nil
         pathStack = target.map { Self.pathStack(from: root, to: $0) } ?? [root]
         searchText = ""
@@ -819,6 +824,19 @@ final class LibraryModel {
 
     // MARK: - Content search
 
+    /// Share one background root resolution across search, suggestions and face
+    /// filters. No per-photo filesystem calls or root resolution per keystroke.
+    private func indexPrefixes(for path: String?) async -> [String]? {
+        guard let path else { return nil }
+        if let task = indexScopeTasks[path] { return await task.value }
+        let browser = self.browser
+        let task = Task {
+            await BackgroundWork.run { browser.indexPrefixes(root: URL(fileURLWithPath: path)) }
+        }
+        indexScopeTasks[path] = task
+        return await task.value
+    }
+
     private func runSearch() {
         searchTask?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespaces)
@@ -835,12 +853,14 @@ final class LibraryModel {
             .map(\.id))
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))   // debounce typing
-            guard !Task.isCancelled else { return }
-            var paths = await index.search(query, underPrefix: prefix)
-            if !namedMatches.isEmpty {
-                paths.formUnion(await faces.photos(withIdentities: namedMatches, underPrefix: prefix))
-            }
             guard let self, !Task.isCancelled else { return }
+            let prefixes = await self.indexPrefixes(for: prefix)
+            guard !Task.isCancelled else { return }
+            var paths = await index.search(query, underPrefixes: prefixes)
+            if !namedMatches.isEmpty {
+                paths.formUnion(await faces.photos(withIdentities: namedMatches, underPrefixes: prefixes))
+            }
+            guard !Task.isCancelled else { return }
             let results = await self.entries(forPaths: Array(paths))
             guard !Task.isCancelled else { return }
             self.searchResults = results
@@ -873,7 +893,7 @@ final class LibraryModel {
     /// Show the photos that still have an unnamed face/pet to label.
     func reviewUnnamedFaces() {
         applyFaceFilter(label: "Faces to review") { faces, prefix in
-            Set((await faces.unassigned(underPrefix: prefix)).map(\.path))
+            Set((await faces.unassigned(underPrefixes: prefix)).map(\.path))
         }
     }
 
@@ -881,7 +901,7 @@ final class LibraryModel {
     func filterByIdentity(_ id: UUID) {
         let label = identities.first { $0.id == id }?.name ?? "Person"
         applyFaceFilter(label: label) { faces, prefix in
-            await faces.photos(withIdentity: id, underPrefix: prefix)
+            await faces.photos(withIdentity: id, underPrefixes: prefix)
         }
     }
 
@@ -889,7 +909,7 @@ final class LibraryModel {
     func filterByKind(_ kind: Identity.Kind) {
         let ids = Set(identities.filter { $0.kind == kind }.map(\.id))
         applyFaceFilter(label: kind == .pet ? "All pets" : "All people") { faces, prefix in
-            await faces.photos(withIdentities: ids, underPrefix: prefix)
+            await faces.photos(withIdentities: ids, underPrefixes: prefix)
         }
     }
 
@@ -899,15 +919,18 @@ final class LibraryModel {
     }
 
     private func applyFaceFilter(label: String,
-                                 _ gather: @escaping @Sendable (FaceIndex, String?) async -> Set<String>) {
+                                 _ gather: @escaping @Sendable (FaceIndex, [String]?) async -> Set<String>) {
         searchTask?.cancel()
         searchText = ""            // face filter and text search are mutually exclusive
         faceFilterLabel = label    // set AFTER clearing searchText (its didSet nils this)
         let prefix = rootURL?.path
         let faces = faceIndex
         searchTask = Task { [weak self] in
-            let paths = await gather(faces, prefix)
             guard let self, !Task.isCancelled else { return }
+            let prefixes = await self.indexPrefixes(for: prefix)
+            guard !Task.isCancelled else { return }
+            let paths = await gather(faces, prefixes)
+            guard !Task.isCancelled else { return }
             let results = await self.entries(forPaths: Array(paths))
             guard !Task.isCancelled else { return }
             self.searchResults = results
@@ -915,11 +938,15 @@ final class LibraryModel {
     }
 
     private func refreshSuggestions() {
+        suggestionTask?.cancel()
         guard let prefix = rootURL?.path else { return }
         let index = photoIndex
-        Task { [weak self] in
-            let tags = await index.topTags(underPrefix: prefix)
+        suggestionTask = Task { [weak self] in
             guard let self else { return }
+            let prefixes = await self.indexPrefixes(for: prefix) ?? []
+            guard !Task.isCancelled else { return }
+            let tags = await index.topTags(underPrefixes: prefixes)
+            guard !Task.isCancelled, self.rootURL?.path == prefix else { return }
             self.suggestions = tags
         }
     }
@@ -1120,8 +1147,11 @@ final class LibraryModel {
 
     /// Reload the named-identity list + unnamed count (after a scan or a label).
     func refreshFaceState() async {
+        let rootPath = rootURL?.path
+        let prefixes = await indexPrefixes(for: rootPath)
         let all = await identityIndex.all()
-        let counts = await faceIndex.counts(underPrefix: rootURL?.path)
+        let counts = await faceIndex.counts(underPrefixes: prefixes)
+        guard rootURL?.path == rootPath else { return }
         identities = all
         faceUnnamed = counts.unnamed
     }
@@ -1209,6 +1239,9 @@ final class LibraryModel {
     /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
         guard source != .nas || mounted else { return }
+        indexScopeTasks.removeAll()
+        refreshSuggestions()
+        Task { await refreshFaceState() }
         FolderStatsLoader.shared.invalidateAll()   // rebuild folder counts (catches deep-added photos)
         if let root = rootURL { refreshVolumeStats(root); startCount(root, force: true) }
         loadEntries()

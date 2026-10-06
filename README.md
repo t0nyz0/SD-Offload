@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-182%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-188%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -211,6 +211,12 @@ retries only the remaining approved deletions. It does not rescan, stage, upload
 photos, and new photos added afterward are preserved. Fresh backup hash checks still take
 time. Incomplete transfers offer **Retry transfer** instead. The failure and its recovery
 action stay visible until you act. See the [wipe-retry QA report](docs/qa-2026-10-06/WIPE-RETRY.md).
+Removing and reinserting the card during a wipe retry also retains that exact manifest;
+it rechecks the card identity and never starts a new transfer or includes new photos.
+Version 1.7.21 adds six regressions found or strengthened during the follow-up audit.
+All 188 default tests pass; the optional live-provider test also passed for Claude and
+Codex using the app icon. See the [follow-up QA report](docs/qa-2026-10-06/FOLLOW-UP-AUDIT.md)
+for native UI checks, performance measurements, and validation limits.
 
 After an offload completes, automatic Library reveal opens the **newest verified capture
 day in that batch**, even if older days contain more photos. Six regressions cover day
@@ -248,6 +254,8 @@ Provider changes apply to the next analysis; a running batch keeps its original 
 Open a photo’s **Info** panel and choose **Edit Tags…** to add, rename, or remove tags.
 Edits update search and stay intact after later AI analysis. Tags are stored in SD Offload’s
 local index; they are not embedded into the original image or its sidecars.
+Search and suggestions support both configured and canonical library paths, including
+filesystem aliases, without changing existing metadata IDs or searching sibling libraries.
 
 **Balanced** thumbnail quality is the default for responsive browsing. Higher quality reads
 more image data and uses more network bandwidth and memory. Existing preferences are preserved.
@@ -272,7 +280,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 182 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 188 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 

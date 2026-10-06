@@ -198,12 +198,16 @@ public actor PhotoIndex {
 
     /// Paths whose contents match ALL space-separated query terms.
     public func search(_ query: String, underPrefix prefix: String? = nil) -> Set<String> {
+        search(query, underPrefixes: prefix.map { [$0] })
+    }
+
+    public func search(_ query: String, underPrefixes prefixes: [String]?) -> Set<String> {
         ensureLoaded()
         let terms = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
         guard !terms.isEmpty else { return [] }
         var out = Set<String>()
         for (path, rec) in records {
-            if let prefix, !Self.isUnder(path, prefix) { continue }
+            if let prefixes, !prefixes.contains(where: { Self.isUnder(path, $0) }) { continue }
             let hay: String
             if let cached = haystack[path] {
                 hay = cached
@@ -218,9 +222,13 @@ public actor PhotoIndex {
 
     /// Top content tags with counts — the "what's in your library" suggestions.
     public func topTags(underPrefix prefix: String, limit: Int = 24) -> [(tag: String, count: Int)] {
+        topTags(underPrefixes: [prefix], limit: limit)
+    }
+
+    public func topTags(underPrefixes prefixes: [String], limit: Int = 24) -> [(tag: String, count: Int)] {
         ensureLoaded()
         var counts: [String: Int] = [:]
-        for (path, rec) in records where Self.isUnder(path, prefix) {
+        for (path, rec) in records where prefixes.contains(where: { Self.isUnder(path, $0) }) {
             for t in rec.tags.prefix(4) { counts[t, default: 0] += 1 }
         }
         return counts.sorted { $0.value > $1.value }.prefix(limit).map { (tag: $0.key, count: $0.value) }
