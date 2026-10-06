@@ -57,11 +57,11 @@ final class AuditFixRegressionTests: XCTestCase {
         let claimed = root.appendingPathComponent(Wiper.recoveryName(fileID: file.id, name: file.relPath))
         try FileManager.default.moveItem(at: original, to: claimed)
         try Data("new photo".utf8).write(to: original)
-        XCTAssertThrowsError(try Wiper.restoreInterruptedClaims(files: [file], root: root.path))
+        do { try await Wiper.restoreInterruptedClaims(files: [file], root: root.path); XCTFail("Overwrote occupied original") } catch { }
         XCTAssertEqual(try Data(contentsOf: original), Data("new photo".utf8))
         XCTAssertEqual(try Data(contentsOf: claimed), Data("original".utf8))
         try FileManager.default.removeItem(at: original)
-        try Wiper.restoreInterruptedClaims(files: [file], root: root.path)
+        try await Wiper.restoreInterruptedClaims(files: [file], root: root.path)
         XCTAssertEqual(try Data(contentsOf: original), Data("original".utf8))
     }
 

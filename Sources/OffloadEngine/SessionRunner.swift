@@ -860,7 +860,7 @@ public actor SessionRunner {
         await markPhase("wipe")
         guard let record = await journal.session(id: sessionID) else { return }
         do {
-            try Wiper.restoreInterruptedClaims(files: record.files, root: card.mountPath)
+            try await Wiper.restoreInterruptedClaims(files: record.files, root: card.mountPath)
             try await journal.flushNow(sessionID)
             guard await nas.validateNow(force: true) == .healthy else {
                 throw OffloadError(.nasUnavailable)

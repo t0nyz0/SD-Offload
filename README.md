@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-158%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-166%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -196,8 +196,14 @@ verification reads, and NAS flush-wait status.
 Recovery also respects Ask and Ignore for unfinished sessions; POSIX errors retain their operation and code.
 To require an actual disposable exFAT image instead of accepting a local-directory fallback, run
 `OFFLOAD_REQUIRE_EXFAT=1 swift run offload-harness run`. A failure to create the image is a failed
-compatibility check, not a passing wipe test. The observed physical-card erasure failure is still
-undiagnosed; version 1.7.16 improves its diagnostics without changing the deletion algorithm.
+compatibility check, not a passing wipe test. Version 1.7.18 fixes the diagnosed FSKit exFAT
+`errno 45` erasure failure: unsupported exclusive rename uses a newly created recovery directory,
+with the original open file and full SHA-256 rechecked before deletion. Eight regressions cover
+that fallback, collisions, changed/replaced sources, interrupted recovery, and cancellation.
+An explicitly authorized physical-card test on October 6 erased all 168 verified photos
+(6.22 GB) from FSKit exFAT, left DCIM empty, and preserved the camera database. Fresh NAS
+read-back, countdown, and erasure took 121.8 seconds; this is a wipe validation, not an upload
+benchmark. See the [erasure QA report](docs/qa-2026-10-06/EXFAT-ERASURE.md).
 
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
@@ -253,7 +259,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 158 automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 166 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 

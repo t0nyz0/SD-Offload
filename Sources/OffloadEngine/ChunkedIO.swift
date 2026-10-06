@@ -54,7 +54,7 @@ public enum ChunkedIO {
     // under Low Power Mode / thermal pressure).
     private static let ioQueue = DispatchQueue(label: "offload.chunkio", qos: .userInitiated, attributes: .concurrent)
 
-    private static func blocking<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    static func blocking<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             ioQueue.async {
                 do { continuation.resume(returning: try body()) }

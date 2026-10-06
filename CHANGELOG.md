@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.18] — 2026-10-06
+
+### Fixed
+- Fix card erasure stopping with `errno 45: Operation not supported` on FSKit exFAT. When exclusive rename is unsupported, claim the approved source in a newly created recovery directory, then verify its pinned file descriptor, metadata, and complete SHA-256 before deletion.
+- Restore interrupted or cancelled erasure through exclusive creation and verified read-back when the card cannot perform an exclusive rename. An occupied original name or recovery path preserves both files.
+
+### Added
+- Eight erasure regressions covering unsupported rename, other errors, recovery collisions, changed bytes, replacement files, interrupted claims, and cancellation.
+
 ## [1.7.17] — 2026-10-03
 
 ### Added
