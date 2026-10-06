@@ -175,7 +175,8 @@ final class AppState {
             // re-counts (accurate header without a manual Refresh).
             LibraryIndex.invalidate()
             if settings.config.autoShowLibrary,
-               let folder = Self.uploadedFolder(from: record, nasRoot: settings.config.nasRootPath) {
+               let folder = Self.uploadedFolder(from: record, nasRoot: settings.config.nasRootPath,
+                                                layouts: settings.config.recognizedDateFolderLayouts) {
                 router?.openLibrary(folder: folder)   // reveal the just-uploaded batch
             }
 
@@ -334,18 +335,28 @@ final class AppState {
     /// insert wasn't picked up automatically.
     func rescanTapped() { engine.rescan() }
 
-    /// The NAS date-folder (absolute) that received the most files this
-    /// session — a batch spanning several capture days reveals the busiest day.
-    /// Counts only files that actually landed on the NAS (nasVerified / skipped /
-    /// wiped), so it resolves for auto-wiped batches too.
-    static func uploadedFolder(from record: SessionRecord, nasRoot: String) -> String? {
-        var counts: [String: Int] = [:]
+    /// Reveal the newest capture day with verified copies in this batch. Use the
+    /// saved destination folder, including legacy/custom layouts and resolved
+    /// filenames; this requires no NAS scan or additional network reads.
+    static func uploadedFolder(from record: SessionRecord, nasRoot: String,
+                               layouts: [DateFolderLayout] = DateFolderLayout.presets) -> String? {
+        var folderDates: [String: Date] = [:]
         for file in record.files where file.state.isWipeEligible {
             let folder = (file.destRelPath as NSString).deletingLastPathComponent
             guard folder != ".", !folder.isEmpty else { continue }
-            counts[folder, default: 0] += 1
+            let date = file.captureDate ?? file.creationDate ?? file.mtime
+            folderDates[folder] = max(folderDates[folder] ?? .distantPast, date)
         }
-        guard let best = counts.max(by: { $0.value < $1.value })?.key else { return nil }
-        return URL(fileURLWithPath: nasRoot, isDirectory: true).appendingPathComponent(best).path
+        // Parse once per unique folder, not once per photo. The actual destination
+        // day is authoritative even if legacy records lack captureDate or camera
+        // filesystem timestamps disagree. Saved metadata covers unrecognized paths.
+        let candidates = folderDates.map { folder, fallback in
+            (folder: folder, date: DateFolderLayout.firstParse(folderPath: folder,
+                layouts: layouts + DateFolderLayout.presets)?.date ?? fallback)
+        }
+        guard let newest = candidates.max(by: {
+            $0.date == $1.date ? $0.folder < $1.folder : $0.date < $1.date
+        }) else { return nil }
+        return URL(fileURLWithPath: nasRoot, isDirectory: true).appendingPathComponent(newest.folder).path
     }
 }

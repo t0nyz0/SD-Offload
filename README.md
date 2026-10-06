@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-176%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-182%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -100,6 +100,7 @@ one being offloaded.
 | | |
 |---|---|
 | Browse NAS + card | Storage gauge, progressive photo count, date-folder navigation |
+| Reveal completed offload | Open the newest verified capture day in the completed batch, including custom date-folder layouts |
 | Flexible date folders | Seven presets or a reversible custom pattern; safely convert existing folders with preflight, resume, and rollback |
 | Folder collage cards | Date folders render as a photo collage of what's inside, captioned "Saturday, July 4th, 2026" |
 | Fast thumbnails | Embedded-preview extraction (KBs over SMB, not whole RAWs), memory + disk cache, bounded concurrency |
@@ -211,6 +212,12 @@ photos, and new photos added afterward are preserved. Fresh backup hash checks s
 time. Incomplete transfers offer **Retry transfer** instead. The failure and its recovery
 action stay visible until you act. See the [wipe-retry QA report](docs/qa-2026-10-06/WIPE-RETRY.md).
 
+After an offload completes, automatic Library reveal opens the **newest verified capture
+day in that batch**, even if older days contain more photos. Six regressions cover day
+selection, file order, all preset and custom layouts, legacy records, verified/duplicate/
+wiped states, and loading the selected folder's photos. Selection uses the saved manifest
+without another NAS scan. See the [completion-navigation QA report](docs/qa-2026-10-06/LIBRARY-COMPLETION.md).
+
 CI uses disposable local fixtures; actual SMB server compatibility is checked separately with
 the NAS probes described below.
 
@@ -265,7 +272,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 176 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 182 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 

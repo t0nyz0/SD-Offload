@@ -64,6 +64,34 @@ final class LibraryQATests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedBatchOpensNewestDayAndLoadsItsPhotos() async throws {
+        let oldDay = root.appendingPathComponent("2026/09/29")
+        let newDay = root.appendingPathComponent("2026/10/06")
+        for dir in [oldDay, newDay] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try Data("fixture".utf8).write(to: oldDay.appendingPathComponent("old.JPG"))
+        try Data("fixture".utf8).write(to: newDay.appendingPathComponent("new.JPG"))
+        let files = ["2026/09/29/old.JPG", "2026/09/29/other.JPG", "2026/10/06/new.JPG"].map {
+            FileRecord(relPath: "DCIM/" + ($0 as NSString).lastPathComponent, size: 7, mtime: Date(),
+                       creationDate: nil, destRelPath: $0, state: .nasVerified)
+        }
+        let session = SessionRecord(cardVolumeUUID: "fixture", cardVolumeName: "Card", cardCapacityBytes: 100,
+                                    state: .done, files: files)
+        let folder = try XCTUnwrap(AppState.uploadedFolder(from: session, nasRoot: root.path))
+        let model = LibraryModel(nasRootPath: root.path, cardRootPath: nil)
+        model.openPinned(oldDay.path)
+        model.openPinned(folder) // Same navigation used by a new or already-open Library window.
+        for _ in 0..<200 {
+            if !model.loading { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(model.loading)
+        XCTAssertEqual(model.currentDir?.path, newDay.path)
+        XCTAssertEqual(model.entries.map(\.name), ["new.JPG"])
+    }
+
+    @MainActor
     func testViewerCacheEvictsByDecodedBytes() throws {
         let cache = FullImageCache(byteLimit: 80_000)
         func image() throws -> NSImage {

@@ -5,6 +5,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.20] — 2026-10-06
+
+### Fixed
+- When an offload finishes, open the Library at the newest verified capture day in that batch instead of the day containing the most files. Use the saved destination paths, including custom layouts, older records, duplicate photos, and already-wiped files; unfinished copies cannot select the destination.
+
+### Added
+- Six completion-navigation regressions, including loading the newest folder's photos while another folder is opening. The full suite has 182 passing tests plus one optional live-provider test.
+
 ## [1.7.19] — 2026-10-06
 
 ### Fixed
