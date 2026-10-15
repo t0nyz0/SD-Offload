@@ -16,6 +16,8 @@ struct PopoverRootView: View {
                         WipePromptView(vm: vm)
                     case .cancelled, .idle:
                         IdleView()
+                    case .scanning:
+                        PreparationView(vm: vm)
                     default:
                         ActiveSessionView(vm: vm)
                     }

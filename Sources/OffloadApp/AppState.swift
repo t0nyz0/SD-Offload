@@ -146,6 +146,9 @@ final class AppState {
         case .progress(let snapshot):
             session?.scratch = snapshot
 
+        case .preparation(let snapshot):
+            if session?.phase == .scanning { session?.scratchPreparation = snapshot }
+
         case .speedSample(let sample):
             session?.appendSample(sample)
 

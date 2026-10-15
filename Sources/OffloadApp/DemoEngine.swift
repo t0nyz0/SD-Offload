@@ -37,6 +37,25 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
         emit(.cardMounted(card))
         emit(.sessionStarted(sessionID: UUID(), card: card, resumed: false))
         emit(.phase(.scanning))
+        if let mode = ProcessInfo.processInfo.environment["OFFLOAD_DEMO_PREPARATION"] {
+            for step in 0..<240 {
+                if Task.isCancelled { return }
+                let stage: PreparationStage = mode == "dates" ? .readingDates
+                    : mode == "nas" ? .checkingNAS : mode == "saved" ? .checkingSavedCopies : .findingFiles
+                let count = mode == "stalled" ? 0 : mode == "scan" ? min(38, 1 + step / 2) : 38
+                let saved: VerificationProgress? = mode == "saved"
+                    ? VerificationProgress(label: "Checking previous NAS copies", bytesDone: Int64(step) * 1_000_000,
+                        bytesTotal: 500_000_000, filesDone: step / 8, filesTotal: 76, currentFile: "DSCF1401.RAF",
+                        activeFiles: 1, bytesPerSecond: 10_000_000, secondsWithoutProgress: 0) : nil
+                emit(.preparation(PreparationProgress(stage: stage, filesFound: count,
+                    bytesFound: Int64(count) * 32_000_000, itemsDone: stage == .readingDates ? min(step, 37) : 0,
+                    itemsTotal: stage == .readingDates ? 38 : 0, currentPath: "DCIM/100_FUJI/DSCF1454.RAF",
+                    elapsed: Double(step), secondsWithoutActivity: mode == "stalled" ? Double(15 + step) : 0,
+                    savedCopyCheck: saved)))
+                try? await Task.sleep(for: .seconds(1))
+            }
+            return
+        }
         try? await Task.sleep(for: .seconds(1.5))
 
         let slowNAS = ProcessInfo.processInfo.environment["OFFLOAD_DEMO_NAS_SLOW"] == "1"

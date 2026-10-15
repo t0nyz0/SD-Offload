@@ -36,7 +36,9 @@ public struct IngestPlanner: Sendable {
 
     // MARK: - Scan
 
-    public func scan(cardRoot rawRoot: URL, scope: IngestScope) -> [ScannedFile] {
+    public func scan(cardRoot rawRoot: URL, scope: IngestScope,
+                     progress: PreparationTracker? = nil) -> [ScannedFile] {
+        progress?.begin(.findingFiles)
         let fm = FileManager.default
         // Compute relative paths by diffing resolved path COMPONENTS, not string
         // replacement: FileManager's enumerator canonicalizes child URLs (e.g.
@@ -48,6 +50,7 @@ public struct IngestPlanner: Sendable {
         switch scope {
         case .mediaRootsOnly:
             for name in Self.mediaRoots {
+                progress?.examining(name)
                 let url = cardRoot.appendingPathComponent(name, isDirectory: true)
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
@@ -62,10 +65,12 @@ public struct IngestPlanner: Sendable {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey,
                                       .contentModificationDateKey, .creationDateKey, .isDirectoryKey]
         for root in roots {
+            progress?.examining(root.lastPathComponent)
             guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                                  options: [.skipsHiddenFiles]) else { continue }
             for case let url as URL in enumerator {
                 let name = url.lastPathComponent
+                progress?.examining(name)
                 guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
                 if values.isDirectory == true {
                     if Self.skippedDirNames.contains(name) { enumerator.skipDescendants() }
@@ -85,6 +90,7 @@ public struct IngestPlanner: Sendable {
                                        mtime: values.contentModificationDate ?? .distantPast,
                                        creationDate: values.creationDate,
                                        url: url))
+                progress?.foundFile(bytes: Int64(values.fileSize ?? 0))
             }
         }
         return out.sorted { $0.relPath < $1.relPath }   // deterministic order
@@ -92,7 +98,8 @@ public struct IngestPlanner: Sendable {
 
     // MARK: - Plan (fresh)
 
-    public func plan(scanned: [ScannedFile]) async -> Plan {
+    public func plan(scanned: [ScannedFile], progress: PreparationTracker? = nil) async -> Plan {
+        progress?.begin(.readingDates, total: scanned.count)
         var records: [FileRecord] = []
         records.reserveCapacity(scanned.count)
 
@@ -105,7 +112,10 @@ public struct IngestPlanner: Sendable {
                 let file = scanned[index]
                 let dater = self.dater
                 group.addTask {
-                    (index, dater.captureDate(of: file.url, creationDate: file.creationDate, mtime: file.mtime))
+                    progress?.beginDate(file.relPath)
+                    let date = dater.captureDate(of: file.url, creationDate: file.creationDate, mtime: file.mtime)
+                    progress?.finishedItem(file.relPath)
+                    return (index, date)
                 }
             }
             while next < min(4, scanned.count) { submit(next); next += 1; inFlight += 1 }
@@ -145,12 +155,16 @@ public struct IngestPlanner: Sendable {
 
     /// Merge a fresh scan against an incomplete session (crash-remapped by the
     /// journal). Identity = relPath + size + mtime(±2 s, exFAT granularity).
-    public func merge(scanned: [ScannedFile], into existing: [FileRecord]) async -> Plan {
+    public func merge(scanned: [ScannedFile], into existing: [FileRecord],
+                      progress: PreparationTracker? = nil) async -> Plan {
+        progress?.begin(.matchingSavedProgress, total: existing.count)
         var byRelPath = Dictionary(uniqueKeysWithValues: scanned.map { ($0.relPath, $0) })
         var merged: [FileRecord] = []
         merged.reserveCapacity(existing.count)
 
         for var record in existing {
+            progress?.examining(record.relPath)
+            defer { progress?.finishedItem(record.relPath) }
             if let match = byRelPath.removeValue(forKey: record.relPath) {
                 let sameIdentity = match.size == record.size &&
                     abs(match.mtime.timeIntervalSince(record.mtime)) <= 2
@@ -186,7 +200,7 @@ public struct IngestPlanner: Sendable {
         // Files the camera added between insertions → plan fresh.
         let newcomers = byRelPath.values.sorted { $0.relPath < $1.relPath }
         if !newcomers.isEmpty {
-            let fresh = await plan(scanned: Array(newcomers))
+            let fresh = await plan(scanned: Array(newcomers), progress: progress)
             var taken = Set(merged.map(\.destRelPath))
             for var record in fresh.files {
                 var attempt = 2

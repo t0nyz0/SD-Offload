@@ -14,6 +14,7 @@ final class SessionViewModel {
     let resumed: Bool
 
     var phase: EnginePhase = .scanning
+    var preparation = PreparationProgress()
     var verification: VerificationProgress?
     var nasActivityDetail: String?
     var uploadFilesRemaining = 0
@@ -62,6 +63,7 @@ final class SessionViewModel {
     var retryButtonTitle: String { completed?.canRetryWipe == true ? "Retry wipe" : "Retry transfer" }
 
     @ObservationIgnored var scratch = ProgressSnapshot()
+    @ObservationIgnored var scratchPreparation = PreparationProgress()
 
     init(sessionID: UUID, card: CardInfo, resumed: Bool) {
         self.sessionID = sessionID
@@ -75,6 +77,7 @@ final class SessionViewModel {
 
     /// Called at 4 Hz by AppState while a session is live.
     func applyScratchTick() {
+        if phase == .scanning { set(\.preparation, scratchPreparation) }
         let s = scratch
         set(\.verification, s.verification)
         set(\.nasActivityDetail, s.nasActivityDetail)

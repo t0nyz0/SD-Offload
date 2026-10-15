@@ -276,13 +276,16 @@ actor Coordinator {
             // fall through and start a fresh session for it instead.
             emit(.sessionStarted(sessionID: incomplete.id, card: volume.info, resumed: true))
             emit(.phase(.scanning))
+            let preparation = PreparationTracker()
+            let sampler = samplePreparation(preparation)
+            defer { sampler.cancel() }
             staging.removePartials(incomplete.id)
             let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
             let scope = config.ingestScope
             let scanned = await Task.detached(priority: .userInitiated) {
-                planner.scan(cardRoot: cardRoot, scope: scope)
+                planner.scan(cardRoot: cardRoot, scope: scope, progress: preparation)
             }.value
-            let plan = await planner.merge(scanned: scanned, into: incomplete.files)
+            let plan = await planner.merge(scanned: scanned, into: incomplete.files, progress: preparation)
             await journal.replaceFiles(plan.files, in: incomplete.id)
             let bytes = plan.files.reduce(Int64(0)) { $0 + $1.size }
             emit(.planned(files: plan.files.count, bytes: bytes))
@@ -294,6 +297,7 @@ actor Coordinator {
                 emit(.phase(.idle))
                 return
             }
+            preparation.begin(.startingTransfer)
             launchRunner(sessionID: incomplete.id, card: volume.info, config: config, staging: staging)
             return
         }
@@ -301,10 +305,13 @@ actor Coordinator {
         let sessionID = UUID()
         emit(.sessionStarted(sessionID: sessionID, card: volume.info, resumed: false))
         emit(.phase(.scanning))
+        let preparation = PreparationTracker()
+        let sampler = samplePreparation(preparation)
+        defer { sampler.cancel() }
         let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
         let scope = config.ingestScope
         let scanned = await Task.detached(priority: .userInitiated) {
-            planner.scan(cardRoot: cardRoot, scope: scope)
+            planner.scan(cardRoot: cardRoot, scope: scope, progress: preparation)
         }.value
         guard !scanned.isEmpty else {
             emit(.attention(AttentionItem(severity: .info,
@@ -314,7 +321,8 @@ actor Coordinator {
             emit(.phase(.idle))
             return
         }
-        let plan = await planner.plan(scanned: scanned)
+        let plan = await planner.plan(scanned: scanned, progress: preparation)
+        preparation.begin(.startingTransfer)
         // Stamp this physical card with a unique token so a same-size/same-name
         // card can never be mistaken for it at wipe time.
         let token = UUID().uuidString
@@ -338,10 +346,12 @@ actor Coordinator {
         }
         // Recovery copies survive completion and app restarts. Only a genuinely
         // new transfer may retire completed batches, after fresh NAS read-back.
+        preparation.begin(.checkingNAS)
         if await nas.validateNow(force: true) == .healthy {
+            preparation.begin(.checkingSavedCopies)
             let history = await journal.loadHistory(limit: Int.max)
             await staging.pruneCompletedBeforeNextRun(history, nasRoot: config.nasRootPath,
-                                                      keepDays: config.keepStagedDays)
+                                                      keepDays: config.keepStagedDays, preparation: preparation)
         }
         guard statfsInfo(path: volume.info.mountPath) != nil,
               readCardToken(volume.info.mountPath) == token else {
@@ -350,7 +360,20 @@ actor Coordinator {
             return
         }
         emit(.planned(files: record.stats.filesPlanned, bytes: record.stats.bytesPlanned))
+        preparation.begin(.startingTransfer)
         launchRunner(sessionID: sessionID, card: volume.info, config: config, staging: staging)
+    }
+
+    func samplePreparation(_ tracker: PreparationTracker) -> Task<Void, Never> {
+        emit(.preparation(tracker.snapshot()))
+        let emit = self.emit
+        return Task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                guard !Task.isCancelled else { return }
+                emit(.preparation(tracker.snapshot()))
+            }
+        }
     }
 
     private func libraryMigrationBlocksIngest() -> Bool {
@@ -415,14 +438,17 @@ actor Coordinator {
         }
         let config = await configProvider()
         emit(.phase(.scanning))
+        let preparation = PreparationTracker()
+        let sampler = samplePreparation(preparation)
+        defer { sampler.cancel() }
         guard let record = await journal.session(id: runner.sessionID) else { return }
         let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
         let scope = config.ingestScope
         let cardRoot = URL(fileURLWithPath: volume.info.mountPath, isDirectory: true)
         let scanned = await Task.detached(priority: .userInitiated) {
-            planner.scan(cardRoot: cardRoot, scope: scope)
+            planner.scan(cardRoot: cardRoot, scope: scope, progress: preparation)
         }.value
-        let plan = await planner.merge(scanned: scanned, into: record.files)
+        let plan = await planner.merge(scanned: scanned, into: record.files, progress: preparation)
         await journal.replaceFiles(plan.files, in: runner.sessionID)
         await runner.cardReturned()
         awaitingReinsert.remove(volume.info.volumeUUID)

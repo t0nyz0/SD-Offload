@@ -75,6 +75,7 @@ public enum EngineEvent: Sendable {
     case sessionStarted(sessionID: UUID, card: CardInfo, resumed: Bool)
     case planned(files: Int, bytes: Int64)
     case phase(EnginePhase)
+    case preparation(PreparationProgress)       // coalesced card inventory/date/NAS setup
     case progress(ProgressSnapshot)
     case speedSample(SpeedSample)              // 1 Hz, for the sparkline
     case wipeCountdown(secondsRemaining: Int)

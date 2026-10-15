@@ -5,6 +5,15 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.22] — 2026-10-15
+
+### Fixed
+- Replace the motionless 0% scan screen with live preparation status: files and bytes found, current file/folder, date-reading or saved-progress counts, the current step, and elapsed time. Show measured preparation work instead of copy percentages and estimated completion times before the transfer begins.
+- Identify NAS connection and previous-backup read-back separately from card scanning, including verified-file/byte progress before freeing old local recovery space. Explain a card or NAS wait after ten seconds without activity, with a prompt to check macOS access or the connection.
+
+### Added
+- Eight preparation regressions covering inventory accuracy, blocked metadata reads, elapsed/stalled activity, concurrent counter cost, resume identity, safe previous-backup cleanup, coalesced sampler lifecycle, and truthful UI labels. Progress is sampled at four updates per second; file workers only update counters.
+
 ## [1.7.21] — 2026-10-06
 
 ### Fixed

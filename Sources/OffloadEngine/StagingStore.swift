@@ -49,7 +49,8 @@ public struct StagingStore: Sendable {
     /// Only a new transfer may retire recovery copies. Never sweep unknown,
     /// failed, interrupted, or unverifiable sessions based on directory age.
     public func pruneCompletedBeforeNextRun(_ history: [SessionRecord], nasRoot: String,
-                                            keepDays: Int, now: Date = Date()) async {
+                                           keepDays: Int, now: Date = Date(),
+                                           preparation: PreparationTracker? = nil) async {
         for record in history {
             guard record.state == .done, let ended = record.endedAt,
                   now.timeIntervalSince(ended) >= Double(max(0, keepDays)) * 86_400,
@@ -57,7 +58,9 @@ public struct StagingStore: Sendable {
                     at: sessionDir(record.id), includingPropertiesForKeys: nil),
                   !retained.isEmpty else { continue }
             do {
-                try await DestinationVerifier.verify(files: record.files, root: nasRoot)
+                preparation?.beginSavedCopyCheck(record.files)
+                try await DestinationVerifier.verify(files: record.files, root: nasRoot,
+                                                       tracker: preparation?.savedCopyTracker)
                 purgeSession(record.id)
             } catch {
                 // A missing/changed NAS file makes the local copy essential.
