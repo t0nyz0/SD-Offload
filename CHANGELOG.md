@@ -11,6 +11,7 @@ the app version lives in `VERSION`, the build number is the git commit count.
 - Start copying without routinely reading back previous batches first. Verify and retire older local recovery copies during cancellable idle maintenance after the next transfer, protecting the just-completed batch. Reclaim before copying only when the Mac lacks enough free space for the new batch and configured headroom.
 - Acknowledge a mounted card immediately, before the media-folder probe, with a simple **Card detected** status. Card scanning no longer looks like a mandatory three-step setup flow.
 - Register card monitoring before NAS status reads and run those reads off the coordinator. Use cached kernel capacity/free-space information instead of an extra device filesystem call during detection; prioritize the media-folder probe.
+- Run blocking card-folder probes and NAS overview reads on the I/O queue so stalled device calls cannot occupy Swift's cooperative executor.
 - Reconcile Workspace mount/unmount notifications alongside DiskArbitration and wake events. Distinguish physical media generations even when a reader reuses the BSD name, volume UUID, path, and filesystem ID; invalidate late probes on rapid reinsertion.
 
 ### Added

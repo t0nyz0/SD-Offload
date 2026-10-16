@@ -106,7 +106,7 @@ actor Coordinator {
     func emitGlance() async {
         let config = await configProvider()
         let provider = glanceProvider
-        let glance = await BackgroundWork.run { provider(config) }
+        guard let glance = try? await ChunkedIO.blocking({ provider(config) }) else { return }
         emit(.nasGlance(glance))
     }
 

@@ -306,10 +306,12 @@ public final class CardWatcher: @unchecked Sendable {
             let mountPath = pathURL.path
             // A camera card if it carries ANY known media root (not just DCIM —
             // some bodies use PRIVATE/AVCHD/CLIP/MP_ROOT).
-            let hasMediaRoot = IngestPlanner.mediaRoots.contains { root in
-                var isDir: ObjCBool = false
-                return FileManager.default.fileExists(atPath: mountPath + "/" + root, isDirectory: &isDir) && isDir.boolValue
-            }
+            let hasMediaRoot = (try? await ChunkedIO.blocking {
+                IngestPlanner.mediaRoots.contains { root in
+                    var isDir: ObjCBool = false
+                    return FileManager.default.fileExists(atPath: mountPath + "/" + root, isDirectory: &isDir) && isDir.boolValue
+                }
+            }) ?? false
             let info = CardInfo(volumeUUID: uuid, bsdName: bsdName, mountPath: mountPath,
                                 volumeName: name,
                                 capacityBytes: mountedVolume.capacityBytes > 0 ? mountedVolume.capacityBytes : mediaSize,
