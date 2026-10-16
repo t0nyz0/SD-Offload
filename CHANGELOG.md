@@ -5,6 +5,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.24] — 2026-10-15
+
+### Added
+- Copy selected Library photos with **⌘C**, the selection toolbar, or right-click **Copy**, then paste the original files into Desktop or another Finder folder. Copy uses the displayed photo (JPEG for a JPEG+RAW pair); **Copy with RAW** also includes its RAW companions. Multiple selections retain their display order, and right-clicking an unselected photo copies that photo.
+- Copy the current viewer photo with **⌘C** or its Copy button, and copy individual Favorites from their context menu. Native responder commands preserve text copying in search and tag editors.
+- Six focused clipboard regressions covering selection, context-menu targeting, JPEG/RAW/video behavior, duplicate references, empty-clipboard preservation, native file-URL round trips with exact byte checks, and a 10,000-photo reference check. Tests use a private clipboard and temporary folders without visible test windows.
+
 ## [1.7.23] — 2026-10-15
 
 ### Fixed

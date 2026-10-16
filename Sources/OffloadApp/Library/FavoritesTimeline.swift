@@ -66,6 +66,15 @@ struct FavoritesTimeline: View {
                                                         isFavorite: true)
                                                 .onTapGesture { openViewer(item) }
                                                 .contextMenu {
+                                                    Button("Copy") {
+                                                        if !LibraryClipboard.copy([item]) { NSSound.beep() }
+                                                    }
+                                                    if item.rawCompanion != nil {
+                                                        Button("Copy with RAW") {
+                                                            if !LibraryClipboard.copy([item], includingRAW: true) { NSSound.beep() }
+                                                        }
+                                                    }
+                                                    Divider()
                                                     Button("Open") { openViewer(item) }
                                                     Button("Remove from Favorites") { model.toggleFavorite(item) }
                                                     Button("Reveal in Finder") {

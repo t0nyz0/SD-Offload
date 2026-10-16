@@ -25,6 +25,7 @@ struct ImageViewer: View {
     @State private var videoPlayer = AVPlayer()
     @State private var videoLoading = false
     @State private var videoError: String?
+    @FocusState private var viewerFocused: Bool
 
     private var isVideo: Bool {
         guard let current else { return false }
@@ -77,6 +78,10 @@ struct ImageViewer: View {
                         .padding(.vertical, DS.Space.s)
                 }
             }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($viewerFocused)
+            .onAppear { viewerFocused = true }
             .background(shortcuts)
             .transition(.opacity)
             .task(id: item.id) {
@@ -180,6 +185,12 @@ struct ImageViewer: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
                 }
                 Spacer()
+                Button {
+                    if !LibraryClipboard.copy([item]) { NSSound.beep() }
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+                .modifier(ViewerControlHint(text: "Copy photo — paste the original file into a Finder folder (⌘C)", activeHint: $hoveredControlHint))
                 Button { autoAdvance.toggle() } label: {
                     Label("Auto-advance", systemImage: autoAdvance ? "forward.fill" : "forward")
                 }

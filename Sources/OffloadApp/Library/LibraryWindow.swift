@@ -174,6 +174,9 @@ struct LibraryWindow: View {
                 }
             }
         }
+        .onCommand(#selector(NSText.copy(_:)), perform: copyItems(model).isEmpty ? nil : {
+            if !LibraryClipboard.copy(copyItems(model)) { NSSound.beep() }
+        })
         .toolbar {
             if viewerIndex != nil {
                 ToolbarItem(placement: .navigation) {
@@ -204,6 +207,15 @@ struct LibraryWindow: View {
         } message: {
             Text(model.deleteError ?? "")
         }
+    }
+
+    private func copyItems(_ model: LibraryModel) -> [DisplayItem] {
+        if let viewerIndex {
+            let photos = viewerPhotos(model)
+            return photos.indices.contains(viewerIndex) ? [photos[viewerIndex]] : []
+        }
+        guard model.source == .nas || model.source == .card else { return [] }
+        return model.selectedItems
     }
 
     private func viewerPhotos(_ model: LibraryModel) -> [DisplayItem] {
@@ -740,6 +752,7 @@ private struct LibraryGrid: View {
     @State private var pendingDelete: DisplayItem?
     @State private var pendingScope: DeleteScope = .all
     @State private var bulkConfirm = false
+    @FocusState private var gridFocused: Bool
     @AppStorage("offload.library.tileSize") private var tileSize = 150.0
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: tileSize, maximum: tileSize + 60), spacing: 12)]
@@ -761,6 +774,9 @@ private struct LibraryGrid: View {
         VStack(spacing: 0) {
             if !model.selection.isEmpty { selectionBar }
             grid
+                .focusable()
+                .focusEffectDisabled()
+                .focused($gridFocused)
         }
         .background(
             // Off-screen shortcut hosts: ⌘A select all, ⌦/⌫ delete selection.
@@ -816,6 +832,13 @@ private struct LibraryGrid: View {
                 .buttonStyle(.plain).help("Reject").foregroundStyle(.red)
             Spacer()
             Button {
+                if !LibraryClipboard.copy(model.selectedItems) { NSSound.beep() }
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .controlSize(.small)
+            .help("Copy the selected photos, then paste into a Finder folder (⌘C)")
+            Button {
                 NSWorkspace.shared.activateFileViewerSelecting(model.selectedItems.map { $0.primary.url })
             } label: {
                 Label("Show in Finder", systemImage: "folder")
@@ -841,7 +864,10 @@ private struct LibraryGrid: View {
     }
 
     private var grid: some View {
-        ScrollView {
+        // Resolve this once per grid update, rather than scan the whole library
+        // for every tile's context menu. File targets are resolved on Copy only.
+        let selectionHasRAW = model.selectedItems.contains { $0.rawCompanion != nil }
+        return ScrollView {
             let folders = model.folderItems
             let photos = model.photoItems
             if folders.isEmpty && photos.isEmpty {
@@ -862,7 +888,7 @@ private struct LibraryGrid: View {
                                     .accessibilityAddTraits(.isButton)
                                     .accessibilityAction { model.enter(item.primary) }
                                     .help("Double-click to open folder")
-                                    .contextMenu { menu(for: item) }
+                                    .contextMenu { menu(for: item, selectionHasRAW: selectionHasRAW) }
                             }
                         }
                     }
@@ -878,12 +904,13 @@ private struct LibraryGrid: View {
                                             side: thumbSide)
                                     .onTapGesture(count: 2) { open(item) }
                                     .onTapGesture {
+                                        gridFocused = true
                                         let flags = NSEvent.modifierFlags
                                         model.handleTap(item,
                                                         command: flags.contains(.command),
                                                         shift: flags.contains(.shift))
                                     }
-                                    .contextMenu { menu(for: item) }
+                                    .contextMenu { menu(for: item, selectionHasRAW: selectionHasRAW) }
                             }
                         }
                     }
@@ -912,7 +939,7 @@ private struct LibraryGrid: View {
     }
 
     @ViewBuilder
-    private func menu(for item: DisplayItem) -> some View {
+    private func menu(for item: DisplayItem, selectionHasRAW: Bool) -> some View {
         if item.isFolder {
             Button("Open") { model.enter(item.primary) }
             Button(model.isPinned(item.primary.id) ? "Remove from Sidebar" : "Pin to Sidebar") {
@@ -920,6 +947,15 @@ private struct LibraryGrid: View {
             }
             Button("Reveal in Finder") { reveal(item.primary.url) }
         } else {
+            Button("Copy") {
+                copy(item)
+            }
+            if (model.selection.contains(item.id) && selectionHasRAW) || item.rawCompanion != nil {
+                Button("Copy with RAW") {
+                    copy(item, includingRAW: true)
+                }
+            }
+            Divider()
             Button("Open") { openViewer(item) }
             Button("Open in Preview") { NSWorkspace.shared.open(item.primary.url) }
             if let rawURL = item.rawCompanion?.url {
@@ -959,6 +995,11 @@ private struct LibraryGrid: View {
                 }
             }
         }
+    }
+
+    private func copy(_ item: DisplayItem, includingRAW: Bool = false) {
+        let items = LibraryClipboard.items(in: model.photoItems, selection: model.selection, clicked: item)
+        if !LibraryClipboard.copy(items, includingRAW: includingRAW) { NSSound.beep() }
     }
 
     private func reveal(_ url: URL) {

@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-201%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-207%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -111,6 +111,7 @@ one being offloaded.
 | Info inspector | Camera, lens, full exposure, dimensions/megapixels, GPS, and content tags — packed into one panel |
 | Culling workflow | Rate 0–5, mark Pick or Reject, filter the grid, auto-advance in the viewer, and delete rejected photos when ready |
 | Finder access | Visible Show in Finder for selected files and viewer photos; Open Folder in Finder for the current folder |
+| Copy to Finder | Select photos and press ⌘C or right-click Copy, then paste into Desktop or any Finder folder; Copy with RAW includes paired originals |
 | Organize & delete | Favorites timeline, pinned folders, multi-select, and confirmed deletion of photos with their RAW/sidecars |
 
 **AI, faces & search**
@@ -208,6 +209,10 @@ generation when a reader reuses its device name, and uses cached kernel volume s
 NAS status reads run off the coordinator and never precede card watcher registration.
 Five focused regressions cover quick reinsertion, early detection, blocked NAS status reads,
 space-based cleanup decisions, and preserving recovery copies when cleanup is cancelled.
+Six clipboard regressions cover multi-selection, right-click targeting, JPEG/RAW/video files,
+duplicate references, preserving the clipboard on empty selection, and native file-URL paste
+with exact byte checks. A 10,000-photo check needs no mounted NAS or source reads.
+These checks use a private clipboard and temporary folders without opening test windows.
 Recovery also respects Ask and Ignore for unfinished sessions; POSIX errors retain their operation and code.
 To require an actual disposable exFAT image instead of accepting a local-directory fallback, run
 `OFFLOAD_REQUIRE_EXFAT=1 swift run offload-harness run`. A failure to create the image is a failed
@@ -294,7 +299,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 201 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 207 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
 
 ## Status
 
