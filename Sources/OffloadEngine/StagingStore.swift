@@ -12,6 +12,11 @@ public struct StagingStore: Sendable {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
+    static func requiresReclamation(bytesToRead: Int64, headroomBytes: Int64, freeBytes: Int64) -> Bool {
+        let headroom = max(0, headroomBytes)
+        return freeBytes < headroom || max(0, bytesToRead) > freeBytes - headroom
+    }
+
     public func sessionDir(_ sessionID: UUID) -> URL {
         root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
     }
@@ -46,21 +51,25 @@ public struct StagingStore: Sendable {
         }
     }
 
-    /// Only a new transfer may retire recovery copies. Never sweep unknown,
+    /// Idle maintenance may retire completed recovery copies. Never sweep unknown,
     /// failed, interrupted, or unverifiable sessions based on directory age.
     public func pruneCompletedBeforeNextRun(_ history: [SessionRecord], nasRoot: String,
                                            keepDays: Int, now: Date = Date(),
-                                           preparation: PreparationTracker? = nil) async {
+                                           preparation: PreparationTracker? = nil,
+                                           protectedSessionID: UUID? = nil) async {
         for record in history {
-            guard record.state == .done, let ended = record.endedAt,
+            guard !Task.isCancelled else { return }
+            guard record.id != protectedSessionID, record.state == .done, let ended = record.endedAt,
                   now.timeIntervalSince(ended) >= Double(max(0, keepDays)) * 86_400,
                   let retained = try? FileManager.default.contentsOfDirectory(
                     at: sessionDir(record.id), includingPropertiesForKeys: nil),
                   !retained.isEmpty else { continue }
             do {
+                try Task.checkCancellation()
                 preparation?.beginSavedCopyCheck(record.files)
                 try await DestinationVerifier.verify(files: record.files, root: nasRoot,
                                                        tracker: preparation?.savedCopyTracker)
+                try Task.checkCancellation()
                 purgeSession(record.id)
             } catch {
                 // A missing/changed NAS file makes the local copy essential.

@@ -23,25 +23,35 @@ struct CardProbeState {
     var devices: [String] { Array(entries.keys) }
 
     mutating func begin(device: String, identity: Identity,
-                        now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> (probe: Probe?, removed: String?) {
+                        now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> (probe: Probe?, removed: String?, detected: Bool) {
+        let detected = entries[device]?.identity != identity
         var removed: String?
         if let old = entries[device], old.identity != identity {
             if old.delivered { removed = old.identity.uuid }
             entries.removeValue(forKey: device)
         }
         var entry = entries[device] ?? Entry(identity: identity)
-        guard !entry.delivered else { return (nil, removed) }
+        guard !entry.delivered else { return (nil, removed, false) }
         if let pending = entry.pending {
             // A device call can outlive sleep or a permission prompt. Permit one
             // replacement probe, never an unbounded stream of blocked tasks.
-            guard now - entry.pendingSince >= 30, entry.superseded.isEmpty else { return (nil, removed) }
+            guard now - entry.pendingSince >= 30, entry.superseded.isEmpty else { return (nil, removed, false) }
             entry.superseded.insert(pending.id)
         }
         let probe = Probe(id: UUID(), identity: identity)
         entry.pending = probe
         entry.pendingSince = now
         entries[device] = entry
-        return (probe, removed)
+        return (probe, removed, detected)
+    }
+
+    func isCurrent(device: String, probe: Probe) -> Bool { entries[device]?.pending == probe }
+
+    /// Workspace unmounts are authoritative even when a quick removal/reinsert
+    /// was entirely between the kernel polls and DA path-flap grace interval.
+    mutating func remove(path: String) -> [(device: String, uuid: String?)] {
+        let devices = entries.filter { $0.value.identity.path == path }.map(\.key)
+        return devices.map { device in (device, remove(device: device)) }
     }
 
     mutating func complete(device: String, probe: Probe, ready: Bool) -> Bool {

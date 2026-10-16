@@ -2,6 +2,39 @@ import XCTest
 @testable import OffloadEngine
 
 final class CardProbeStateTests: XCTestCase {
+    func testDetectionIsAnnouncedBeforeProbeCompletionAndOncePerInsertion() throws {
+        var state = CardProbeState()
+        let identity = CardProbeState.Identity(uuid: "card", path: "/Volumes/Card", mountID: "mount")
+        let first = state.begin(device: "disk4", identity: identity, now: 0)
+        XCTAssertTrue(first.detected)
+        XCTAssertNotNil(first.probe)
+        XCTAssertFalse(state.begin(device: "disk4", identity: identity, now: 1).detected)
+        let probe = try XCTUnwrap(first.probe)
+        XCTAssertFalse(state.complete(device: "disk4", probe: probe, ready: false))
+        XCTAssertFalse(state.begin(device: "disk4", identity: identity, now: 2).detected)
+        _ = state.remove(path: identity.path)
+        XCTAssertTrue(state.begin(device: "disk4", identity: identity, now: 3).detected)
+    }
+
+    func testFastWorkspaceUnmountAndReusedMediaIdentityInvalidateOldProbes() throws {
+        var state = CardProbeState()
+        let mount = try XCTUnwrap(CardMountSnapshot(source: "/dev/disk4", path: "/Volumes/Card", mountID: "same-fsid",
+                                                   capacityBytes: 1_000, freeBytes: 500))
+        let old = try XCTUnwrap(state.begin(device: "disk4", identity: mount.probeIdentity(uuid: "same-card", mediaID: 10)).probe)
+        XCTAssertTrue(state.complete(device: "disk4", probe: old, ready: true))
+        let removed = state.remove(path: mount.path)
+        XCTAssertEqual(removed.count, 1)
+        XCTAssertEqual(removed.first?.uuid, "same-card")
+        let reinserted = try XCTUnwrap(state.begin(device: "disk4", identity: old.identity).probe)
+        XCTAssertFalse(state.complete(device: "disk4", probe: old, ready: true))
+        XCTAssertTrue(state.complete(device: "disk4", probe: reinserted, ready: true))
+        let replaced = state.begin(device: "disk4", identity: mount.probeIdentity(uuid: "same-card", mediaID: 11))
+        XCTAssertEqual(replaced.removed, "same-card")
+        XCTAssertTrue(replaced.detected)
+        XCTAssertNotNil(replaced.probe)
+        XCTAssertEqual(mount, CardMountSnapshot(source: "/dev/disk4", path: mount.path, mountID: "same-fsid",
+                                               capacityBytes: 1_000, freeBytes: 400), "Free-space changes are not a reinsertion")
+    }
     let identity = CardProbeState.Identity(uuid: "card", path: "/Volumes/Card", mountID: "1")
 
     func testSlowProbeDoesNotLaunchDuplicateWork() {

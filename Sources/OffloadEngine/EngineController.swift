@@ -43,9 +43,10 @@ actor Coordinator {
     let configMutator: ConfigMutator
     let journal: Journal
     let emit: @Sendable (EngineEvent) -> Void
-    let watcher = CardWatcher()
+    let watcher: CardWatcher
     let nas: NASLocator
     private let cardPresenceCheck: @Sendable (CardInfo) -> Bool
+    private let glanceProvider: @Sendable (AppConfig) -> NASGlance
 
     private(set) var runner: SessionRunner?
     // Set synchronously the instant a start is committed to — BEFORE the first
@@ -68,11 +69,13 @@ actor Coordinator {
     private var awaitingReinsert: Set<String> = []
     private var eventsTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
+    private var cleanupTask: Task<Void, Never>?
 
     init(configProvider: @escaping ConfigProvider,
          configMutator: @escaping ConfigMutator,
          journal: Journal,
          cardPresenceCheck: @escaping @Sendable (CardInfo) -> Bool = { CardWatcher.isMounted($0) },
+         glanceProvider: @escaping @Sendable (AppConfig) -> NASGlance = { EngineGlance.quickNASGlance(config: $0) },
          emit: @escaping @Sendable (EngineEvent) -> Void) {
         self.configProvider = configProvider
         self.configMutator = configMutator
@@ -80,12 +83,16 @@ actor Coordinator {
         self.emit = emit
         self.nas = NASLocator(configProvider: configProvider)
         self.cardPresenceCheck = cardPresenceCheck
+        self.glanceProvider = glanceProvider
+        self.watcher = CardWatcher(onDetected: { emit(.cardDetected($0)) },
+            onProbeFinished: { emit(.cardProbeFinished(bsdName: $0, hasMediaRoot: $1)) },
+            onRemoved: { emit(.cardDetectionRemoved(bsdName: $0)) })
     }
 
-    func start() async {
-        await emitGlance()
-        // Starting the app must never purge the last recovery copies.
+    deinit { cleanupTask?.cancel() }
 
+    func start() async {
+        // Register card events before touching a potentially sleeping NAS.
         watcher.start()
         eventsTask = Task { [weak self] in
             guard let events = self?.watcher.events else { return }
@@ -93,11 +100,14 @@ actor Coordinator {
                 await self?.handle(event)
             }
         }
+        Task { [weak self] in await self?.emitGlance() }
     }
 
     func emitGlance() async {
         let config = await configProvider()
-        emit(.nasGlance(EngineGlance.quickNASGlance(config: config)))
+        let provider = glanceProvider
+        let glance = await BackgroundWork.run { provider(config) }
+        emit(.nasGlance(glance))
     }
 
     /// A user-visible refresh doubles as one safe reconnect attempt. It never
@@ -261,6 +271,7 @@ actor Coordinator {
         // is synchronous), so the guard keeps rejecting concurrent starts.
         startingSession = true
         defer { startingSession = false }
+        cleanupTask?.cancel()
         lastVolume = volume
         let config = await configProvider()
         prewarmNASIfEnabled(config)   // start waking the NAS while we scan/copy
@@ -344,14 +355,19 @@ actor Coordinator {
             emit(.phase(.failed))
             return
         }
-        // Recovery copies survive completion and app restarts. Only a genuinely
-        // new transfer may retire completed batches, after fresh NAS read-back.
-        preparation.begin(.checkingNAS)
-        if await nas.validateNow(force: true) == .healthy {
-            preparation.begin(.checkingSavedCopies)
-            let history = await journal.loadHistory(limit: Int.max)
-            await staging.pruneCompletedBeforeNextRun(history, nasRoot: config.nasRootPath,
-                                                      keepDays: config.keepStagedDays, preparation: preparation)
+        // Old-batch retention is idle maintenance, never a prerequisite for
+        // copying a card that fits. Reclaim first only when local space actually
+        // cannot hold this batch; never discard unverified recovery data.
+        let free = await BackgroundWork.run { statfsInfo(path: config.stagingRootPath)?.freeBytes }
+        if let free, StagingStore.requiresReclamation(bytesToRead: plan.bytesToRead,
+                                                      headroomBytes: config.stagingHeadroomBytes, freeBytes: free) {
+            preparation.begin(.checkingNAS)
+            if await nas.validateNow(force: true) == .healthy {
+                preparation.begin(.checkingSavedCopies)
+                let history = await journal.loadHistory(limit: Int.max)
+                await staging.pruneCompletedBeforeNextRun(history, nasRoot: config.nasRootPath,
+                    keepDays: config.keepStagedDays, preparation: preparation)
+            }
         }
         guard statfsInfo(path: volume.info.mountPath) != nil,
               readCardToken(volume.info.mountPath) == token else {
@@ -385,6 +401,7 @@ actor Coordinator {
 
     private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore,
                               wipeOnly: Bool = false) {
+        cleanupTask?.cancel()
         awaitingReinsert.remove(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
@@ -400,7 +417,7 @@ actor Coordinator {
     private func runnerFinished(_ finished: SessionRunner) async {
         if runner === finished { runner = nil }
         handledThisInsertion.insert(finished.card.volumeUUID)   // done → don't re-ingest while it sits in the reader
-        await emitGlance()
+        Task { [weak self] in await self?.emitGlance() }
         // Auto-start the next queued card that is STILL physically present. A card
         // pulled while waiting in the queue is dropped, not started against a ghost
         // mount; we fall through to the next queued card if any.
@@ -414,6 +431,28 @@ actor Coordinator {
                                           title: "Starting queued card",
                                           detail: "Offloading \(next.info.volumeName).")))
             await startSession(next)   // sets `runner` on launch → loop exits; bails cleanly → tries next
+        }
+        if runner == nil, !startingSession, !finished.wipeOnly {
+            scheduleIdleCleanup(protecting: finished.sessionID)
+        }
+    }
+
+    private func scheduleIdleCleanup(protecting latestSessionID: UUID) {
+        cleanupTask?.cancel()
+        let configProvider = self.configProvider, journal = self.journal
+        cleanupTask = Task.detached(priority: .utility) {
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            let config = await configProvider()
+            guard !Task.isCancelled else { return }
+            // A separate locator keeps a slow maintenance check out of the live
+            // transfer's NAS actor. No new card ever awaits this task.
+            let locator = NASLocator(configProvider: { config })
+            guard await locator.validateNow(force: true) == .healthy, !Task.isCancelled else { return }
+            let history = await journal.loadHistory(limit: Int.max)
+            guard !Task.isCancelled else { return }
+            await StagingStore(rootPath: config.stagingRootPath).pruneCompletedBeforeNextRun(
+                history, nasRoot: config.nasRootPath, keepDays: config.keepStagedDays,
+                protectedSessionID: latestSessionID)
         }
     }
 

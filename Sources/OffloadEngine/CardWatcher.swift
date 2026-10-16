@@ -1,6 +1,7 @@
 import Foundation
 import DiskArbitration
 import AppKit
+import IOKit
 import OffloadCore
 
 /// Raw volume signals from DiskArbitration. Classification happens upstream
@@ -54,11 +55,20 @@ public final class CardWatcher: @unchecked Sendable {
     /// sub-second FSKit path-flap can't be mistaken for a real removal.
     private var reconcileTimer: DispatchSourceTimer?
     private var wakeObserver: NSObjectProtocol?
+    private var mountObservers: [NSObjectProtocol] = []
+    private let onDetected: @Sendable (CardInfo) -> Void
+    private let onProbeFinished: @Sendable (String, Bool) -> Void
+    private let onRemoved: @Sendable (String) -> Void
     private var absentPolls: [String: Int] = [:]
     private let reconcileInterval: TimeInterval = 1.5
     private let absentPollsBeforeUnmount = 2          // ~3 s gone ⇒ real removal, not a flap
 
-    public init() {
+    public init(onDetected: @escaping @Sendable (CardInfo) -> Void = { _ in },
+                onProbeFinished: @escaping @Sendable (String, Bool) -> Void = { _, _ in },
+                onRemoved: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.onDetected = onDetected
+        self.onProbeFinished = onProbeFinished
+        self.onRemoved = onRemoved
         var cont: AsyncStream<RawCardEvent>.Continuation!
         events = AsyncStream(bufferingPolicy: .unbounded) { cont = $0 }
         continuation = cont
@@ -104,6 +114,24 @@ public final class CardWatcher: @unchecked Sendable {
         ) { [weak self] _ in
             self?.daQueue.async { [weak self] in self?.reconcile() }
         }
+        let center = NSWorkspace.shared.notificationCenter
+        mountObservers.append(center.addObserver(forName: NSWorkspace.didMountNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.daQueue.async { [weak self] in self?.reconcile() }
+        })
+        mountObservers.append(center.addObserver(forName: NSWorkspace.didUnmountNotification, object: nil, queue: nil) { [weak self] note in
+            guard let path = (note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL)?.path else { return }
+            self?.daQueue.async { [weak self] in
+                guard let self else { return }
+                for removed in self.probes.remove(path: path) {
+                    self.pendingUnmounts.removeValue(forKey: removed.device)?.cancel()
+                    self.absentPolls.removeValue(forKey: removed.device)
+                    self.onRemoved(removed.device)
+                    if let uuid = removed.uuid {
+                        self.continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: removed.device))
+                    }
+                }
+            }
+        })
     }
 
     /// Force a re-check of every currently-mounted volume, dropping the dedup state
@@ -141,6 +169,7 @@ public final class CardWatcher: @unchecked Sendable {
         guard let bsdName = DADiskGetBSDName(disk).map({ String(cString: $0) }) else { return }
         pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // real removal supersedes a pending flap
         absentPolls.removeValue(forKey: bsdName)
+        onRemoved(bsdName)
         if let uuid = probes.remove(device: bsdName) {
             continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
         }
@@ -161,6 +190,7 @@ public final class CardWatcher: @unchecked Sendable {
             guard misses >= absentPollsBeforeUnmount else { continue }
             absentPolls.removeValue(forKey: bsdName)
             pendingUnmounts.removeValue(forKey: bsdName)?.cancel()
+            onRemoved(bsdName)
             if let uuid = probes.remove(device: bsdName) {
                 continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
             }
@@ -192,7 +222,9 @@ public final class CardWatcher: @unchecked Sendable {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(MNAMELEN)) { String(cString: $0) }
             }
             if let mount = CardMountSnapshot(source: from, path: path,
-                                             mountID: "\(fs.f_fsid.val.0):\(fs.f_fsid.val.1)") {
+                                             mountID: "\(fs.f_fsid.val.0):\(fs.f_fsid.val.1)",
+                                             capacityBytes: Int64(fs.f_blocks) * Int64(fs.f_bsize),
+                                             freeBytes: Int64(fs.f_bavail) * Int64(fs.f_bsize)) {
                 out[mount.device] = mount
             }
         }
@@ -216,6 +248,7 @@ public final class CardWatcher: @unchecked Sendable {
                 guard let self else { return }
                 self.pendingUnmounts.removeValue(forKey: bsdName)
                 guard Self.mountedVolumes()[bsdName] == nil else { return }
+                self.onRemoved(bsdName)
                 guard let uuid = self.probes.remove(device: bsdName) else { return }
                 self.continuation.yield(.volumeUnmounted(volumeUUID: uuid, bsdName: bsdName))
             }
@@ -245,17 +278,31 @@ public final class CardWatcher: @unchecked Sendable {
 
         pendingUnmounts.removeValue(forKey: bsdName)?.cancel()   // path is back — cancel any pending flap unmount
         absentPolls.removeValue(forKey: bsdName)
-        let identity = CardProbeState.Identity(uuid: uuid, path: pathURL.path,
-                                               mountID: mountedVolume.mountID)
+        // A reader can reuse BSD name, UUID and filesystem ID after a card swap.
+        // IOMedia's registry generation still distinguishes a new physical media object.
+        var mediaID: UInt64 = 0
+        let media = DADiskCopyIOMedia(disk)
+        if media != 0 {
+            _ = IORegistryEntryGetRegistryEntryID(media, &mediaID)
+            IOObjectRelease(media)
+        }
+        let identity = mountedVolume.probeIdentity(uuid: uuid, mediaID: mediaID)
         let observation = probes.begin(device: bsdName, identity: identity)
         if let removed = observation.removed {
             continuation.yield(.volumeUnmounted(volumeUUID: removed, bsdName: bsdName))
         }
         guard let probe = observation.probe else { return }
+        if observation.detected {
+            // Acknowledge the mounted device before any potentially blocking
+            // filesystem/media-root probe. This bypasses the coordinator backlog.
+            onDetected(CardInfo(volumeUUID: uuid, bsdName: bsdName, mountPath: pathURL.path,
+                volumeName: name, capacityBytes: mountedVolume.capacityBytes > 0 ? mountedVolume.capacityBytes : mediaSize,
+                freeBytes: mountedVolume.freeBytes, hasMediaRoot: false))
+        }
 
         // Probe off the event queue. Completion is serialized and generation-
         // checked, so a removed/replaced card cannot reappear from stale work.
-        Task.detached(priority: .utility) { [weak self] in
+        Task.detached(priority: .userInitiated) { [weak self] in
             let mountPath = pathURL.path
             // A camera card if it carries ANY known media root (not just DCIM —
             // some bodies use PRIVATE/AVCHD/CLIP/MP_ROOT).
@@ -263,11 +310,10 @@ public final class CardWatcher: @unchecked Sendable {
                 var isDir: ObjCBool = false
                 return FileManager.default.fileExists(atPath: mountPath + "/" + root, isDirectory: &isDir) && isDir.boolValue
             }
-            let fs = statfsInfo(path: mountPath)
             let info = CardInfo(volumeUUID: uuid, bsdName: bsdName, mountPath: mountPath,
                                 volumeName: name,
-                                capacityBytes: fs?.totalBytes ?? mediaSize,
-                                freeBytes: fs?.freeBytes ?? 0,
+                                capacityBytes: mountedVolume.capacityBytes > 0 ? mountedVolume.capacityBytes : mediaSize,
+                                freeBytes: mountedVolume.freeBytes,
                                 hasMediaRoot: hasMediaRoot)
             let candidate = CandidateVolume(info: info, isRemovable: removable,
                                             isEjectable: ejectable, isInternal: internalDevice,
@@ -275,10 +321,12 @@ public final class CardWatcher: @unchecked Sendable {
             self?.daQueue.async { [weak self] in
                 guard let self else { return }
                 let stillMounted = Self.mountedVolumes()[bsdName] == mountedVolume
+                let current = self.probes.isCurrent(device: bsdName, probe: probe)
                 if self.probes.complete(device: bsdName, probe: probe,
                                         ready: hasMediaRoot && stillMounted) {
                     self.continuation.yield(.volumeMounted(candidate))
                 }
+                if current { self.onProbeFinished(bsdName, hasMediaRoot && stillMounted) }
             }
         }
     }

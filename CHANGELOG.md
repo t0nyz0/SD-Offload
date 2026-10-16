@@ -5,6 +5,17 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.23] — 2026-10-15
+
+### Fixed
+- Start copying without routinely reading back previous batches first. Verify and retire older local recovery copies during cancellable idle maintenance after the next transfer, protecting the just-completed batch. Reclaim before copying only when the Mac lacks enough free space for the new batch and configured headroom.
+- Acknowledge a mounted card immediately, before the media-folder probe, with a simple **Card detected** status. Card scanning no longer looks like a mandatory three-step setup flow.
+- Register card monitoring before NAS status reads and run those reads off the coordinator. Use cached kernel capacity/free-space information instead of an extra device filesystem call during detection; prioritize the media-folder probe.
+- Reconcile Workspace mount/unmount notifications alongside DiskArbitration and wake events. Distinguish physical media generations even when a reader reuses the BSD name, volume UUID, path, and filesystem ID; invalidate late probes on rapid reinsertion.
+
+### Added
+- Five focused regressions for free-space cleanup policy, a stalled NAS status read with live card events, cancelled cleanup/latest-batch retention, early detection deduplication, and rapid reinsertion/media generation. No visual test windows are needed for these checks.
+
 ## [1.7.22] — 2026-10-15
 
 ### Fixed

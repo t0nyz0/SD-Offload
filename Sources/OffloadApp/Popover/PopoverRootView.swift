@@ -6,7 +6,9 @@ struct PopoverRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             Group {
-                if let vm = app.session {
+                if let detection = app.cardDetection {
+                    CardDetectedView(state: detection)
+                } else if let vm = app.session {
                     switch vm.phase {
                     case .done:
                         DoneView(vm: vm)

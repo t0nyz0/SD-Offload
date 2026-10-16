@@ -69,6 +69,9 @@ public struct NASGlance: Sendable, Equatable {
 }
 
 public enum EngineEvent: Sendable {
+    case cardDetected(CardInfo)              // mounted device noticed, before slow media probe
+    case cardProbeFinished(bsdName: String, hasMediaRoot: Bool)
+    case cardDetectionRemoved(bsdName: String)
     case cardMounted(CardInfo)
     case cardAwaitingConsent(CardInfo)
     case cardGone

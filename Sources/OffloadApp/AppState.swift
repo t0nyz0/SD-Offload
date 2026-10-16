@@ -12,6 +12,7 @@ final class AppState {
     private(set) var recent: [SessionRecord] = []
     private(set) var nasGlance = NASGlance()
     private(set) var pendingConsent: CardInfo?
+    private(set) var cardDetection: CardDetectionState?
     /// Set when the user clicks a recent session in the popover: the History window
     /// selects and scrolls to it, then clears this.
     var pendingHistorySelection: UUID?
@@ -91,13 +92,32 @@ final class AppState {
 
     private func apply(_ event: EngineEvent) {
         switch event {
+        case .cardDetected(let card):
+            guard settings.config.defaultCardAction != .ignore else { break }
+            if let phase = session?.phase,
+               ![.idle, .done, .doneWipeBlocked, .failed, .cancelled].contains(phase) { break }
+            cardDetection = CardDetectionState(card: card)
+            recomputeMenuBar()
+            if settings.config.autoOpenTrayOnInsert { router?.showPopover() }
+
+        case .cardProbeFinished(let device, let hasMediaRoot):
+            if cardDetection?.card.bsdName == device { cardDetection?.hasMediaRoot = hasMediaRoot }
+
+        case .cardDetectionRemoved(let device):
+            if cardDetection?.card.bsdName == device {
+                cardDetection = nil
+                recomputeMenuBar()
+            }
+
         case .cardMounted(let card):
+            if cardDetection?.card.bsdName == card.bsdName { cardDetection = nil }
             cardMountPath = card.mountPath
             if settings.config.notifyCardDetected {
                 NotificationManager.shared.notifyCardDetected(cardName: card.volumeName)
             }
 
         case .cardAwaitingConsent(let card):
+            if cardDetection?.card.bsdName == card.bsdName { cardDetection = nil }
             pendingConsent = card
             cardMountPath = card.mountPath
             if settings.config.notifyCardDetected {
@@ -113,6 +133,7 @@ final class AppState {
             recomputeMenuBar()
 
         case .sessionStarted(let id, let card, let resumed):
+            cardDetection = nil
             pendingConsent = nil
             cardMountPath = card.mountPath
             doneResetTask?.cancel()
@@ -216,7 +237,9 @@ final class AppState {
 
     private func recomputeMenuBar() {
         let newState: MenuBarState
-        if let vm = session {
+        if cardDetection != nil {
+            newState = .scanning
+        } else if let vm = session {
             switch vm.phase {
             case .idle, .cancelled:
                 newState = .idle

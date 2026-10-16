@@ -19,7 +19,7 @@ struct PreparationPresentation {
         case .readingDates: "Reading photo dates"
         case .matchingSavedProgress: "Checking saved progress"
         case .checkingNAS: "Connecting to NAS"
-        case .checkingSavedCopies: "Checking previous backups"
+        case .checkingSavedCopies: "Making room on your Mac"
         case .startingTransfer: "Preparing to copy"
         }
     }
@@ -29,7 +29,7 @@ struct PreparationPresentation {
         case .readingDates: "Choosing date folders for your files."
         case .matchingSavedProgress: "Reusing verified work from the earlier transfer."
         case .checkingNAS: "Making sure the backup destination is available."
-        case .checkingSavedCopies: "Checking previous NAS copies before freeing space on your Mac."
+        case .checkingSavedCopies: "Your Mac needs more free space. Checking older backups before removing their local copies."
         case .startingTransfer: "Getting the transfer ready."
         }
     }
@@ -95,8 +95,8 @@ struct PreparationView: View {
                     .font(.system(size: 32)).foregroundStyle(Theme.accent)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(p.title).font(.system(size: 20, weight: .semibold))
-                    Text("Step \(p.step) of 3 · Getting ready")
+                    Text("Card detected").font(.system(size: 20, weight: .semibold))
+                    Text(p.title)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
