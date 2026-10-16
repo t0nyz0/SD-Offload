@@ -5,11 +5,9 @@ struct CardDetectionState {
     let card: CardInfo
     var hasMediaRoot: Bool?
     var detail: String {
-        switch hasMediaRoot {
-        case nil: "Checking card access…"
-        case true: "Camera files found."
-        case false: "No camera folders found yet. Check that the card is readable, then choose Look for a card."
-        }
+        guard let hasMediaRoot else { return "Checking card access…" }
+        return hasMediaRoot ? "Camera files found."
+            : "No camera folders found yet. Check that the card is readable, then choose Look for a card."
     }
 }
 
