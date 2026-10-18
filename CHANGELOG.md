@@ -5,6 +5,16 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.25] — 2026-10-18
+
+### Fixed
+- Make Library deletion work on NAS shares without macOS Trash. Keep native Trash when supported; otherwise rename the original files into a hidden **Deleted Photos** recovery folder on that same archive, preserving filenames and relative date folders. Never permanently delete files or copy whole photos for this fallback.
+- Show deletion progress and the recoverable destination, add a **Deleted Photos** sidebar button that opens Finder, and explain the fallback before confirming a deletion. If both destinations fail, retain the originals and display the actual operation error and code.
+- Probe unsupported macOS Trash once per bulk deletion. Run network filesystem work on the I/O queue; prevent overlapping Library delete operations.
+
+### Added
+- Eight deletion regressions for native Trash, JPEG/RAW/sidecar recovery and manual restoration, hidden inventories, repeated names, partial failures, unsupported-volume probe reuse, archive aliases, out-of-scope files, and recovery-folder symlinks. An optional live-SMB check uses only disposable fixtures and verifies exact bytes after deletion and restoration.
+
 ## [1.7.24] — 2026-10-15
 
 ### Added

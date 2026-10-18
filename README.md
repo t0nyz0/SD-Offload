@@ -17,7 +17,7 @@
   <img alt="swift" src="https://img.shields.io/badge/Swift-6-orange">
   <img alt="deps" src="https://img.shields.io/badge/dependencies-zero-brightgreen">
   <img alt="ai" src="https://img.shields.io/badge/AI-optional-blue">
-  <img alt="tests" src="https://img.shields.io/badge/tests-207%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-215%20passing-brightgreen">
 </p>
 
 <p align="center">
@@ -113,6 +113,7 @@ one being offloaded.
 | Finder access | Visible Show in Finder for selected files and viewer photos; Open Folder in Finder for the current folder |
 | Copy to Finder | Select photos and press ⌘C or right-click Copy, then paste into Desktop or any Finder folder; Copy with RAW includes paired originals |
 | Organize & delete | Favorites timeline, pinned folders, multi-select, and confirmed deletion of photos with their RAW/sidecars |
+| Recoverable NAS deletion | Uses macOS Trash when supported, otherwise Deleted Photos on the same NAS; open it from the sidebar and move files back to their matching date folders |
 
 **AI, faces & search**
 
@@ -213,6 +214,12 @@ Six clipboard regressions cover multi-selection, right-click targeting, JPEG/RAW
 duplicate references, preserving the clipboard on empty selection, and native file-URL paste
 with exact byte checks. A 10,000-photo check needs no mounted NAS or source reads.
 These checks use a private clipboard and temporary folders without opening test windows.
+Eight Library deletion regressions cover native Trash, unsupported NAS volumes, exact-byte
+JPEG/RAW/sidecar recovery and restoration, repeated filenames, partial failure, path aliases,
+and rejecting outside paths or symlinked recovery folders. Deleted files stay out of Library
+inventories. The optional live-SMB check runs only with
+`OFFLOAD_TRASH_TEST_ROOT=/Volumes/Photos swift test --filter LibraryTrashTests.testOptInLiveSMBTrashAndRecoveryUsesOnlyDisposableFiles`;
+it creates and cleans up its own disposable directory and never touches existing photos.
 Recovery also respects Ask and Ignore for unfinished sessions; POSIX errors retain their operation and code.
 To require an actual disposable exFAT image instead of accepting a local-directory fallback, run
 `OFFLOAD_REQUIRE_EXFAT=1 swift run offload-harness run`. A failure to create the image is a failed
@@ -247,8 +254,13 @@ CI uses disposable local fixtures; actual SMB server compatibility is checked se
 the NAS probes described below.
 
 The photo viewer includes a labeled **Delete** button beside Pick / Reject. It opens the same
-confirmation and JPEG/RAW choices as the Library and moves files to Trash; if Trash is
-unavailable, originals are preserved. Deletion is available while browsing the NAS.
+confirmation and JPEG/RAW choices as the Library. It uses macOS Trash when available;
+NAS volumes without one use **Deleted Photos**, a hidden `.offload-trash` folder on that
+same archive. Open **Deleted Photos** in the sidebar to recover files through Finder.
+Each deletion batch preserves original date folders and filenames and includes restoration
+instructions. Nothing there is automatically erased. If recovery storage also fails,
+the original files remain in place and the app shows the underlying error. Deletion is
+available while browsing the NAS.
 
 ## Configuration
 
@@ -299,7 +311,7 @@ ad-hoc signed, and not notarized.
 | Detection & mounts | DiskArbitration (card), NetFS + statfs ghost-mount guard (NAS) |
 | Imaging & AI | ImageIO (thumbnails, EXIF, RAW), Vision (local faces/pets), optional Codex / Claude Code CLI or Anthropic API (photo identification) |
 | App | AppKit status item and popover, SwiftUI windows, Swift Charts sparkline, `SMAppService` login item |
-| Tests | 207 passing automated tests (plus an opt-in live CLI test) + ten full wipe-path integration harness modes |
+| Tests | 215 passing automated tests (plus opt-in live CLI and SMB deletion tests) + ten full wipe-path integration harness modes |
 
 ## Status
 

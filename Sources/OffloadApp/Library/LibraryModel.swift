@@ -65,6 +65,7 @@ struct DisplayItem: Identifiable, Sendable {
 /// path within it, the entries to show, and the progressive media count.
 @MainActor @Observable
 final class LibraryModel {
+    static let deletionRecoveryHint = "Uses macOS Trash, or Deleted Photos on the NAS for recovery."
     enum Source: Equatable { case nas, card, favorites, faces }
 
     var source: Source = .nas
@@ -109,6 +110,8 @@ final class LibraryModel {
     // Set when a delete couldn't complete (read-only volume, locked/in-use file, …)
     // so the UI can surface it, instead of the file silently reappearing on reload.
     var deleteError: String?
+    var deleteNotice: String?
+    private(set) var deleting = false
     var persistenceError: String?
 
     // Content search / AI analysis.
@@ -738,10 +741,7 @@ final class LibraryModel {
     }
 
     func delete(_ item: DisplayItem, scope: DeleteScope = .all) async {
-        let targets = await Task.detached(priority: .userInitiated) {
-            Set(Self.deleteTargets(for: item, scope: scope))
-        }.value
-        await removeURLs(targets)
+        await deleteItems([item], scope: scope)
     }
 
     // MARK: - Multi-selection
@@ -777,31 +777,28 @@ final class LibraryModel {
     }
 
     func deleteSelection() async {
-        let items = photoItems.filter { selection.contains($0.id) }
-        guard !items.isEmpty else { return }
-        let targets = await Task.detached(priority: .userInitiated) {
-            var urls = Set<URL>()
-            for item in items { urls.formUnion(Self.deleteTargets(for: item, scope: .all)) }
-            return urls
-        }.value
-        await removeURLs(targets)
+        await deleteItems(selectedItems, scope: .all)
     }
 
-    private func removeURLs(_ targets: Set<URL>) async {
-        guard !targets.isEmpty else { return }
-        // Move to the Trash rather than hard-unlink, so a mistaken delete is
-        // recoverable. If Trash is unavailable, leave the original untouched.
-        // Track what actually got removed so a failure isn't silently swallowed —
-        // otherwise the file vanishes from the grid, then reappears on reload.
-        let failed = await Task.detached(priority: .userInitiated) { () -> Set<URL> in
-            var failures = Set<URL>()
-            for url in targets {
-                do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
-                catch { failures.insert(url) }
-            }
-            return failures
+    private func deleteItems(_ items: [DisplayItem], scope: DeleteScope) async {
+        guard !items.isEmpty, !deleting, source == .nas else { return }
+        deleting = true
+        defer { deleting = false }
+        deleteError = nil
+        deleteNotice = nil
+        let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
+        let targets = await Task.detached(priority: .userInitiated) {
+            var urls = Set<URL>()
+            for item in items { urls.formUnion(Self.deleteTargets(for: item, scope: scope)) }
+            return urls
         }.value
-        let removed = targets.subtracting(failed)
+        await removeURLs(targets, archiveRoot: root)
+    }
+
+    private func removeURLs(_ targets: Set<URL>, archiveRoot: URL) async {
+        guard !targets.isEmpty else { return }
+        let result = await LibraryTrash.move(targets, archiveRoot: archiveRoot)
+        let removed = result.removed
         await photoIndex.remove(paths: removed.map(\.path))
         await saveMetadata()
         // Drop only the files that actually went away from the in-memory lists so
@@ -813,13 +810,27 @@ final class LibraryModel {
         let removedFav = favoritePaths.intersection(Set(removed.map(\.path)))
         if !removedFav.isEmpty { favoritePaths.subtract(removedFav); saveFavorites() }
         clearSelection()
-        if !failed.isEmpty {
-            let n = failed.count
-            deleteError = "Couldn't move \(n) item\(n == 1 ? "" : "s") to Trash. The originals were left in place. This volume may not support Trash, or the files may be locked."
+        if !result.recovered.isEmpty {
+            let n = result.recovered.count
+            deleteNotice = "Moved \(n) file\(n == 1 ? "" : "s") to Deleted Photos for recovery."
+        }
+        if let first = result.failures.first {
+            let n = result.failures.count
+            deleteError = "Couldn't delete \(n) file\(n == 1 ? "" : "s"). Those originals are still in place.\n\n\(first.url.lastPathComponent): \(first.detail)"
         }
         if source == .favorites { loadFavorites() }
         else if isSearching { runSearch() } else { loadEntries() }
         if let root = rootURL { startCount(root); refreshVolumeStats(root) }
+    }
+
+    func openDeletedPhotos() async {
+        do {
+            let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
+            let folder = try await LibraryTrash.openRecoveryFolder(archiveRoot: root)
+            if !NSWorkspace.shared.open(folder) {
+                deleteError = "Couldn't open Deleted Photos in Finder. The files remain on the NAS at \(folder.path)."
+            }
+        } catch { deleteError = "Couldn't open Deleted Photos: \(error.localizedDescription)" }
     }
 
     // MARK: - Content search

@@ -132,20 +132,45 @@ struct LibraryWindow: View {
                 // A card inserted while this window is open isn't always picked up
                 // automatically (a stale unmount signal can swallow it); this forces
                 // a re-check without quitting the app.
-                Button { app.rescanTapped() } label: {
-                    Label("Look for a card", systemImage: "arrow.clockwise")
-                        .font(.system(size: 11))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 10) {
+                    Button { Task { await model.openDeletedPhotos() } } label: {
+                        Label("Deleted Photos", systemImage: "trash")
+                            .font(.system(size: 11))
+                    }
+                    .help("Open recoverable NAS deletions in Finder; restore files to their matching date folders")
+                    Button { app.rescanTapped() } label: {
+                        Label("Look for a card", systemImage: "arrow.clockwise")
+                            .font(.system(size: 11))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .help("Re-check for an inserted card")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .help("Re-check for an inserted card")
             }
         } detail: {
             VStack(spacing: 0) {
                 LibraryHeader(model: model)
+                if model.deleting {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Deleting photos…").font(.system(size: 12))
+                        Spacer()
+                    }
+                    .padding(.horizontal, DS.Space.l).padding(.bottom, DS.Space.s)
+                } else if let notice = model.deleteNotice {
+                    HStack(spacing: 8) {
+                        Text(notice).font(.system(size: 12))
+                        Button("Show in Finder") { Task { await model.openDeletedPhotos() } }
+                            .controlSize(.small)
+                        Spacer()
+                        Button { model.deleteNotice = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).help("Dismiss deletion status")
+                    }
+                    .padding(.horizontal, DS.Space.l).padding(.bottom, DS.Space.s)
+                }
                 if model.source == .favorites {
                     Divider()
                     FavoritesTimeline(model: model, openViewer: { openInViewer($0, model) })
@@ -655,7 +680,7 @@ private struct SearchBar: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Moves to Trash: every photo you flagged Reject in this folder (with their RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept.")
+            Text("Moves every photo you flagged Reject in this folder (with their RAW/sidecar files) out of your NAS library. \(LibraryModel.deletionRecoveryHint)")
         }
     }
     private var cullActive: Bool { model.minRating > 0 || model.flagFilter != .all || model.sortOrder != .nameAsc }
@@ -809,7 +834,7 @@ private struct LibraryGrid: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Moves to Trash: \(model.selectedCount) photos (with their RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept.")
+            Text("Moves \(model.selectedCount) photos (with their RAW/sidecar files) out of your NAS library. \(LibraryModel.deletionRecoveryHint)")
         }
     }
 
@@ -856,6 +881,7 @@ private struct LibraryGrid: View {
                 }
                 .controlSize(.small)
                 .tint(.red)
+                .disabled(model.deleting)
             }
         }
         .padding(.horizontal, DS.Space.l)
@@ -926,15 +952,15 @@ private struct LibraryGrid: View {
         switch scope {
         case .rawOnly:
             let n = (item.rawCompanion?.name).map { "the RAW (\($0))" } ?? "the RAW"
-            return "Moves to Trash: \(n) from your NAS. The JPEG stays. If Trash is unavailable, the originals are kept."
+            return "Moves \(n) out of your NAS library. The JPEG stays. \(LibraryModel.deletionRecoveryHint)"
         case .jpegOnly:
             let n = (item.photo?.name).map { "the JPEG (\($0))" } ?? "the JPEG"
-            return "Moves to Trash: \(n) from your NAS. The RAW stays. If Trash is unavailable, the originals are kept."
+            return "Moves \(n) out of your NAS library. The RAW stays. \(LibraryModel.deletionRecoveryHint)"
         case .all:
             let names = item.all.map { ($0.id as NSString).lastPathComponent }
             let listed = names.count <= 3 ? names.joined(separator: ", ")
                 : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
-            return "Moves to Trash: \(listed) (plus any matching RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept."
+            return "Moves \(listed) (plus any matching RAW/sidecar files) out of your NAS library. \(LibraryModel.deletionRecoveryHint)"
         }
     }
 

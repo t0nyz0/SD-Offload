@@ -159,12 +159,12 @@ struct ImageViewer: View {
 
     private func deleteMessage(_ item: DisplayItem) -> String {
         if item.isRawJpegPair, let jpeg = item.photo, let raw = item.rawCompanion {
-            return "This photo has a JPEG (\(jpeg.name)) and a RAW (\(raw.name)). Choose what to move to Trash. If Trash is unavailable, the originals are kept."
+            return "This photo has a JPEG (\(jpeg.name)) and a RAW (\(raw.name)). Choose which files to delete. \(LibraryModel.deletionRecoveryHint)"
         }
         let names = item.all.map { ($0.id as NSString).lastPathComponent }
         let listed = names.count <= 3 ? names.joined(separator: ", ")
             : names.prefix(2).joined(separator: ", ") + ", and \(names.count - 2) more"
-        return "Moves to Trash: \(listed) (plus any matching RAW/sidecar files) from your NAS. If Trash is unavailable, the originals are kept."
+        return "Moves \(listed) (plus any matching RAW/sidecar files) out of your NAS library. \(LibraryModel.deletionRecoveryHint)"
     }
 
     private func topBar(item: DisplayItem, position: Int) -> some View {
@@ -226,7 +226,8 @@ struct ImageViewer: View {
                         Label("Delete", systemImage: "trash")
                     }
                     .tint(.red)
-                    .modifier(ViewerControlHint(text: "Move to Trash — review which photo files to remove (⌦)", activeHint: $hoveredControlHint))
+                    .disabled(model.deleting)
+                    .modifier(ViewerControlHint(text: "Delete — move files to Trash or Deleted Photos for recovery (⌦)", activeHint: $hoveredControlHint))
                 }
             }
             .labelStyle(.iconOnly)
@@ -301,8 +302,9 @@ struct ImageViewer: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.red)
-                .help("Move to Trash — review which photo files to remove (⌦)")
-                .accessibilityLabel("Delete photo — review files to move to Trash")
+                .disabled(model.deleting)
+                .help("Delete — move files to Trash or Deleted Photos for recovery (⌦)")
+                .accessibilityLabel("Delete photo — review files to remove for recovery")
             }
         }
         .padding(.horizontal, DS.Space.l)
