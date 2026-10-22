@@ -17,13 +17,25 @@ public struct CandidateVolume: Sendable {
     public let isEjectable: Bool
     public let isInternal: Bool
     public let isNetwork: Bool
+    public let isDiskImage: Bool
+
+    public init(info: CardInfo, isRemovable: Bool, isEjectable: Bool,
+                isInternal: Bool, isNetwork: Bool, isDiskImage: Bool = false) {
+        self.info = info
+        self.isRemovable = isRemovable
+        self.isEjectable = isEjectable
+        self.isInternal = isInternal
+        self.isNetwork = isNetwork
+        self.isDiskImage = isDiskImage
+    }
 }
 
 /// DASession on a private serial queue. DiskAppeared replays existing disks at
 /// registration (how a card already inserted at launch gets picked up);
 /// DescriptionChanged on kDADiskDescriptionVolumePathKey is the mount signal.
 /// Verified on this machine: the built-in reader enumerates as Protocol "USB",
-/// so we never classify by protocol string — removable/ejectable + DCIM only.
+/// so USB is never excluded by protocol. Disk images are identified separately:
+/// simulator runtimes also report removable/ejectable but must not raise the tray.
 public final class CardWatcher: @unchecked Sendable {
     private var daSession: DASession?
     private let daQueue = DispatchQueue(label: "offload.diskarb")
@@ -263,6 +275,9 @@ public final class CardWatcher: @unchecked Sendable {
         let ejectable = (desc[kDADiskDescriptionMediaEjectableKey] as? Bool) ?? false
         let internalDevice = (desc[kDADiskDescriptionDeviceInternalKey] as? Bool) ?? false
         let network = (desc[kDADiskDescriptionVolumeNetworkKey] as? Bool) ?? false
+        let isDiskImage = CardClassifier.isDiskImage(
+            deviceProtocol: desc[kDADiskDescriptionDeviceProtocolKey] as? String,
+            deviceModel: desc[kDADiskDescriptionDeviceModelKey] as? String)
         // Never inspect network shares or fixed internal disks for camera media.
         guard !network, removable || ejectable || !internalDevice else { return }
         let mediaSize = (desc[kDADiskDescriptionMediaSizeKey] as? Int64) ?? 0
@@ -292,7 +307,7 @@ public final class CardWatcher: @unchecked Sendable {
             continuation.yield(.volumeUnmounted(volumeUUID: removed, bsdName: bsdName))
         }
         guard let probe = observation.probe else { return }
-        if observation.detected {
+        if observation.detected && !isDiskImage {
             // Acknowledge the mounted device before any potentially blocking
             // filesystem/media-root probe. This bypasses the coordinator backlog.
             onDetected(CardInfo(volumeUUID: uuid, bsdName: bsdName, mountPath: pathURL.path,
@@ -319,7 +334,7 @@ public final class CardWatcher: @unchecked Sendable {
                                 hasMediaRoot: hasMediaRoot)
             let candidate = CandidateVolume(info: info, isRemovable: removable,
                                             isEjectable: ejectable, isInternal: internalDevice,
-                                            isNetwork: network)
+                                            isNetwork: network, isDiskImage: isDiskImage)
             self?.daQueue.async { [weak self] in
                 guard let self else { return }
                 let stillMounted = Self.mountedVolumes()[bsdName] == mountedVolume

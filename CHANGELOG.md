@@ -5,6 +5,13 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.26] — 2026-10-22
+
+### Fixed
+- Stop simulator runtimes and other disk images from automatically opening the **Card detected** tray. macOS marks these images removable and ejectable; distinguish them before the early detection notification. Physical SD cards still show detection before the camera-folder probe.
+- Require disk images to match the explicit test-volume allowlist before they can be ingested, even if an image contains a camera folder. Preserve allowlisted test-card images and the global insert action.
+- Recognize APFS simulator images from Disk Arbitration's **Disk Image** device model even when its device protocol is **Virtual Interface**; this is the metadata reported by the live iOS and XROS runtimes.
+
 ## [1.7.25] — 2026-10-18
 
 ### Fixed
