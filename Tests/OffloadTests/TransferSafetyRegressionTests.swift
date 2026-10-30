@@ -53,7 +53,7 @@ final class TransferSafetyRegressionTests: XCTestCase {
         catch {}
     }
 
-    func testRetentionClearsOnlyReverifiedCompletedBatchOnNextRun() async throws {
+    func testRetentionClearsVerifiedFilesAlsoWhenWipeWasBlocked() async throws {
         let (root, file) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let staging = StagingStore(rootPath: root.appendingPathComponent("staging").path)
@@ -64,15 +64,16 @@ final class TransferSafetyRegressionTests: XCTestCase {
         let failed = SessionRecord(cardVolumeUUID: "card", cardVolumeName: "Test", cardCapacityBytes: 100, state: .doneWipeBlocked, files: [file], endedAt: completed.endedAt)
         for record in [completed, missing, failed] {
             try staging.ensureSessionDir(record.id)
-            try Data("recovery".utf8).write(to: staging.stagedURL(session: record.id, file: file))
+            try Data(contentsOf: root.appendingPathComponent(file.destRelPath))
+                .write(to: staging.stagedURL(session: record.id, file: file))
         }
         await staging.pruneCompletedBeforeNextRun([completed, missing, failed], nasRoot: root.path, keepDays: 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: staging.sessionDir(completed.id).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: staging.stagedURL(session: missing.id, file: file).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: staging.stagedURL(session: failed.id, file: file).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.stagedURL(session: failed.id, file: file).path))
     }
 
-    func testLegacyStagingEraseSettingMigratesButNextRunRetentionIsPreserved() throws {
+    func testLegacyStagingEraseSettingMigratesAndZeroRetentionIsPreserved() throws {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data("{\"wipePolicy\":\"afterStagingVerify\",\"keepStagedDays\":0}".utf8))
         XCTAssertEqual(config.wipePolicy, .afterNASVerify)
         XCTAssertEqual(config.keepStagedDays, 0)

@@ -55,7 +55,8 @@ let volName = "OFFLOADTEST-1"
 let dmg = workspace.appendingPathComponent("card.dmg")
 let cardMountPath: String
 let cardDev: String?
-if let attached = Fixtures.attachExFATCard(dmgPath: dmg, volName: volName, sizeMB: 96) {
+let directoryCard = ProcessInfo.processInfo.environment["OFFLOAD_HARNESS_DIRECTORY_CARD"] == "1"
+if !directoryCard, let attached = Fixtures.attachExFATCard(dmgPath: dmg, volName: volName, sizeMB: 96) {
     cardMountPath = attached.mount
     cardDev = attached.dev
     log("card: real exFAT DMG at \(attached.mount)")
@@ -68,7 +69,7 @@ if let attached = Fixtures.attachExFATCard(dmgPath: dmg, volName: volName, sizeM
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     cardMountPath = dir.path
     cardDev = nil
-    log("card: directory fallback at \(dir.path) (disk images unavailable here)")
+    log("card: directory fixture at \(dir.path) (exFAT compatibility is not validated)")
 }
 defer {
     if let cardDev { Fixtures.detach(dev: cardDev) }
@@ -227,12 +228,13 @@ if mode.hasPrefix("chaos-final-") {
         fail("Destination damage did not block the wipe")
     }
     for file in final.files {
-        guard FileManager.default.fileExists(atPath: cardRoot.appendingPathComponent(file.relPath).path),
-              FileManager.default.fileExists(atPath: stagingStore.stagedURL(session: final.id, file: file).path) else {
-            fail("Card or recovery copy missing after destination damage")
+        let source = cardRoot.appendingPathComponent(file.relPath)
+        guard FileManager.default.fileExists(atPath: source.path),
+              try Fixtures.sha256(source) == sourceHashes[file.relPath] else {
+            fail("Card original missing or changed after destination damage")
         }
     }
-    print("✅ PASS — final destination damage blocked all erasure; card and recovery copies retained. (\(mode))")
+    print("✅ PASS — destination damage after initial verification blocked all erasure; card originals retained byte-identical. (\(mode))")
     exit(0)
 }
 
@@ -269,6 +271,9 @@ if mode == "chaos-unreadable" {
     // Restore perms so cleanup can remove the workspace.
     try? FileManager.default.setAttributes([.posixPermissions: 0o644],
                                            ofItemAtPath: f1.appendingPathComponent("IMG_0003.JPG").path)
+    for (rel, hash) in sourceHashes {
+        guard try Fixtures.sha256(cardRoot.appendingPathComponent(rel)) == hash else { fail("card original changed: \(rel)") }
+    }
     log("wipe correctly blocked; all \(stillThere) files still on the card")
     print("\n✅ PASS — one failure blocked the whole wipe; card untouched. (\(mode))")
     exit(0)
@@ -283,7 +288,13 @@ if mode == "chaos-secondary" {
     for rel in sourceHashes.keys where !FileManager.default.fileExists(atPath: cardRoot.appendingPathComponent(rel).path) {
         fail("file deleted despite the wipe being blocked: \(rel)")
     }
-    log("second-drive failure blocked the wipe; card intact")
+    for file in final.files {
+        guard try Fixtures.sha256(cardRoot.appendingPathComponent(file.relPath)) == sourceHashes[file.relPath],
+              try Fixtures.sha256(stagingStore.stagedURL(session: final.id, file: file)) == sourceHashes[file.relPath] else {
+            fail("Required second-copy failure lost or changed a card/staging original")
+        }
+    }
+    log("second-drive failure blocked the wipe; card and staging originals byte-identical")
     print("\n✅ PASS — a failing second copy blocked the whole wipe; card untouched. (\(mode))")
     exit(0)
 }
@@ -338,11 +349,11 @@ let fwStillThere = FileManager.default.fileExists(atPath: sysFolder.appendingPat
 guard fwStillThere else { fail("harness bug: system folder was deleted (should be untouchable)") }
 log("card DCIM emptied; MISC/FWUP.BIN untouched")
 
-// 5. Local recovery copies survive successful transfer and card erasure.
+// 5. Default zero-day retention frees only the now-durable verified cache.
 let stagingLeft = (try? FileManager.default.contentsOfDirectory(at: stagingStore.sessionDir(record.id),
                                                                 includingPropertiesForKeys: nil))?.count ?? 0
-guard stagingLeft == final.files.count else { fail("Recovery copies missing: \(stagingLeft) of \(final.files.count)") }
-log("local recovery copies retained")
+guard config.keepStagedDays == 0, stagingLeft == 0 else { fail("Verified staging was not retired: \(stagingLeft) entries") }
+log("verified staging retired after durable NAS/required-second-copy checkpoints")
 
 print("\n✅ PASS — \(verified) files offloaded, verified end-to-end, card wiped. (\(mode), \(String(format: "%.1f", elapsed))s)")
 if mode == "smb-run" { try FileManager.default.removeItem(at: nasRoot) }

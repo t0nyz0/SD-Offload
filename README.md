@@ -63,12 +63,15 @@ flowchart LR
 3. **Wipe gate.** Each source is exclusively claimed and checked again (identity, metadata, and SHA-256) before deletion; changed files are restored and erasure stops. Interrupted claims can be restored on retry. Before erasure, reread the entire NAS batch and any configured second copy
    and compare SHA-256 hashes again. Missing or changed destinations block erasure; the gate also
    checks source identity and NAS health.
-4. **Recovery copies.** Keep local staging after completion, cancellation, and app restart.
-   After a subsequent transfer, idle maintenance may remove older completed batches only
-   after fresh NAS verification. The just-completed batch remains available for recovery.
-   Failed or unverifiable batches remain; longer retention settings still apply.
-   A new transfer cancels idle cleanup. Older-batch checks never routinely delay copying;
-   they run before copying only if the Mac lacks space for the new batch and safety headroom.
+4. **Automatic staging cleanup.** By default, each file leaves local staging after the NAS
+   and any required second copy have verified against the card-read SHA-256 and the NAS
+   checkpoint has been durably saved. Seven- and thirty-day retention are also available.
+   Startup and idle maintenance recheck stranded verified files individually, including
+   interrupted transfers and blocked wipes; missing, changed, or unverified files remain.
+   Maintenance pauses for active transfers and never uploads or restores NAS files.
+   In-app deletion records let it discard matching, previously verified local cache after
+   an intentional NAS deletion. Without deletion evidence, a missing destination keeps its
+   recovery copy. A retry does not silently recreate a missing, historically verified file.
 
 **Interrupted transfers retain journal state.** Crash, yanked card, or the NAS dropping off
 mid-transfer — a crash-safe JSON journal resumes exactly where it left off. A hash mismatch re-copies
@@ -80,8 +83,8 @@ one being offloaded.
 > invalidate the client read cache — so a normal read-back can re-hash the bytes you just wrote out
 > of local memory and "pass" without ever touching the server. SD Offload's wipe-gating verify is
 > always uncached. A matching read-back records integrity at that time; it cannot guarantee
-> against later deletion, storage failure, or changes by another process. Retained local copies
-> provide an additional recovery opportunity.
+> against later deletion, storage failure, or changes by another process. The optional seven-
+> and thirty-day staging retention settings provide an additional recovery opportunity.
 
 ## Features
 

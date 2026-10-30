@@ -244,6 +244,10 @@ public struct SessionRecord: Codable, Sendable, Identifiable, Equatable {
     public let cardCapacityBytes: Int64
     /// statfs f_mntfromname recorded at session start; re-checked by the wipe gate.
     public var nasMntFromName: String?
+    /// Recorded for destination recovery/cleanup scope; absent in older journals.
+    public var nasRootPath: String? = nil
+    public var stagingRootPath: String? = nil
+    public var secondaryDestPath: String? = nil
     /// Random token written to `<card>/.offload-session` at session start and
     /// re-checked before wipe. Uniquely ties this session to THIS physical card,
     /// even when the volume UUID had to be synthesized from name+size (FAT32

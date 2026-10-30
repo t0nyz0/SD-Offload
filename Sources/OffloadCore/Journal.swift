@@ -11,6 +11,7 @@ public actor Journal {
     private let historyDir: URL
     private var active: [UUID: SessionRecord] = [:]
     private var dirty: Set<UUID> = []
+    private var verifiedDestinationHistory: [String: Set<String>]?
     private var fileOffsets: [UUID: [UUID: Int]] = [:]
     private var workCache: [UUID: RemainingWork] = [:]
 
@@ -120,10 +121,11 @@ public actor Journal {
         fileOffsets[id] = nil
         workCache[id] = nil
         dirty.remove(id)
+        verifiedDestinationHistory = nil
         trimHistory(keepLast: 300)
     }
 
-    /// Keep History bounded — prune the oldest session files beyond `keepLast`.
+    /// Bound ordinary history without discarding retained staging provenance.
     private func trimHistory(keepLast: Int) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
@@ -135,7 +137,16 @@ public actor Journal {
             let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
             return a < b   // oldest first
         }
-        for url in sorted.prefix(files.count - keepLast) { try? fm.removeItem(at: url) }
+        for url in sorted.prefix(files.count - keepLast) {
+            // The manifest is cleanup/recovery provenance. Keep it while its
+            // staging directory exists; legacy records have no root to prove
+            // absence and are conservatively retained.
+            guard let record = try? JSONIO.load(SessionRecord.self, from: url),
+                  let stagingRoot = record.stagingRootPath,
+                  !fm.fileExists(atPath: URL(fileURLWithPath: stagingRoot)
+                    .appendingPathComponent(record.id.uuidString).path) else { continue }
+            try? fm.removeItem(at: url)
+        }
     }
 
     /// Recent finished sessions, newest first.
@@ -157,6 +168,48 @@ public actor Journal {
             .filter { $0.pathExtension == "json" }
             .compactMap { JSONIO.loadGuarded(SessionRecord.self, from: $0) }
             .filter(\.isIncomplete)
+    }
+
+    /// Include durable, inactive crash journals as well as terminal history.
+    /// In-memory sessions always win: maintenance must never inspect a stale
+    /// archived version of a currently active transfer.
+    public func stagingCleanupRecords() -> [SessionRecord] {
+        var records = Dictionary(loadHistory(limit: Int.max).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        let entries = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for url in entries where url.pathExtension == "json" {
+            guard let record = try? JSONIO.load(SessionRecord.self, from: url) else { continue }
+            records[record.id] = record
+        }
+        for id in active.keys { records.removeValue(forKey: id) }
+        return Array(records.values)
+    }
+
+    /// An absent, previously verified destination is not permission to restore
+    /// it automatically. This also protects deliberate Finder/NAS deletions for
+    /// which the app has no explicit Trash intent record.
+    public func previouslyVerifiedDestination(_ file: FileRecord, root: String,
+                                              includeLegacyPrimaryRoot: Bool = true) -> Bool {
+        guard let hash = file.sourceHashHex else { return false }
+        if verifiedDestinationHistory == nil {
+            var index: [String: Set<String>] = [:]
+            for record in stagingCleanupRecords() {
+                // Crash journals retain the same verification evidence as
+                // completed history. Terminal files also verified a configured
+                // second destination before their checkpoint was saved.
+                let scopes = [record.nasRootPath ?? "", record.secondaryDestPath]
+                    .compactMap { $0 }.map { path in
+                        path.isEmpty ? "" : URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+                    }
+                for item in record.files where item.state.recordsNASVerification {
+                    guard let hash = item.sourceHashHex else { continue }
+                    index["\(item.destRelPath)\0\(item.size)\0\(hash)", default: []].formUnion(scopes)
+                }
+            }
+            verifiedDestinationHistory = index
+        }
+        let scopes = verifiedDestinationHistory?["\(file.destRelPath)\0\(file.size)\0\(hash)"] ?? []
+        return (includeLegacyPrimaryRoot && scopes.contains(""))
+            || scopes.contains(URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path)
     }
 
     /// Is there unfinished work for this card (active or on disk)? Used so the

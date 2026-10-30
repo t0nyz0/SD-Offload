@@ -18,6 +18,7 @@ public actor SessionRunner {
     let config: AppConfig
     let journal: Journal
     let staging: StagingStore
+    let deletionStore: DestinationDeletionStore
     let nas: NASLocator
     let cardWatcher: CardWatcher
     let emit: @Sendable (EngineEvent) -> Void
@@ -62,6 +63,7 @@ public actor SessionRunner {
 
     public init(sessionID: UUID, card: CardInfo, config: AppConfig, journal: Journal,
                 staging: StagingStore, nas: NASLocator, cardWatcher: CardWatcher, wipeOnly: Bool = false,
+                deletionStore: DestinationDeletionStore? = nil,
                 emit: @escaping @Sendable (EngineEvent) -> Void) {
         self.sessionID = sessionID
         self.card = card
@@ -69,6 +71,7 @@ public actor SessionRunner {
         self.config = config
         self.journal = journal
         self.staging = staging
+        self.deletionStore = deletionStore ?? .forConfig(config)
         self.nas = nas
         self.cardWatcher = cardWatcher
         self.emit = emit
@@ -355,6 +358,15 @@ public actor SessionRunner {
             if Task.isCancelled { return }
             do {
                 try await uploadOne(file)
+            } catch let suppressed as DestinationDeletionStore.Suppressed {
+                await journal.transition(file: file.id,
+                    to: .failed(.destinationUnwritable("Previously verified or intentionally deleted destination was left absent: \(suppressed.relativePath). The card and untransferred staging copy were preserved.")), in: sessionID)
+                emit(.attention(AttentionItem(severity: .warning, title: "Deleted destination left untouched",
+                    detail: "SD Offload will not automatically restore \(suppressed.relativePath). Your card has NOT been wiped.")))
+                // Retained recovery is no longer in flight. Real free-space
+                // headroom still bounds subsequent copies.
+                await budget.release(file.id)
+                await settle()
             } catch is CancellationError {
                 if file.state == .stagedVerified {
                     // roll back a possible in-flight .uploading mark
@@ -387,6 +399,12 @@ public actor SessionRunner {
         var destRelPath = file.destRelPath
         var destURL = nasRoot.appendingPathComponent(destRelPath)
         let fm = FileManager.default
+
+        // A healthy share with a missing previously verified file can represent
+        // a deliberate Finder/NAS deletion. Recovery must surface it, not write
+        // the photo back. Explicit in-app deletion intent also covers crashes
+        // between Trash and journal/history persistence.
+        try await requireDestinationNotDeleted(file, relativePath: destRelPath)
 
         if file.state != .uploaded {
             await journal.transition(file: file.id, to: .uploading, in: sessionID)
@@ -446,6 +464,7 @@ public actor SessionRunner {
             options.exclusiveCreate = direct
             options.preallocate = false   // smbfs returns ENOTSUP; skip the wasted fcntl per file
             let meter = self.meter
+            try await requireDestinationNotDeleted(file, relativePath: destRelPath)
             let result = try await ChunkedIO.copyAndHash(from: stagedURL, to: writeURL, options: options,
                                                          gate: pauseGate, phase: { [nasActivity] in nasActivity.copyPhase($0, file: file.id) }) { meter.addBytes($0, stage: .nasWrite) }
             // Bonus integrity: the bytes we just read from staging must still
@@ -457,6 +476,13 @@ public actor SessionRunner {
                 await journal.transition(file: file.id, to: .pending, in: sessionID)
                 await handleVerifyMismatch(file, stage: "staging re-read")
                 return
+            }
+            if !direct {
+                do { try await requireDestinationNotDeleted(file, relativePath: destRelPath) }
+                catch {
+                    try? fm.removeItem(at: partialURL)
+                    throw error
+                }
             }
             if !direct, renamex_np(partialURL.path, destURL.path, UInt32(RENAME_EXCL)) != 0 {
                 let err = errno
@@ -519,14 +545,40 @@ public actor SessionRunner {
                 emit(.attention(AttentionItem(severity: .error,
                                               title: "NAS verification failed: \(file.fileName)",
                                               detail: "The NAS copy never matched the card. The card will NOT be wiped.")))
+                await budget.release(file.id)
                 await settle()
             }
         }
     }
 
-    private func finishFile(_ file: FileRecord) {
-        // Retain the verified staging copy for recovery after transfer.
-        Task { await budget.release(file.id) }
+    private nonisolated func requireDestinationNotDeleted(_ file: FileRecord, relativePath: String,
+                                                          root: String? = nil) async throws {
+        let archive = root ?? config.nasRootPath
+        var resolved = file; resolved.destRelPath = relativePath
+        let explicitlyDeleted = try deletionStore.blocksCreation(of: resolved, root: archive)
+        let exists = FileManager.default.fileExists(atPath: URL(fileURLWithPath: archive).appendingPathComponent(relativePath).path)
+        let previouslyVerifiedMissing: Bool
+        if !exists {
+            previouslyVerifiedMissing = await journal.previouslyVerifiedDestination(resolved, root: archive,
+                includeLegacyPrimaryRoot: root == nil)
+        }
+        else { previouslyVerifiedMissing = false }
+        if explicitlyDeleted || previouslyVerifiedMissing {
+            throw DestinationDeletionStore.Suppressed(relativePath: relativePath)
+        }
+    }
+
+    private func finishFile(_ file: FileRecord) async {
+        if config.keepStagedDays <= 0 {
+            do {
+                // Persist the terminal NAS/hash/path checkpoint BEFORE freeing
+                // staging. A crash may leave extra cache, never lost recovery.
+                _ = try await staging.retirePersistedFile(session: sessionID, fileID: file.id, journal: journal)
+            } catch {
+                // A later idle pass retries cleanup; transfer success stays true.
+            }
+        }
+        await budget.release(file.id)
         settle()
     }
 
@@ -544,6 +596,7 @@ public actor SessionRunner {
     private nonisolated func copyToSecondary(_ file: FileRecord, from sourceURL: URL,
                                              sourceHash: String, destRelPath: String) async throws {
         guard let root = config.secondaryDestPath, !root.isEmpty else { return }
+        try await requireDestinationNotDeleted(file, relativePath: destRelPath, root: root)
         let fm = FileManager.default
         let meter = self.meter
         let destURL = URL(fileURLWithPath: root).appendingPathComponent(destRelPath)
@@ -574,6 +627,13 @@ public actor SessionRunner {
             try? fm.removeItem(at: writeURL)
             throw OffloadError(.hashMismatch(stage: "second-copy staging re-read"))
         }
+        if !direct {
+            do { try await requireDestinationNotDeleted(file, relativePath: destRelPath, root: root) }
+            catch {
+                try? fm.removeItem(at: partial)
+                throw error
+            }
+        }
         if !direct, renamex_np(partial.path, destURL.path, UInt32(RENAME_EXCL)) != 0 {
             let err = errno; try? fm.removeItem(at: partial)
             throw OffloadError.posix(err, stage: "rename on second drive")
@@ -602,7 +662,17 @@ public actor SessionRunner {
         for file in record.files where file.state == .nasVerified || file.state == .skippedDuplicate {
             guard let hash = file.sourceHashHex else { continue }
             let nasURL = nasRoot.appendingPathComponent(file.destRelPath)
-            do { try await copyToSecondary(file, from: nasURL, sourceHash: hash, destRelPath: file.destRelPath) }
+            do {
+                if record.secondaryDestPath.map({ URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path })
+                    == URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path {
+                    // A terminal file already verified on this same backup.
+                    // An absent copy may be a deliberate deletion; only read it.
+                    try await DestinationVerifier.verify(files: [file], root: root)
+                } else {
+                    // A newly enabled second destination still needs backfill.
+                    try await copyToSecondary(file, from: nasURL, sourceHash: hash, destRelPath: file.destRelPath)
+                }
+            }
             catch {
                 emit(.attention(AttentionItem(severity: .warning, title: "Second copy needs attention",
                                               detail: error.localizedDescription)))
@@ -615,7 +685,7 @@ public actor SessionRunner {
     /// file — which keeps the card from being wiped (all-or-nothing).
     private func handleSecondaryFailure(_ file: FileRecord, _ error: Error) async {
         let failure = (error as? OffloadError)?.failure ?? .internalError("\(error)")
-        let attempts = file.attempts + 1
+        let attempts = error is DestinationDeletionStore.Suppressed ? RetryPolicy.maxAttempts : file.attempts + 1
         await journal.bumpAttempts(file: file.id, in: sessionID)
         await journal.transition(file: file.id, to: .stagedVerified, in: sessionID)
         if attempts < RetryPolicy.maxAttempts {
@@ -629,6 +699,7 @@ public actor SessionRunner {
             emit(.attention(AttentionItem(severity: .error,
                                           title: "Second copy failed: \(file.fileName)",
                                           detail: "Couldn't verify \(file.fileName) on your second drive. The card will NOT be wiped. \(error.localizedDescription)")))
+            await budget.release(file.id)
             settle()
         }
     }
@@ -729,6 +800,7 @@ public actor SessionRunner {
             emit(.attention(AttentionItem(severity: .error,
                                           title: "Couldn't upload \(file.fileName)",
                                           detail: failure.summary)))
+            await budget.release(file.id)
             settle()
         }
     }

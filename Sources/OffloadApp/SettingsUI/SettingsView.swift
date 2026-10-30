@@ -257,7 +257,7 @@ struct SettingsView: View {
                     }
                 }
                 Picker("Keep staged copies", selection: $s.config.keepStagedDays) {
-                    Text("Until after the next transfer (NAS rechecked)").tag(0)
+                    Text("After verified transfer").tag(0)
                     Text("For 7 days").tag(7)
                     Text("For 30 days").tag(30)
                 }

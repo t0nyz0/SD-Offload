@@ -43,7 +43,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var stagingRootPath: String = Paths.stagingRoot.path
     public var stagingBudgetCapBytes: Int64 = 100 << 30
     public var stagingHeadroomBytes: Int64 = 12 << 30
-    public var keepStagedDays: Int = 0        // 0 = until after the next transfer, after NAS re-verification
+    public var keepStagedDays: Int = 0        // 0 = remove after durable NAS/required-second-copy verification
 
     // Performance
     public var hop1Workers: Int = 1

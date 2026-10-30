@@ -15,6 +15,7 @@ public enum Paths {
     public static var journalDir: URL { appSupport.appendingPathComponent("Journal", isDirectory: true) }
     public static var historyDir: URL { appSupport.appendingPathComponent("History", isDirectory: true) }
     public static var stagingRoot: URL { appSupport.appendingPathComponent("Staging", isDirectory: true) }
+    public static var destinationDeletionsFile: URL { appSupport.appendingPathComponent("destination-deletions.json") }
     public static var libraryIndexFile: URL { appSupport.appendingPathComponent("library-index.json") }
     public static var photoIndexFile: URL { appSupport.appendingPathComponent("photo-index.json") }
     // Face/pet detections (per-photo, holds the embeddings) and the named

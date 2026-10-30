@@ -70,6 +70,7 @@ actor Coordinator {
     private var eventsTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
+    private let maintenanceProtection = StagingMaintenanceGuard()
 
     init(configProvider: @escaping ConfigProvider,
          configMutator: @escaping ConfigMutator,
@@ -101,6 +102,7 @@ actor Coordinator {
             }
         }
         Task { [weak self] in await self?.emitGlance() }
+        scheduleIdleCleanup()
     }
 
     func emitGlance() async {
@@ -270,7 +272,14 @@ actor Coordinator {
         // the time it clears on the launch paths, `runner` is already set (launch
         // is synchronous), so the guard keeps rejecting concurrent starts.
         startingSession = true
-        defer { startingSession = false }
+        maintenanceProtection.setBusy(true)
+        defer {
+            startingSession = false
+            if runner == nil {
+                maintenanceProtection.setBusy(false)
+                scheduleIdleCleanup()
+            }
+        }
         cleanupTask?.cancel()
         lastVolume = volume
         let config = await configProvider()
@@ -344,6 +353,9 @@ actor Coordinator {
                                    cardCapacityBytes: volume.info.capacityBytes,
                                    cardSessionToken: token)
         record.nasMntFromName = config.nasExpectedMntFromName
+        record.nasRootPath = config.nasRootPath
+        record.stagingRootPath = config.stagingRootPath
+        record.secondaryDestPath = config.secondaryDestPath
         record.files = plan.files
         record.stats.filesPlanned = plan.files.count
         record.stats.bytesPlanned = plan.files.reduce(0) { $0 + $1.size }
@@ -364,9 +376,10 @@ actor Coordinator {
             preparation.begin(.checkingNAS)
             if await nas.validateNow(force: true) == .healthy {
                 preparation.begin(.checkingSavedCopies)
-                let history = await journal.loadHistory(limit: Int.max)
+                let history = await journal.stagingCleanupRecords()
                 await staging.pruneCompletedBeforeNextRun(history, nasRoot: config.nasRootPath,
-                    keepDays: config.keepStagedDays, preparation: preparation)
+                    keepDays: config.keepStagedDays, preparation: preparation,
+                    secondaryRoot: config.secondaryDestPath, deletionStore: .forConfig(config))
             }
         }
         guard statfsInfo(path: volume.info.mountPath) != nil,
@@ -401,6 +414,7 @@ actor Coordinator {
 
     private func launchRunner(sessionID: UUID, card: CardInfo, config: AppConfig, staging: StagingStore,
                               wipeOnly: Bool = false) {
+        maintenanceProtection.setBusy(true)
         cleanupTask?.cancel()
         awaitingReinsert.remove(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
@@ -432,28 +446,35 @@ actor Coordinator {
                                           detail: "Offloading \(next.info.volumeName).")))
             await startSession(next)   // sets `runner` on launch → loop exits; bails cleanly → tries next
         }
-        if runner == nil, !startingSession, !finished.wipeOnly {
-            scheduleIdleCleanup(protecting: finished.sessionID)
+        if runner == nil, !startingSession {
+            maintenanceProtection.setBusy(false)
+            scheduleIdleCleanup()
         }
     }
 
-    private func scheduleIdleCleanup(protecting latestSessionID: UUID) {
+    private func scheduleIdleCleanup() {
         cleanupTask?.cancel()
-        let configProvider = self.configProvider, journal = self.journal
-        cleanupTask = Task.detached(priority: .utility) {
+        cleanupTask = Task.detached(priority: .utility) { [weak self] in
             do { try await Task.sleep(for: .seconds(15)) } catch { return }
-            let config = await configProvider()
-            guard !Task.isCancelled else { return }
-            // A separate locator keeps a slow maintenance check out of the live
-            // transfer's NAS actor. No new card ever awaits this task.
-            let locator = NASLocator(configProvider: { config })
-            guard await locator.validateNow(force: true) == .healthy, !Task.isCancelled else { return }
-            let history = await journal.loadHistory(limit: Int.max)
-            guard !Task.isCancelled else { return }
-            await StagingStore(rootPath: config.stagingRootPath).pruneCompletedBeforeNextRun(
-                history, nasRoot: config.nasRootPath, keepDays: config.keepStagedDays,
-                protectedSessionID: latestSessionID)
+            while !Task.isCancelled {
+                await self?.performIdleCleanup()
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            }
         }
+    }
+
+    /// Startup and idle retries use the same path; no later card is required.
+    func performIdleCleanup() async {
+        guard runner == nil, !startingSession, maintenanceProtection.isIdle, !Task.isCancelled else { return }
+        let config = await configProvider()
+        let locator = NASLocator(configProvider: { config })
+        guard await locator.validateNow(force: true) == .healthy, !Task.isCancelled else { return }
+        let records = await journal.stagingCleanupRecords()
+        guard !Task.isCancelled, maintenanceProtection.isIdle else { return }
+        await StagingStore(rootPath: config.stagingRootPath).pruneCompletedBeforeNextRun(
+            records, nasRoot: config.nasRootPath, keepDays: config.keepStagedDays,
+            secondaryRoot: config.secondaryDestPath, deletionStore: .forConfig(config),
+            protection: maintenanceProtection)
     }
 
     private func resumeAfterReinsert(_ volume: CandidateVolume) async {
@@ -513,7 +534,15 @@ actor Coordinator {
     func retryWipe(sessionID: UUID) async {
         guard runner == nil, !startingSession, !libraryMigrationBlocksIngest() else { return }
         startingSession = true
-        defer { startingSession = false }
+        maintenanceProtection.setBusy(true)
+        cleanupTask?.cancel()
+        defer {
+            startingSession = false
+            if runner == nil {
+                maintenanceProtection.setBusy(false)
+                scheduleIdleCleanup()
+            }
+        }
         guard var record = await journal.historySession(id: sessionID), record.canRetryWipe else {
             emit(.attention(AttentionItem(severity: .error, title: "Cannot retry erasure",
                 detail: "This transfer is not fully verified. Retry the transfer before erasing the card.")))

@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import OffloadCore
 
 /// Recoverable Library deletion. SMB shares commonly have no macOS Trash;
 /// keep those originals in a hidden folder on the same archive instead.
@@ -26,7 +27,8 @@ public enum LibraryTrash {
         // Network filesystem calls must not occupy the UI or cooperative pool.
         do {
             return try await ChunkedIO.blocking {
-                perform(targets, archiveRoot: archiveRoot) { url in
+                perform(targets, archiveRoot: archiveRoot,
+                        deletionStore: DestinationDeletionStore(file: Paths.destinationDeletionsFile)) { url in
                     try FileManager.default.trashItem(at: url, resultingItemURL: nil)
                 }
             }
@@ -42,6 +44,7 @@ public enum LibraryTrash {
     }
 
     static func perform(_ targets: Set<URL>, archiveRoot: URL,
+                        deletionStore: DestinationDeletionStore? = nil,
                         nativeTrash: (URL) throws -> Void) -> Result {
         let fm = FileManager.default
         let root = archiveRoot.resolvingSymlinksInPath().standardizedFileURL
@@ -50,6 +53,14 @@ public enum LibraryTrash {
         var batch: URL?
         var unavailableTrash: NSError?
         for original in targets.sorted(by: { $0.path < $1.path }) {
+            var deletionIntent: UUID?
+            defer {
+                if !result.removed.contains(original), let id = deletionIntent {
+                    // If revocation itself fails, retain the intent and fail
+                    // closed on a retry; never discard an original to recover.
+                    try? deletionStore?.revoke(id)
+                }
+            }
             let source = original.resolvingSymlinksInPath().standardizedFileURL
             do {
                 // Only regular archive files may be deleted. Never follow a
@@ -65,6 +76,7 @@ public enum LibraryTrash {
                 guard info.st_mode & S_IFMT == S_IFREG else {
                     throw TrashError("Only regular photo files can be deleted")
                 }
+                deletionIntent = try deletionStore?.begin(url: original, root: root, size: Int64(info.st_size))
                 do {
                     if let unavailableTrash { throw unavailableTrash }
                     try nativeTrash(original)

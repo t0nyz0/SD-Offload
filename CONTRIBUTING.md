@@ -25,3 +25,8 @@ bash Scripts/build-app.sh   # assemble build/SD Offload.app
 
 macOS 14+ on Apple Silicon, Swift 6 toolchain. See `CLAUDE.md` for the architecture and
 house rules.
+
+If disk-image creation is unavailable, run the harness with
+`OFFLOAD_HARNESS_DIRECTORY_CARD=1 bash Scripts/harness.sh` to use disposable directory
+cards without attempting image creation. This verifies engine behavior, not exFAT
+compatibility. `OFFLOAD_REQUIRE_EXFAT=1` still refuses directory substitution.

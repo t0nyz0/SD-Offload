@@ -32,7 +32,7 @@ final class FastStartTests: XCTestCase {
         await cardTask.value
     }
 
-    func testCancelledMaintenanceAndLatestBatchKeepRecoveryCopies() async throws {
+    func testCancelledMaintenanceAndExplicitlyProtectedSessionKeepRecoveryCopies() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -54,6 +54,6 @@ final class FastStartTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: recovery), data)
         await store.pruneCompletedBeforeNextRun([record], nasRoot: root.path, keepDays: 0,
                                                 protectedSessionID: record.id)
-        XCTAssertEqual(try Data(contentsOf: recovery), data, "The just-completed batch stays available for recovery")
+        XCTAssertEqual(try Data(contentsOf: recovery), data, "An explicitly protected session stays available")
     }
 }

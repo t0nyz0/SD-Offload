@@ -5,6 +5,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.27] — 2026-10-29
+
+### Fixed
+- With **After verified transfer** selected, free each file's staging space after its NAS and required second-copy read-backs succeed and the NAS checkpoint is durably saved. Preserve untransferred files and honor seven- and thirty-day retention.
+- Retry staging maintenance on startup and while idle, including durably verified files left in crash journals and sessions whose wipe was blocked or cancelled. Check files individually so one missing or changed destination does not retain an entire batch. Pause maintenance before transfer preparation and guard local deletion against a concurrently starting transfer.
+- Record in-app deletion intent before moving NAS files to Trash. Retire matching, previously verified staging copies without restoring those deleted destinations. A missing historically verified destination is surfaced on transfer retry instead of automatically recreated; already verified second copies are checked without backfilling a missing file on the same configured destination.
+- Preserve changed local files, unknown entries, symlinked directories, and cleanup manifests still needed for retained staging. Update the zero-day retention label to describe immediate verified cleanup.
+
 ## [1.7.26] — 2026-10-22
 
 ### Fixed
