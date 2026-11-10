@@ -20,15 +20,49 @@ struct WipePromptView: View {
 
                 subtitle
 
-                Button {
-                    app.cancelWipeTapped()
-                } label: {
-                    Text("Cancel wipe").frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    Button {
+                        app.cancelWipeTapped()
+                    } label: {
+                        Text("Cancel wipe").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("Cancel wipe — keep the card's contents")
+
+                    Button(role: .destructive) {
+                        app.requestWipeNowTapped(sessionID: vm.sessionID)
+                    } label: {
+                        Text("Wipe Now").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Skip the remaining countdown after confirmation. All final backup checks still run.")
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.cancelAction)
-                .padding(.horizontal, 40)
-                .accessibilityLabel("Cancel wipe — keep the card's contents")
+                .padding(.horizontal, 30)
+            } else if vm.phase == .awaitingWipeNowConfirmation {
+                Text("Wipe \(vm.card.volumeName) now?")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("Permanently remove the \(vm.plannedFiles) verified files from this card after checking the backups again. Backup copies will remain. The countdown is paused.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                HStack(spacing: 8) {
+                    Button {
+                        app.resumeWipeCountdownTapped(sessionID: vm.sessionID)
+                    } label: {
+                        Text("Keep waiting").frame(maxWidth: .infinity)
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    Button(role: .destructive) {
+                        app.confirmWipeNowTapped(sessionID: vm.sessionID)
+                    } label: {
+                        Text("Wipe Now").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
+                .padding(.horizontal, 30)
             } else {
                 Text("Wipe card now?")
                     .font(.system(size: 17, weight: .semibold))

@@ -26,6 +26,9 @@ final class AppState {
     var popoverVisible = false {
         didSet {
             if popoverVisible && !oldValue { refreshNASGlance(); refreshRecent() }
+            if !popoverVisible, oldValue, let session {
+                engine.resumeWipeCountdown(sessionID: session.sessionID)
+            }
             updateNASMonitoring()
         }
     }
@@ -44,15 +47,15 @@ final class AppState {
     @ObservationIgnored private var doneResetTask: Task<Void, Never>?
     @ObservationIgnored private var nasMonitorTask: Task<Void, Never>?
 
-    init() {
+    init(engine: (any EngineControlling)? = nil) {
         Paths.ensureAll()
         let settings = SettingsStore()
         self.settings = settings
         let journal = Journal()
         self.journal = journal
-        self.engine = Self.makeEngine(settings: settings, journal: journal)
+        self.engine = engine ?? Self.makeEngine(settings: settings, journal: journal)
         startPump()
-        engine.start()
+        self.engine.start()
         refreshNASGlance()
         refreshRecent()
         // The notification "Eject now" action posts this; wire it to the engine.
@@ -150,6 +153,11 @@ final class AppState {
 
         case .phase(let phase):
             session?.phase = phase
+            // Closing can beat the engine's acknowledgement of Wipe Now. Never
+            // leave an unseen confirmation holding the countdown indefinitely.
+            if phase == .awaitingWipeNowConfirmation, !popoverVisible, let session {
+                engine.resumeWipeCountdown(sessionID: session.sessionID)
+            }
             recomputeMenuBar()
             if phase == .done || phase == .doneWipeBlocked || phase == .cancelled || phase == .failed {
                 session?.applyScratchTick()
@@ -249,7 +257,7 @@ final class AppState {
                 newState = vm.hop1Fraction >= 1.0 ? .uploading(vm.headlinePercent) : .transferring(vm.headlinePercent)
             case .waitingForNAS:
                 newState = .uploading(vm.headlinePercent)
-            case .wipeCountdown, .awaitingWipeConsent, .verifyingDestination, .wiping, .ejecting:
+            case .wipeCountdown, .awaitingWipeNowConfirmation, .awaitingWipeConsent, .verifyingDestination, .wiping, .ejecting:
                 newState = .verifying(vm.headlinePercent)
             case .done:
                 newState = .doneFlash
@@ -356,6 +364,9 @@ final class AppState {
     }
     func confirmWipeTapped() { engine.confirmWipe() }
     func cancelWipeTapped() { engine.cancelWipe() }
+    func requestWipeNowTapped(sessionID: UUID) { engine.requestWipeNow(sessionID: sessionID) }
+    func confirmWipeNowTapped(sessionID: UUID) { engine.confirmWipeNow(sessionID: sessionID) }
+    func resumeWipeCountdownTapped(sessionID: UUID) { engine.resumeWipeCountdown(sessionID: sessionID) }
     func ejectTapped() { engine.eject() }
     /// "Look for a card" — force the engine to re-check mounted volumes when an
     /// insert wasn't picked up automatically.

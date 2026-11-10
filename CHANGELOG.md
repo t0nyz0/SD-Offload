@@ -5,6 +5,11 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.28] — 2026-11-09
+
+### Added
+- Add **Wipe Now** beside **Cancel wipe** during the countdown. Pause the countdown for explicit confirmation; Keep waiting or closing the popover resumes the remaining delay. Confirming skips only the timer, never the final NAS/second-copy verification or card/source safety checks. Ignore stale-session and repeated requests.
+
 ## [1.7.27] — 2026-10-29
 
 ### Fixed

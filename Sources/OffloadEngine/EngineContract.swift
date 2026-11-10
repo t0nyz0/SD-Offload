@@ -5,7 +5,7 @@ import OffloadCore
 
 public enum EnginePhase: String, Sendable {
     case idle, awaitingConsent, scanning, transferring, waitingForNAS,
-         wipeCountdown, awaitingWipeConsent, verifyingDestination, wiping, ejecting,
+         wipeCountdown, awaitingWipeNowConfirmation, awaitingWipeConsent, verifyingDestination, wiping, ejecting,
          done, doneWipeBlocked, failed, pausedCardGone, pausedByUser, cancelled
 }
 
@@ -106,6 +106,10 @@ public protocol EngineControlling: AnyObject {
     func cancel()
     func confirmWipe()
     func cancelWipe()
+    /// Pause an active countdown for explicit, session-scoped early-wipe consent.
+    func requestWipeNow(sessionID: UUID)
+    func confirmWipeNow(sessionID: UUID)
+    func resumeWipeCountdown(sessionID: UUID)
     func eject()
     func retry()
     func retryWipe(sessionID: UUID)

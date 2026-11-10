@@ -31,6 +31,15 @@ public final class EngineController: EngineControlling, @unchecked Sendable {
     public func cancel() { Task { await coordinator.runner?.cancel() } }
     public func confirmWipe() { Task { await coordinator.runner?.confirmWipe() } }
     public func cancelWipe() { Task { await coordinator.runner?.cancelWipe() } }
+    public func requestWipeNow(sessionID: UUID) {
+        Task { await coordinator.controlWipeCountdown(sessionID: sessionID, action: .request) }
+    }
+    public func confirmWipeNow(sessionID: UUID) {
+        Task { await coordinator.controlWipeCountdown(sessionID: sessionID, action: .confirm) }
+    }
+    public func resumeWipeCountdown(sessionID: UUID) {
+        Task { await coordinator.controlWipeCountdown(sessionID: sessionID, action: .resume) }
+    }
     public func eject() { Task { await coordinator.eject() } }
     public func retry() { Task { await coordinator.retry() } }
     public func retryWipe(sessionID: UUID) { Task { await coordinator.retryWipe(sessionID: sessionID) } }
@@ -515,6 +524,17 @@ actor Coordinator {
     }
 
     // MARK: - Misc intents
+
+    enum WipeCountdownAction { case request, confirm, resume }
+
+    func controlWipeCountdown(sessionID: UUID, action: WipeCountdownAction) async {
+        guard let runner, runner.sessionID == sessionID else { return }
+        switch action {
+        case .request: await runner.requestWipeNow()
+        case .confirm: await runner.confirmWipeNow()
+        case .resume: await runner.resumeWipeCountdown()
+        }
+    }
 
     func eject() async {
         if let runner {

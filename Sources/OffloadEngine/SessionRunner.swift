@@ -44,6 +44,10 @@ public actor SessionRunner {
     private nonisolated let nasActivity = NASActivityTracker()
     private var allSettledContinuation: CheckedContinuation<Void, Never>?
     private var wipeConsentContinuation: CheckedContinuation<Bool, Never>?
+    private var wipeCountdownContinuation: CheckedContinuation<Bool, Never>?
+    private var wipeCountdownTask: Task<Void, Never>?
+    private var wipeCountdownRemaining = 0
+    private var wipeCountdownGeneration = 0
     private var power: PowerAssertion?
     private var cardPresent = true
     private var userPaused = false
@@ -935,13 +939,16 @@ public actor SessionRunner {
         case .afterNASVerify, .afterStagingVerify:
             if config.wipeCountdownSeconds > 0 {
                 await journal.setSessionState(.wipeCountdown, in: sessionID)
-                publishWipePhase(.wipeCountdown)
-                for second in stride(from: config.wipeCountdownSeconds, through: 1, by: -1) {
-                    if wipeCancelled { proceed = false; break }
-                    emit(.wipeCountdown(secondsRemaining: second))
-                    try? await Task.sleep(for: .seconds(1))
+                if cancelled || wipeCancelled {
+                    proceed = false
+                } else {
+                    proceed = await withCheckedContinuation { continuation in
+                        wipeCountdownContinuation = continuation
+                        wipeCountdownRemaining = config.wipeCountdownSeconds
+                        publishWipePhase(.wipeCountdown)
+                        scheduleWipeCountdownTick()
+                    }
                 }
-                if wipeCancelled { proceed = false }
             }
         }
 
@@ -1130,6 +1137,7 @@ public actor SessionRunner {
     public func cancel() async {
         cancelled = true
         wipeCancelled = true
+        finishWipeCountdown(proceed: false)
         finalVerificationTask?.cancel()
         await stopWorkers()
         wipeConsentContinuation?.resume(returning: false)
@@ -1157,7 +1165,7 @@ public actor SessionRunner {
     /// manifest into the journal. Rebuild the copy queue from journal state.
     public func cardReturned() async {
         cardPresent = true
-        if wipeOnly || isWipeRetry {
+        if wipeOnly || isWipeRetry || wipeCountdownContinuation != nil {
             // Reinsertion cannot expand a wipe retry into a new transfer. Its
             // original consent/countdown and fresh destination checks continue.
             if let stateBeforeCardLoss {
@@ -1193,8 +1201,63 @@ public actor SessionRunner {
 
     public func cancelWipe() {
         wipeCancelled = true
+        finishWipeCountdown(proceed: false)
         wipeConsentContinuation?.resume(returning: false)
         wipeConsentContinuation = nil
+    }
+
+    /// Only skips the delay. executeWipe still re-verifies every destination and
+    /// evaluates WipeGate, including source identity, before any deletion.
+    public func requestWipeNow() {
+        guard wipeCountdownContinuation != nil, wipePhase == .wipeCountdown,
+              cardPresent, !cancelled, !wipeCancelled else { return }
+        invalidateWipeCountdownTick()
+        publishWipePhase(.awaitingWipeNowConfirmation)
+    }
+
+    public func confirmWipeNow() {
+        guard wipeCountdownContinuation != nil, wipePhase == .awaitingWipeNowConfirmation,
+              cardPresent, !cancelled, !wipeCancelled else { return }
+        finishWipeCountdown(proceed: true)
+    }
+
+    public func resumeWipeCountdown() {
+        guard wipeCountdownContinuation != nil, wipePhase == .awaitingWipeNowConfirmation,
+              !cancelled, !wipeCancelled else { return }
+        publishWipePhase(.wipeCountdown)
+        scheduleWipeCountdownTick()
+    }
+
+    private func invalidateWipeCountdownTick() {
+        wipeCountdownTask?.cancel()
+        wipeCountdownTask = nil
+        wipeCountdownGeneration += 1
+    }
+
+    private func scheduleWipeCountdownTick() {
+        invalidateWipeCountdownTick()
+        let generation = wipeCountdownGeneration
+        emit(.wipeCountdown(secondsRemaining: wipeCountdownRemaining))
+        wipeCountdownTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard !Task.isCancelled else { return }
+            await self?.wipeCountdownTick(generation: generation)
+        }
+    }
+
+    private func wipeCountdownTick(generation: Int) {
+        guard generation == wipeCountdownGeneration, wipeCountdownContinuation != nil,
+              wipePhase == .wipeCountdown else { return }
+        wipeCountdownRemaining -= 1
+        if wipeCountdownRemaining == 0 { finishWipeCountdown(proceed: !cancelled && !wipeCancelled) }
+        else { scheduleWipeCountdownTick() }
+    }
+
+    private func finishWipeCountdown(proceed: Bool) {
+        invalidateWipeCountdownTick()
+        let continuation = wipeCountdownContinuation
+        wipeCountdownContinuation = nil
+        continuation?.resume(returning: proceed)
     }
 
     public func ejectCard() async {

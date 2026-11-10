@@ -300,4 +300,180 @@ final class WipeRetryTests: XCTestCase {
         vm.completed = f.record; vm.completed?.files[0].sourceHashHex = nil
         XCTAssertEqual(vm.retryButtonTitle, "Retry transfer")
     }
+
+    private func countdown(_ f: Fixture, events: Events, seconds: Int = 30) async throws -> (Coordinator, SessionRunner) {
+        var fixture = f
+        fixture.config.wipeCountdownSeconds = seconds
+        let controller = await coordinator(fixture, events: events)
+        await controller.retryWipe(sessionID: f.record.id)
+        for _ in 0..<400 {
+            if events.phases.contains(.wipeCountdown) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(events.phases.contains(.wipeCountdown))
+        let active = await controller.runner
+        return (controller, try XCTUnwrap(active))
+    }
+
+    func testWipeNowSkipsDelayButStillVerifiesAndDeletesOnlyApprovedFiles() async throws {
+        let f = try await fixture(), events = Events()
+        let added = f.card.appendingPathComponent("DCIM/unplanned.JPG")
+        try Data("new photo".utf8).write(to: added)
+        let (controller, runner) = try await countdown(f, events: events)
+        await controller.controlWipeCountdown(sessionID: f.record.id, action: .request)
+        XCTAssertEqual(events.phases.last, .awaitingWipeNowConfirmation)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+        // Neither the ordinary ask-policy consent nor repeated requests can bypass this prompt.
+        await runner.confirmWipe()
+        await runner.requestWipeNow()
+        XCTAssertNil(events.completion)
+        await controller.controlWipeCountdown(sessionID: f.record.id, action: .confirm)
+        await runner.confirmWipeNow()
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.filesDeleted, 1)
+        XCTAssertEqual(events.phases.filter { $0 == .verifyingDestination }.count, 1)
+        XCTAssertEqual(events.phases.filter { $0 == .wiping }.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.source.path))
+        XCTAssertEqual(try Data(contentsOf: added), Data("new photo".utf8))
+        XCTAssertEqual(try Data(contentsOf: f.backup), Data("verified photo bytes".utf8))
+        try assertNoTransfer(f, events: events)
+    }
+
+    func testWipeNowPausesCountdownAndKeepWaitingResumes() async throws {
+        let f = try await fixture(), events = Events()
+        let (_, runner) = try await countdown(f, events: events, seconds: 1)
+        await runner.requestWipeNow()
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertNil(events.completion)
+        XCTAssertEqual(events.phases.last, .awaitingWipeNowConfirmation)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+        await runner.resumeWipeCountdown()
+        await runner.resumeWipeCountdown()
+        XCTAssertEqual(events.phases.last, .wipeCountdown)
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.filesDeleted, 1)
+    }
+
+    func testCancelWipeDuringConfirmationCannotBeUndoneByLateConfirm() async throws {
+        let f = try await fixture(), events = Events()
+        let (_, runner) = try await countdown(f, events: events)
+        await runner.requestWipeNow()
+        await runner.cancelWipe()
+        await runner.confirmWipeNow()
+        await runner.resumeWipeCountdown()
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.ran, false)
+        XCTAssertFalse(events.phases.contains(.wiping))
+        XCTAssertEqual(try Data(contentsOf: f.source), Data("verified photo bytes".utf8))
+    }
+
+    func testCancelSessionDuringConfirmationCannotBeUndoneByLateConfirm() async throws {
+        let f = try await fixture(), events = Events()
+        let (_, runner) = try await countdown(f, events: events)
+        await runner.requestWipeNow()
+        await runner.cancel()
+        await runner.confirmWipeNow()
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.ran, false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+    }
+
+    func testStaleSessionRequestsAndUnpromptedConfirmationAreIgnored() async throws {
+        let f = try await fixture(), events = Events()
+        let (controller, runner) = try await countdown(f, events: events)
+        await runner.confirmWipeNow()
+        await controller.controlWipeCountdown(sessionID: UUID(), action: .request)
+        XCTAssertEqual(events.phases.last, .wipeCountdown)
+        await runner.requestWipeNow()
+        await controller.controlWipeCountdown(sessionID: UUID(), action: .confirm)
+        await controller.controlWipeCountdown(sessionID: UUID(), action: .resume)
+        XCTAssertEqual(events.phases.last, .awaitingWipeNowConfirmation)
+        XCTAssertNil(events.completion)
+        await runner.cancelWipe()
+        await fulfillment(of: [events.finished], timeout: 3)
+    }
+
+    func testWipeNowStillBlocksMissingNASCopy() async throws {
+        try await assertWipeNowBlocked(damage: "missing")
+    }
+    func testWipeNowStillBlocksCorruptedNASCopy() async throws {
+        try await assertWipeNowBlocked(damage: "corrupt")
+    }
+    func testWipeNowStillBlocksChangedSource() async throws {
+        try await assertWipeNowBlocked(damage: "source")
+    }
+    func testWipeNowStillBlocksDifferentCardToken() async throws {
+        try await assertWipeNowBlocked(damage: "token")
+    }
+    func testWipeNowStillBlocksMissingSecondCopy() async throws {
+        try await assertWipeNowBlocked(damage: "secondary")
+    }
+
+    private func assertWipeNowBlocked(damage: String) async throws {
+        var f = try await fixture(); let events = Events()
+        if damage == "secondary" {
+            let secondary = root.appendingPathComponent("second")
+            try FileManager.default.createDirectory(at: secondary, withIntermediateDirectories: true)
+            f.config.secondaryDestPath = secondary.path
+        }
+        let (_, runner) = try await countdown(f, events: events)
+        await runner.requestWipeNow()
+        switch damage {
+        case "missing": try FileManager.default.removeItem(at: f.backup)
+        case "corrupt": try Data("corrupt backup bytes".utf8).write(to: f.backup)
+        case "source": try Data("unverified new source".utf8).write(to: f.source)
+        case "token": try Data("different card".utf8).write(to: f.card.appendingPathComponent(Paths.cardSessionMarkerName))
+        default: break
+        }
+        let original = try Data(contentsOf: f.source)
+        await runner.confirmWipeNow()
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.state, .doneWipeBlocked)
+        XCTAssertEqual(events.completion?.wipeReport?.ran, false)
+        XCTAssertFalse(events.phases.contains(.wiping))
+        XCTAssertEqual(try Data(contentsOf: f.source), original)
+        try assertNoTransfer(f, events: events)
+    }
+
+    func testCardRemovalDuringConfirmationRejectsConfirmationUntilReinserted() async throws {
+        let f = try await fixture(), events = Events()
+        let (_, runner) = try await countdown(f, events: events)
+        await runner.requestWipeNow()
+        await runner.cardGone()
+        await runner.confirmWipeNow()
+        XCTAssertNil(events.completion)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+        await runner.cardReturned()
+        XCTAssertEqual(events.phases.last, .awaitingWipeNowConfirmation)
+        await runner.confirmWipeNow()
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.filesDeleted, 1)
+    }
+
+    func testWipeNowCannotBypassAskEachTimePolicy() async throws {
+        var f = try await fixture(); let events = Events()
+        f.config.wipePolicy = .askEachTime
+        let controller = await coordinator(f, events: events)
+        await controller.retryWipe(sessionID: f.record.id)
+        for _ in 0..<400 {
+            if events.phases.contains(.awaitingWipeConsent) { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        await controller.controlWipeCountdown(sessionID: f.record.id, action: .request)
+        await controller.controlWipeCountdown(sessionID: f.record.id, action: .confirm)
+        XCTAssertEqual(events.phases.last, .awaitingWipeConsent)
+        XCTAssertNil(events.completion)
+        if let runner = await controller.runner { await runner.cancelWipe() }
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+    }
+
+    func testCountdownExpiresNormallyWithoutWipeNow() async throws {
+        let f = try await fixture(), events = Events()
+        _ = try await countdown(f, events: events, seconds: 1)
+        await fulfillment(of: [events.finished], timeout: 3)
+        XCTAssertEqual(events.completion?.wipeReport?.filesDeleted, 1)
+        XCTAssertFalse(events.phases.contains(.awaitingWipeNowConfirmation))
+    }
+
 }

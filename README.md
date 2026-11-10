@@ -98,7 +98,7 @@ one being offloaded.
 | Optional second verified copy | Require every photo to verify on both the NAS and a second destination before the card can be erased |
 | End-to-end integrity | NAS copy hashed (uncached) against the original card-read hash before anything is deleted |
 | Smart dedup | A photo already on the NAS (proven by hash) is skipped, not re-uploaded; same-name-different-content gets a ` (2)` suffix — nothing is ever silently overwritten |
-| All-or-nothing wipe | Strict gate + cancellable countdown, empty-DCIM prune, auto-eject; one unverifiable file blocks the whole wipe |
+| All-or-nothing wipe | Strict gate + cancellable countdown, confirmed **Wipe Now** shortcut, empty-DCIM prune, auto-eject; one unverifiable file blocks the whole wipe |
 | Crash / yank / outage resilience | Journaled per-file state resumes interrupted work; an unavailable NAS is retried and the transfer continues when the expected share returns |
 
 **Library & viewer**

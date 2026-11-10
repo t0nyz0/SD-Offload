@@ -10,6 +10,11 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
     let events: AsyncStream<EngineEvent>
     private var scriptTask: Task<Void, Never>?
     private var paused = false
+    private var sessionID: UUID?
+    private var wipeConfirmationPending = false
+    private var wipeNowConfirmed = false
+    private var wipeCancelled = false
+    private var countingDown = false
 
     init() {
         var cont: AsyncStream<EngineEvent>.Continuation!
@@ -35,7 +40,8 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
         try? await Task.sleep(for: .seconds(1))
 
         emit(.cardMounted(card))
-        emit(.sessionStarted(sessionID: UUID(), card: card, resumed: false))
+        let id = UUID(); sessionID = id
+        emit(.sessionStarted(sessionID: id, card: card, resumed: false))
         emit(.phase(.scanning))
         if let mode = ProcessInfo.processInfo.environment["OFFLOAD_DEMO_PREPARATION"] {
             for step in 0..<240 {
@@ -120,11 +126,26 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
             try? await Task.sleep(for: .milliseconds(100))
         }
 
+        countingDown = true
         emit(.phase(.wipeCountdown))
         for s in stride(from: 5, through: 1, by: -1) {
             emit(.wipeCountdown(secondsRemaining: s))
-            try? await Task.sleep(for: .seconds(1))
+            var ticks = 0
+            while ticks < 10 {
+                if Task.isCancelled || wipeCancelled { countingDown = false; return }
+                if wipeNowConfirmed { break }
+                try? await Task.sleep(for: .milliseconds(100))
+                if !wipeConfirmationPending { ticks += 1 }
+            }
+            while wipeConfirmationPending && !Task.isCancelled && !wipeCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            if Task.isCancelled || wipeCancelled { countingDown = false; return }
+            if wipeNowConfirmed { break }
         }
+        countingDown = false
+        emit(.phase(.verifyingDestination))
+        try? await Task.sleep(for: .seconds(1))
         emit(.phase(.wiping))
         try? await Task.sleep(for: .seconds(1.2))
         emit(.phase(.ejecting))
@@ -153,7 +174,19 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
     func resume() { paused = false; emit(.phase(.transferring)) }
     func cancel() { scriptTask?.cancel(); emit(.phase(.cancelled)) }
     func confirmWipe() {}
-    func cancelWipe() { emit(.phase(.transferring)) }
+    func cancelWipe() { wipeCancelled = true; emit(.phase(.done)) }
+    func requestWipeNow(sessionID: UUID) {
+        guard self.sessionID == sessionID, countingDown, !wipeCancelled, !wipeNowConfirmed else { return }
+        wipeConfirmationPending = true; emit(.phase(.awaitingWipeNowConfirmation))
+    }
+    func confirmWipeNow(sessionID: UUID) {
+        guard self.sessionID == sessionID, wipeConfirmationPending, !wipeCancelled else { return }
+        wipeNowConfirmed = true; wipeConfirmationPending = false
+    }
+    func resumeWipeCountdown(sessionID: UUID) {
+        guard self.sessionID == sessionID, wipeConfirmationPending, !wipeCancelled else { return }
+        wipeConfirmationPending = false; emit(.phase(.wipeCountdown))
+    }
     func eject() {}
     func retry() {}
     func retryWipe(sessionID: UUID) {}

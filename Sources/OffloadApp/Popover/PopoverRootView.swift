@@ -14,7 +14,7 @@ struct PopoverRootView: View {
                         DoneView(vm: vm)
                     case .failed, .doneWipeBlocked:
                         AttentionView(vm: vm)
-                    case .wipeCountdown, .awaitingWipeConsent:
+                    case .wipeCountdown, .awaitingWipeNowConfirmation, .awaitingWipeConsent:
                         WipePromptView(vm: vm)
                     case .cancelled, .idle:
                         IdleView()
