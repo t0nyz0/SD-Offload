@@ -10,6 +10,7 @@ public actor AsyncQueue<T: Sendable> {
     private var receivers: [(UUID, CheckedContinuation<T?, Never>)] = []
     private var finished = false
     public init() {}
+    init(items: [T]) { buffer = items.map(Optional.some) }
 
     public func send(_ item: T) {
         guard !finished else { return }

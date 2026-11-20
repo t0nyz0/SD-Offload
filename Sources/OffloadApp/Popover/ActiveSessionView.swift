@@ -8,12 +8,21 @@ struct ActiveSessionView: View {
         vm.phase == .pausedByUser || vm.phase == .pausedCardGone
     }
 
+    private var isFinishingCard: Bool { vm.phase == .wiping || vm.phase == .ejecting }
+
+    private var cardProgress: Double {
+        if vm.phase == .wiping { return vm.erasureProgress?.fraction ?? 0 }
+        if vm.phase == .ejecting { return 1 }
+        if vm.isChecking { return vm.verification?.fraction ?? 0 }
+        return min(0.99, vm.overallFraction)
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             header
 
             HStack(spacing: 18) {
-                CardProgressView(progress: vm.isChecking ? (vm.verification?.fraction ?? 0) : min(0.99, vm.overallFraction))
+                CardProgressView(progress: cardProgress)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(vm.headlinePercent)%")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
@@ -29,6 +38,34 @@ struct ActiveSessionView: View {
             }
             .padding(.top, 2)
 
+            if isFinishingCard {
+                if vm.phase == .wiping {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let progress = vm.erasureProgress {
+                            ProgressTrack(fraction: progress.fraction, tint: Theme.accent)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel("Card erasure progress")
+                                .accessibilityValue("\(vm.headlinePercent) percent")
+                        } else {
+                            ProgressView().tint(Theme.accent)
+                                .accessibilityLabel("Preparing to erase the card")
+                        }
+                        if let detail = vm.erasureDetail {
+                            Text(detail).font(.system(size: 12, weight: .medium)).monospacedDigit()
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            } else {
+                transferDetails
+            }
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    private var transferDetails: some View {
+        VStack(spacing: 12) {
             VStack(spacing: 2) {
                 if vm.phase == .pausedCardGone {
                     Text("Card removed — re-insert to finish")
@@ -101,8 +138,6 @@ struct ActiveSessionView: View {
             }
             .frame(height: 26)
         }
-        .padding(.top, 12)
-        .padding(.bottom, 10)
     }
 
     private var header: some View {
@@ -153,8 +188,8 @@ struct ActiveSessionView: View {
         case .waitingForNAS: "waiting for NAS"
         case .pausedByUser: "paused"
         case .pausedCardGone: "card removed"
-        case .wiping: "wiping card"
-        case .ejecting: "ejecting"
+        case .wiping: "Erasing card"
+        case .ejecting: "Ejecting card"
         default:
             // Name the phase the user is actually in. The card read (hop1)
             // finishes well before the NAS upload (hop2); once it's done the

@@ -122,4 +122,41 @@ final class WipePromptTests: XCTestCase {
         }
         engine.continuation.finish()
     }
+
+    @MainActor
+    func testErasureProgressReplacesTransferPercentageAndRendersAtPopoverWidth() async throws {
+        let engine = Engine(), app = AppState(engine: engine)
+        defer { engine.continuation.finish() }
+        let id = UUID()
+        engine.continuation.yield(.sessionStarted(sessionID: id, card: card, resumed: false))
+        try await waitUntil { app.session?.sessionID == id }
+        let vm = try XCTUnwrap(app.session)
+        vm.percentInt = 99
+        engine.continuation.yield(.erasureProgress(ErasureProgress(filesCleared: 103, filesTotal: 412)))
+        engine.continuation.yield(.phase(.wiping))
+        try await waitUntil { app.menuBar == .erasing(25) }
+        XCTAssertEqual(vm.headlinePercent, 25)
+        XCTAssertEqual(vm.erasureDetail, "103 of 412 files cleared")
+
+        for scheme in [ColorScheme.light, .dark] {
+            let renderer = ImageRenderer(content: ActiveSessionView(vm: vm).environment(app)
+                .environment(\.colorScheme, scheme)
+                .frame(width: 360).background(scheme == .dark ? Color(white: 0.13) : .white))
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.cgImage)
+            XCTAssertEqual(image.width, 720)
+            XCTAssertGreaterThan(image.height, 100)
+            if let output = ProcessInfo.processInfo.environment["OFFLOAD_UI_SNAPSHOT_DIR"] {
+                let directory = URL(fileURLWithPath: output, isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let png = try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                try png.write(to: directory.appendingPathComponent("erasing-\(scheme).png"))
+            }
+        }
+
+        engine.continuation.yield(.erasureProgress(ErasureProgress(filesCleared: 412, filesTotal: 412)))
+        try await waitUntil { app.menuBar == .erasing(100) }
+        engine.continuation.yield(.phase(.ejecting))
+        try await waitUntil { app.menuBar == .ejecting }
+    }
 }

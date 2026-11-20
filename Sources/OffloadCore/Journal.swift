@@ -221,6 +221,15 @@ public actor Journal {
 
     // MARK: - Mutation
 
+    /// Claim a pending file before copying. A retry can already be in the queue
+    /// when a reinsert rebuilds it from the manifest.
+    public func beginCopy(file fileID: UUID, in sessionID: UUID) -> FileRecord? {
+        guard let index = fileOffsets[sessionID]?[fileID],
+              let file = active[sessionID]?.files[index], file.state == .pending else { return nil }
+        transition(file: fileID, to: .copying, in: sessionID)
+        return file
+    }
+
     public func transition(file fileID: UUID, to newState: FileState, in sessionID: UUID) {
         guard let idx = fileOffsets[sessionID]?[fileID],
               let old = active[sessionID]?.files[idx].state else { return }
@@ -274,7 +283,8 @@ public actor Journal {
         }
     }
 
-    public func setSessionState(_ state: SessionState, in sessionID: UUID) {
+    public func setSessionState(_ state: SessionState, in sessionID: UUID, ifCurrent expected: SessionState? = nil) {
+        if let expected, active[sessionID]?.state != expected { return }
         mutate(sessionID) { $0.state = state }
         try? flushNow(sessionID)
     }
@@ -296,6 +306,15 @@ public actor Journal {
         }
         indexFiles(sessionID)
         try? flushNow(sessionID)
+    }
+
+    /// A live reinsert can overlap staging verification and NAS uploads. Commit
+    /// the plan only if those workers haven't changed the manifest it was based on.
+    public func replaceFiles(_ files: [FileRecord], ifUnchangedFrom original: [FileRecord],
+                             in sessionID: UUID) -> Bool {
+        guard active[sessionID]?.files == original else { return false }
+        if files != original { replaceFiles(files, in: sessionID) }
+        return true
     }
 
     public func setEnded(in sessionID: UUID) {

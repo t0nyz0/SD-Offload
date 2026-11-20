@@ -156,6 +156,7 @@ public struct IngestPlanner: Sendable {
     /// Merge a fresh scan against an incomplete session (crash-remapped by the
     /// journal). Identity = relPath + size + mtime(±2 s, exFAT granularity).
     public func merge(scanned: [ScannedFile], into existing: [FileRecord],
+                      preservingInFlight: Bool = false,
                       progress: PreparationTracker? = nil) async -> Plan {
         progress?.begin(.matchingSavedProgress, total: existing.count)
         var byRelPath = Dictionary(uniqueKeysWithValues: scanned.map { ($0.relPath, $0) })
@@ -165,6 +166,10 @@ public struct IngestPlanner: Sendable {
         for var record in existing {
             progress?.examining(record.relPath)
             defer { progress?.finishedItem(record.relPath) }
+            // A live worker still owns a staged or uploading file. Keep its
+            // record even if that card slot changed, and plan the new file too.
+            let preserve = record.state.isDataSafe || (preservingInFlight &&
+                (record.state == .staged || record.state == .uploading))
             if let match = byRelPath.removeValue(forKey: record.relPath) {
                 let sameIdentity = match.size == record.size &&
                     abs(match.mtime.timeIntervalSince(record.mtime)) <= 2
@@ -176,7 +181,7 @@ public struct IngestPlanner: Sendable {
                         record.attempts = 0
                     }
                     merged.append(record)
-                } else if record.state.isDataSafe {
+                } else if preserve {
                     // Data already safe off the card; the changed card slot is a
                     // NEW file. Keep the safe record (do NOT fail it).
                     merged.append(record)
@@ -188,7 +193,7 @@ public struct IngestPlanner: Sendable {
                 }
             } else {
                 // In manifest, missing from card.
-                if record.state.isDataSafe {
+                if preserve {
                     merged.append(record)   // data safe; nothing to wipe — gate tolerates ENOENT here
                 } else {
                     record.state = .failed(.sourceMissing)

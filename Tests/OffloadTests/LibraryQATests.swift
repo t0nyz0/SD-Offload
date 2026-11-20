@@ -294,4 +294,40 @@ final class LibraryQATests: XCTestCase {
         XCTAssertNil(model.folderLoad)
         XCTAssertEqual(model.loadError, "Folder loading stopped.")
     }
+
+    @MainActor
+    func testBlockedCardFolderLookupAllowsStoppingAndSwitchingCards() async throws {
+        let firstCard = root.appendingPathComponent("card-a", isDirectory: true)
+        let secondCard = root.appendingPathComponent("card-b", isDirectory: true)
+        let dcim = secondCard.appendingPathComponent("DCIM", isDirectory: true)
+        try FileManager.default.createDirectory(at: dcim, withIntermediateDirectories: true)
+        let checking = expectation(description: "first card folder probe started")
+        let firstFinished = expectation(description: "first card probe unblocked")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let model = LibraryModel(nasRootPath: root.path, cardRootPath: firstCard.path, cardHasDCIM: { folder in
+            if folder.deletingLastPathComponent() == firstCard {
+                checking.fulfill()
+                _ = release.wait(timeout: .now() + 5)
+                firstFinished.fulfill()
+            }
+            return true
+        })
+
+        model.select(.card)
+        guard case .findingFolder? = model.folderLoad?.stage else { return XCTFail("Expected folder lookup progress") }
+        await fulfillment(of: [checking], timeout: 2)
+        model.stopFolderLoad()
+        XCTAssertFalse(model.loading)
+        XCTAssertEqual(model.loadError, "Folder loading stopped.")
+
+        model.update(nasRootPath: root.path, cardRootPath: secondCard.path)
+        for _ in 0..<100 where model.loading { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.currentDir?.path, dcim.path)
+        XCTAssertFalse(model.loading)
+        release.signal()
+        await fulfillment(of: [firstFinished], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(model.currentDir?.path, dcim.path)
+    }
 }

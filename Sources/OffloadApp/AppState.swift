@@ -184,6 +184,10 @@ final class AppState {
         case .wipeCountdown(let seconds):
             session?.wipeCountdown = seconds
 
+        case .erasureProgress(let progress):
+            if session?.erasureProgress != progress { session?.erasureProgress = progress }
+            recomputeMenuBar()
+
         case .attention(let item):
             session?.failure = item
             if settings.config.notifyProblems {
@@ -257,8 +261,12 @@ final class AppState {
                 newState = vm.hop1Fraction >= 1.0 ? .uploading(vm.headlinePercent) : .transferring(vm.headlinePercent)
             case .waitingForNAS:
                 newState = .uploading(vm.headlinePercent)
-            case .wipeCountdown, .awaitingWipeNowConfirmation, .awaitingWipeConsent, .verifyingDestination, .wiping, .ejecting:
+            case .wipeCountdown, .awaitingWipeNowConfirmation, .awaitingWipeConsent, .verifyingDestination:
                 newState = .verifying(vm.headlinePercent)
+            case .wiping:
+                newState = .erasing(vm.headlinePercent)
+            case .ejecting:
+                newState = .ejecting
             case .done:
                 newState = .doneFlash
             case .doneWipeBlocked, .failed:

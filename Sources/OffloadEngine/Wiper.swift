@@ -22,7 +22,7 @@ struct Wiper {
                         sessionID: UUID,
                         fileIDs: [UUID: WipeGate.PlannedDeletion],
                         exclusiveRename: @escaping ExclusiveRename = liveExclusiveRename,
-                        onProgress: (@Sendable (Int, Int) -> Void)? = nil) async -> Result {
+                        onProgress: (@Sendable (Int, Int) async -> Void)? = nil) async -> Result {
         var result = Result()
         for (index, deletion) in deletions.enumerated() {
             do {
@@ -30,7 +30,7 @@ struct Wiper {
                 try await removeApproved(deletion, exclusiveRename: exclusiveRename)
                 await journal.transition(file: deletion.fileID, to: .wiped, in: sessionID)
                 result.filesDeleted += 1
-                onProgress?(index + 1, deletions.count)
+                await onProgress?(index + 1, deletions.count)
             } catch {
                 result.stoppedEarly = "Erasure stopped at \(deletion.absolutePath): \(error.localizedDescription)"
                 break

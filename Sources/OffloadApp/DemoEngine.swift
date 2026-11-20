@@ -146,8 +146,12 @@ final class DemoEngine: EngineControlling, @unchecked Sendable {
         countingDown = false
         emit(.phase(.verifyingDestination))
         try? await Task.sleep(for: .seconds(1))
+        emit(.erasureProgress(ErasureProgress(filesCleared: 0, filesTotal: totalFiles)))
         emit(.phase(.wiping))
-        try? await Task.sleep(for: .seconds(1.2))
+        for tick in 1...12 {
+            try? await Task.sleep(for: .milliseconds(100))
+            emit(.erasureProgress(ErasureProgress(filesCleared: totalFiles * tick / 12, filesTotal: totalFiles)))
+        }
         emit(.phase(.ejecting))
         try? await Task.sleep(for: .seconds(0.8))
 

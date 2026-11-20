@@ -16,6 +16,7 @@ final class SessionViewModel {
     var phase: EnginePhase = .scanning
     var preparation = PreparationProgress()
     var verification: VerificationProgress?
+    var erasureProgress: ErasureProgress?
     var nasActivityDetail: String?
     var uploadFilesRemaining = 0
     var isChecking: Bool {
@@ -29,8 +30,15 @@ final class SessionViewModel {
     }
     var headlinePercent: Int {
         if phase == .done { return 100 }
+        if phase == .wiping { return Int((erasureProgress?.fraction ?? 0) * 100) }
+        if phase == .ejecting { return 100 }
         if isChecking, let verification { return min(99, Int(verification.fraction * 100)) }
         return min(99, percentInt)
+    }
+    var erasureDetail: String? {
+        guard let erasureProgress else { return nil }
+        if erasureProgress.filesTotal == 0 { return "No files to erase" }
+        return "\(erasureProgress.filesCleared) of \(erasureProgress.filesTotal) files cleared"
     }
     var verificationDetail: String? {
         guard let v = verification else { return nil }

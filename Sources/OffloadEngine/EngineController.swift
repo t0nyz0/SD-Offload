@@ -73,6 +73,8 @@ actor Coordinator {
     // the runner ends. Unmount clears the mark so reinsertion is checked again.
     private var handledThisInsertion: Set<String> = []
     private var awaitingReinsert: Set<String> = []
+    private var cardRemovalGeneration = 0
+    private var resumingCardGeneration: Int?
     private var eventsTask: Task<Void, Never>?
     private var prewarmTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
@@ -202,6 +204,7 @@ actor Coordinator {
             pendingCandidates.removeValue(forKey: uuid)
             queue.removeAll { $0.info.volumeUUID == uuid }   // a queued card pulled before its turn
             if let runner, runner.card.volumeUUID == uuid {
+                cardRemovalGeneration += 1
                 awaitingReinsert.insert(uuid)
                 await runner.cardGone()
             } else {
@@ -488,24 +491,34 @@ actor Coordinator {
     }
 
     private func resumeAfterReinsert(_ volume: CandidateVolume) async {
-        guard let runner, let record = await journal.session(id: runner.sessionID) else { return }
+        guard let runner else { return }
         let card = volume.info
+        let generation = cardRemovalGeneration
+        guard resumingCardGeneration != generation else { return }
+        resumingCardGeneration = generation
+        defer { if resumingCardGeneration == generation { resumingCardGeneration = nil } }
+        func isCurrent() -> Bool {
+            self.runner === runner && cardRemovalGeneration == generation && awaitingReinsert.contains(card.volumeUUID)
+        }
+        guard let record = await journal.session(id: runner.sessionID), isCurrent() else { return }
         let isOriginal = await matchesReinsertedCard(card, runner: runner, token: record.cardSessionToken)
-        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
+        guard isCurrent() else { return }
         guard isOriginal else {
             emit(.attention(AttentionItem(severity: .error, title: "Insert the original card",
                 detail: "The session can only resume with the original card in its original reader. Nothing was copied or erased from this card.")))
             return
         }
-        if runner.wipeOnly {
+        let needsScan = await runner.needsReinsertScan
+        guard isCurrent() else { return }
+        if !needsScan {
+            awaitingReinsert.remove(card.volumeUUID)
             lastVolume = volume
             handledThisInsertion.insert(card.volumeUUID)
             await runner.cardReturned(bsdName: card.bsdName)
-            awaitingReinsert.remove(card.volumeUUID)
             return
         }
         let config = await configProvider()
-        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
+        guard isCurrent() else { return }
         emit(.phase(.scanning))
         let preparation = PreparationTracker()
         let sampler = samplePreparation(preparation)
@@ -516,20 +529,25 @@ actor Coordinator {
         let scanned = await Task.detached(priority: .userInitiated) {
             planner.scan(cardRoot: cardRoot, scope: scope, progress: preparation)
         }.value
-        let plan = await planner.merge(scanned: scanned, into: record.files, progress: preparation)
-        // Scanning can suspend long enough for another removal or card swap.
-        let stillOriginal = await matchesReinsertedCard(card, runner: runner, token: record.cardSessionToken)
-        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
-        guard stillOriginal else {
-            emit(.phase(.pausedCardGone))
-            return
+        var original = record.files
+        while isCurrent() {
+            let plan = await planner.merge(scanned: scanned, into: original, preservingInFlight: true, progress: preparation)
+            let stillOriginal = await matchesReinsertedCard(card, runner: runner, token: record.cardSessionToken)
+            guard isCurrent() else { return }
+            guard stillOriginal else {
+                emit(.phase(.pausedCardGone))
+                return
+            }
+            if await runner.acceptReinsert(plan.files, replacing: original, bsdName: card.bsdName) {
+                guard isCurrent() else { return }
+                lastVolume = volume
+                handledThisInsertion.insert(card.volumeUUID)
+                awaitingReinsert.remove(card.volumeUUID)
+                return
+            }
+            guard let latest = await journal.session(id: runner.sessionID) else { return }
+            original = latest.files
         }
-        await journal.replaceFiles(plan.files, in: runner.sessionID)
-        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
-        lastVolume = volume
-        handledThisInsertion.insert(card.volumeUUID)
-        await runner.cardReturned(bsdName: card.bsdName)
-        awaitingReinsert.remove(card.volumeUUID)
     }
 
     private func matchesReinsertedCard(_ card: CardInfo, runner: SessionRunner, token: String?) async -> Bool {

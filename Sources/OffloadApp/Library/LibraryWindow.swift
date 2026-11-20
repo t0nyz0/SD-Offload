@@ -297,19 +297,29 @@ private struct LibraryProgressBanner: View {
                     Text(vm.cardTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
                     Text(statusWord).font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    if let eta = vm.isChecking ? Fmt.eta(vm.verification?.eta) : vm.etaAllSafeText {
+                    if vm.phase != .wiping && vm.phase != .ejecting,
+                       let eta = vm.isChecking ? Fmt.eta(vm.verification?.eta) : vm.etaAllSafeText {
                         Text(vm.isChecking ? "check in \(eta)" : "all safe in \(eta)").font(.system(size: 11))
                             .foregroundStyle(.secondary).monospacedDigit()
                     }
                     Text("\(vm.headlinePercent)%").font(.system(size: 12, weight: .bold)).monospacedDigit()
                 }
-                HStack(spacing: 10) {
-                    MiniBar(label: "CARD", fraction: vm.hop1Fraction, tint: Theme.accent)
-                    MiniBar(label: "NAS", fraction: vm.hop2Fraction, tint: Theme.safe)
-                    if let v = vm.verification { MiniBar(label: "CHECK", fraction: v.fraction, tint: Theme.safe) }
-                }
-                if let detail = vm.nasActivityDetail {
-                    Text(detail).font(.system(size: 11)).foregroundStyle(.orange)
+                if vm.phase == .wiping {
+                    if let progress = vm.erasureProgress {
+                        MiniBar(label: "ERASE", fraction: progress.fraction, tint: Theme.accent)
+                    }
+                    if let detail = vm.erasureDetail {
+                        Text(detail).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                } else if vm.phase != .ejecting {
+                    HStack(spacing: 10) {
+                        MiniBar(label: "CARD", fraction: vm.hop1Fraction, tint: Theme.accent)
+                        MiniBar(label: "NAS", fraction: vm.hop2Fraction, tint: Theme.safe)
+                        if let v = vm.verification { MiniBar(label: "CHECK", fraction: v.fraction, tint: Theme.safe) }
+                    }
+                    if let detail = vm.nasActivityDetail {
+                        Text(detail).font(.system(size: 11)).foregroundStyle(.orange)
+                    }
                 }
             }
             if vm.phase == .transferring || vm.phase == .pausedByUser {
@@ -330,8 +340,8 @@ private struct LibraryProgressBanner: View {
         case .waitingForNAS: return "waiting for NAS"
         case .pausedByUser: return "paused"
         case .pausedCardGone: return "card removed"
-        case .wiping: return "wiping card"
-        case .ejecting: return "ejecting"
+        case .wiping: return "Erasing card"
+        case .ejecting: return "Ejecting card"
         case .done: return "done"
         default:
             return vm.transferStatus
@@ -347,14 +357,7 @@ private struct MiniBar: View {
         HStack(spacing: 5) {
             Text(label).font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.tertiary).frame(width: 32, alignment: .leading)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary).frame(height: 4)
-                    Capsule().fill(tint)
-                        .frame(width: geo.size.width * min(1, max(0, fraction)), height: 4)
-                }
-            }
-            .frame(height: 4)
+            ProgressTrack(fraction: fraction, tint: tint)
         }
     }
 }
@@ -1109,7 +1112,7 @@ private struct FolderLoadingView: View {
 
     private var detail: String {
         switch load.stage {
-        case .findingFolder: "Finding the recent folder."
+        case .findingFolder: source == .card ? "Finding the camera folder." : "Finding the recent folder."
         case .listing: "Reading the folder’s contents."
         case .checking(let progress): "Checked \(progress.checked) of \(progress.total) items."
         }

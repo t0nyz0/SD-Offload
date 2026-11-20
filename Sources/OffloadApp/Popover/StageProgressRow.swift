@@ -28,3 +28,19 @@ struct StageProgressRow: View {
         }
     }
 }
+
+struct ProgressTrack: View {
+    let fraction: Double
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule().fill(tint)
+                    .frame(width: geo.size.width * min(1, max(0, fraction)))
+            }
+        }
+        .frame(height: 4)
+    }
+}

@@ -43,13 +43,17 @@ public actor SessionRunner {
     private nonisolated let verification = VerificationTracker()
     private nonisolated let nasActivity = NASActivityTracker()
     private var allSettledContinuation: CheckedContinuation<Void, Never>?
+    private var finishingTransfer = false
+    private var applyingReinsert = false
     private var wipeConsentContinuation: CheckedContinuation<Bool, Never>?
     private var wipeCountdownContinuation: CheckedContinuation<Bool, Never>?
     private var wipeCountdownTask: Task<Void, Never>?
     private var wipeCountdownRemaining = 0
     private var wipeCountdownGeneration = 0
+    private var lastErasureUpdate: (count: Int, time: ContinuousClock.Instant)?
     private var power: PowerAssertion?
     private var cardPresent = true
+    private var cardRemovalGeneration = 0
     private var cardDevice: String
     private var userPaused = false
     private var cancelled = false
@@ -141,8 +145,12 @@ public actor SessionRunner {
             case .nasVerified, .skippedDuplicate, .wiped, .failed:
                 settledFiles += 1
             case .copying, .uploading:
-                // Journal crash-remap removes these; belt and braces.
-                await copyQueue.send(file)
+                // Normally the journal remaps these before the runner starts.
+                var recovered = file
+                recovered.state = FileState.crashRemap(file.state)
+                await journal.transition(file: file.id, to: recovered.state, in: sessionID)
+                if recovered.state == .pending { await copyQueue.send(recovered) }
+                else { await uploadQueue.send(recovered) }
             }
         }
 
@@ -154,12 +162,13 @@ public actor SessionRunner {
         startSampler()
         await reconcileSecondaries(record: record)
         if settledFiles < totalFiles {
-            spawnHop1Workers()
+            if cardPresent { spawnHop1Workers() }
             spawnPipelineWorkers()
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 allSettledContinuation = cont
             }
         }
+        finishingTransfer = true
         await stopWorkers()
 
         await markPhaseEnd("transfer")
@@ -191,16 +200,14 @@ public actor SessionRunner {
 
     private func settle() {
         settledFiles += 1
-        if settledFiles >= totalFiles {
-            let cont = allSettledContinuation
-            allSettledContinuation = nil
-            Task {
-                await copyQueue.finish()
-                await verifyQueue.finish()
-                await uploadQueue.finish()
-            }
-            cont?.resume()
-        }
+        finishTransferIfSettled()
+    }
+
+    private func finishTransferIfSettled() {
+        guard !applyingReinsert, settledFiles >= totalFiles, let continuation = allSettledContinuation else { return }
+        finishingTransfer = true
+        allSettledContinuation = nil
+        continuation.resume()
     }
 
     private func setCurrentFile(_ name: String?) { currentFileName = name }
@@ -208,9 +215,10 @@ public actor SessionRunner {
     // MARK: - Hop 1: card → staging
 
     private nonisolated func hop1Worker() async {
-        while let file = await copyQueue.receive() {
+        while let queued = await copyQueue.receive() {
             await pauseGate.whenOpen()
             if Task.isCancelled { return }
+            guard let file = await journal.beginCopy(file: queued.id, in: sessionID) else { continue }
             do {
                 try await stageOne(file)
             } catch is CancellationError {
@@ -233,7 +241,6 @@ public actor SessionRunner {
                                           detail: "Free space on the staging drive. The transfer will recheck automatically; recovery copies and the card are retained.")))
         }
         try Task.checkCancellation()
-        await journal.transition(file: file.id, to: .copying, in: sessionID)
         await setCurrentFile(file.fileName)
 
         let src = URL(fileURLWithPath: card.mountPath).appendingPathComponent(file.relPath)
@@ -1030,9 +1037,13 @@ public actor SessionRunner {
         }
 
         await journal.setSessionState(.wiping, in: sessionID)
+        publishErasureProgress(0, total: verdict.deletions.count, force: true)
         publishWipePhase(.wiping)
         let result = await Wiper.execute(deletions: verdict.deletions, journal: journal,
-                                         sessionID: sessionID, fileIDs: [:])
+                                         sessionID: sessionID, fileIDs: [:], onProgress: { [self] cleared, total in
+            await publishErasureProgress(cleared, total: total)
+        })
+        publishErasureProgress(result.filesDeleted, total: verdict.deletions.count, force: true)
 
         if let stopped = result.stoppedEarly {
             await journal.setWipeReport(WipeReport(ran: true, filesDeleted: result.filesDeleted,
@@ -1120,6 +1131,16 @@ public actor SessionRunner {
         emit(.phase(phase))
     }
 
+    private func publishErasureProgress(_ cleared: Int, total: Int, force: Bool = false) {
+        let now = ContinuousClock.now
+        if let last = lastErasureUpdate {
+            guard cleared != last.count else { return }
+            guard force || cleared == 1 || cleared == total || last.time.duration(to: now) >= .milliseconds(100) else { return }
+        }
+        lastErasureUpdate = (cleared, now)
+        emit(.erasureProgress(ErasureProgress(filesCleared: cleared, filesTotal: total)))
+    }
+
     public func pause() async {
         guard !userPaused else { return }
         userPaused = true
@@ -1153,6 +1174,7 @@ public actor SessionRunner {
 
     public func cardGone() async {
         cardPresent = false
+        cardRemovalGeneration += 1
         stateBeforeCardLoss = await journal.session(id: sessionID)?.state
         let stopped = hop1Tasks
         for task in stopped { task.cancel() }
@@ -1163,38 +1185,67 @@ public actor SessionRunner {
         emit(.phase(.pausedCardGone))
     }
 
-    /// Card re-inserted: the controller has already re-scanned and merged the
-    /// manifest into the journal. Rebuild the copy queue from journal state.
-    public func cardReturned(bsdName: String? = nil) async {
-        if let bsdName { cardDevice = bsdName }
+    var needsReinsertScan: Bool { !wipeOnly && allSettledContinuation != nil }
+
+    /// The caller has authenticated the card and scanned it. A failed compare
+    /// makes the caller merge against the newer checkpoint. While committing a
+    /// plan, defer the all-settled decision until the file count is updated.
+    func acceptReinsert(_ files: [FileRecord], replacing original: [FileRecord], bsdName: String) async -> Bool {
+        guard !cancelled else { return true }
+        guard needsReinsertScan else {
+            await cardReturned(bsdName: bsdName)
+            return true
+        }
+        guard !applyingReinsert else { return false }
+        let generation = cardRemovalGeneration
+        applyingReinsert = true
+        defer {
+            applyingReinsert = false
+            finishTransferIfSettled()
+        }
+        guard await journal.replaceFiles(files, ifUnchangedFrom: original, in: sessionID) else { return false }
+
+        // Workers still report their own completions. Count only the changes
+        // made by this merge, which avoids counting a checkpoint twice.
+        settledFiles += files.filter { $0.state.isTerminal }.count - original.filter { $0.state.isTerminal }.count
+        totalFiles = files.count
+        hop1TotalBytes = files.reduce(0) { $0 + $1.size }
+        guard generation == cardRemovalGeneration, !cancelled else { return true }
+        copyQueue = AsyncQueue(items: files.filter { $0.state == .pending })
+        await budget.resumeReservations()
+        guard generation == cardRemovalGeneration, !cancelled else { return true }
+        cardDevice = bsdName
         cardPresent = true
-        if wipeOnly || isWipeRetry || wipeCountdownContinuation != nil {
-            // Reinsertion cannot expand a wipe retry into a new transfer. Its
-            // original consent/countdown and fresh destination checks continue.
-            if let stateBeforeCardLoss {
-                await journal.setSessionState(stateBeforeCardLoss, in: sessionID)
+        if allSettledContinuation != nil { spawnHop1Workers() }
+        let state: SessionState = userPaused ? .pausedByUser : waitingForNAS ? .waitingForNAS : .transferring
+        let phase: EnginePhase = userPaused ? .pausedByUser : waitingForNAS ? .waitingForNAS : .transferring
+        await journal.setSessionState(state, in: sessionID, ifCurrent: .pausedCardGone)
+        if generation == cardRemovalGeneration && !cancelled { emit(.phase(phase)) }
+        return true
+    }
+
+    public func cardReturned(bsdName: String? = nil) async {
+        guard !cancelled else { return }
+        let returnedDevice = bsdName ?? cardDevice
+        if needsReinsertScan {
+            while let record = await journal.session(id: sessionID) {
+                if await acceptReinsert(record.files, replacing: record.files, bsdName: returnedDevice) { return }
             }
-            stateBeforeCardLoss = nil
-            emit(.phase(wipePhase))
             return
         }
-        await budget.resumeReservations()
-        guard let record = await journal.session(id: sessionID) else { return }
-        totalFiles = record.files.count
-        settledFiles = record.files.filter { $0.state.isTerminal }.count
-        hop1TotalBytes = record.files.reduce(0) { $0 + $1.size }
-
-        copyQueue = AsyncQueue<FileRecord>()
-        for file in record.files where file.state == .pending {
-            await copyQueue.send(file)
+        // Before workers start or once they have finished, reattach without
+        // rebuilding queues or changing the files under final verification.
+        let generation = cardRemovalGeneration
+        cardDevice = returnedDevice
+        cardPresent = true
+        let previous = stateBeforeCardLoss
+        stateBeforeCardLoss = nil
+        if !finishingTransfer && !wipeOnly && !isWipeRetry { await budget.resumeReservations() }
+        if let previous {
+            await journal.setSessionState(previous, in: sessionID, ifCurrent: .pausedCardGone)
         }
-        spawnHop1Workers()
-        await journal.setSessionState(.transferring, in: sessionID)
-        emit(.phase(.transferring))
-        if settledFiles >= totalFiles {
-            allSettledContinuation?.resume()
-            allSettledContinuation = nil
-        }
+        guard generation == cardRemovalGeneration, !cancelled else { return }
+        emit(.phase(finishingTransfer || wipeOnly || isWipeRetry ? wipePhase : .transferring))
     }
 
     public func confirmWipe() {

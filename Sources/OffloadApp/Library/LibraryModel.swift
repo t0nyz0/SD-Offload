@@ -154,6 +154,7 @@ final class LibraryModel {
     }
 
     private let browser = LibraryBrowser()
+    @ObservationIgnored private let cardHasDCIM: @Sendable (URL) -> Bool
     @ObservationIgnored private let browseDirectory: @Sendable (URL, @Sendable (LibraryBrowser.BrowseProgress) -> Void) -> Result<[LibraryEntry], Error>
     let photoIndex = PhotoIndex()
     let faceIndex = FaceIndex()
@@ -163,6 +164,7 @@ final class LibraryModel {
     @ObservationIgnored private var faceEpoch = 0
     @ObservationIgnored private var browseTask: Task<Void, Never>?
     @ObservationIgnored private var browseEpoch = 0
+    @ObservationIgnored private var cardHomePending = false
     @ObservationIgnored private var volumeTask: Task<Void, Never>?
     @ObservationIgnored private var volumeEpoch = 0
     @ObservationIgnored private var countTask: Task<Void, Never>?
@@ -182,10 +184,15 @@ final class LibraryModel {
          dateFolderLayouts: [DateFolderLayout] = DateFolderLayout.presets,
          activeDateFolderLayout: DateFolderLayout = .nestedNumeric,
          aiConfigProvider: @escaping () -> AppConfig = { AppConfig.load() },
+         cardHasDCIM: @escaping @Sendable (URL) -> Bool = { dcim in
+             var isDirectory: ObjCBool = false
+             return FileManager.default.fileExists(atPath: dcim.path, isDirectory: &isDirectory) && isDirectory.boolValue
+         },
          browseDirectory: @escaping @Sendable (URL, @Sendable (LibraryBrowser.BrowseProgress) -> Void) -> Result<[LibraryEntry], Error> = { url, progress in
              Result { try LibraryBrowser().browseChecked(url, progress: progress) }
          }) {
         self.aiConfigProvider = aiConfigProvider
+        self.cardHasDCIM = cardHasDCIM
         self.browseDirectory = browseDirectory
         self.nasRootPath = nasRootPath
         self.cardRootPath = cardRootPath
@@ -246,7 +253,7 @@ final class LibraryModel {
         if source == .card && cardRootPath == nil {
             select(.nas)               // card ejected while viewing it
         } else if cardChanged && source == .card, let root = cardRootPath {
-            openRoot(URL(fileURLWithPath: root))
+            openCardRoot(root)
         }
     }
 
@@ -284,6 +291,7 @@ final class LibraryModel {
         browseTask?.cancel()
         browseEpoch += 1
         folderLoad = nil
+        cardHomePending = false
         countTask?.cancel()
         volumeTask?.cancel()
         volumeEpoch += 1
@@ -305,15 +313,37 @@ final class LibraryModel {
             }
         case .card:
             guard let card = cardRootPath else { return }
-            // Prefer DCIM if present, else the mount root.
-            let dcim = URL(fileURLWithPath: card).appendingPathComponent("DCIM", isDirectory: true)
-            let root = FileManager.default.fileExists(atPath: dcim.path) ? dcim
-                : URL(fileURLWithPath: card, isDirectory: true)
-            openRoot(root)
+            openCardRoot(card)
         case .favorites:
             loadFavorites()
         case .faces:
             loadFaces()
+        }
+    }
+
+    private func openCardRoot(_ path: String) {
+        browseTask?.cancel()
+        browseEpoch += 1
+        let epoch = browseEpoch
+        countTask?.cancel()
+        volumeTask?.cancel()
+        volumeEpoch += 1
+        clearSelection()
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        let dcim = root.appendingPathComponent("DCIM", isDirectory: true)
+        pathStack = [root]
+        entries = []
+        searchText = ""
+        searchResults = nil
+        loading = true
+        loadError = nil
+        folderLoad = FolderLoad(stage: .findingFolder)
+        cardHomePending = true
+        let cardHasDCIM = self.cardHasDCIM
+        browseTask = Task { [weak self] in
+            let home = await BackgroundWork.run(priority: .userInitiated) { cardHasDCIM(dcim) ? dcim : root }
+            guard let self, !Task.isCancelled, self.browseEpoch == epoch else { return }
+            self.openRoot(home)
         }
     }
 
@@ -575,6 +605,7 @@ final class LibraryModel {
     /// the library total, volume stats, and search prefixes all still key off the
     /// real root, only the *displayed* folder is the deeper one.
     private func openRoot(_ root: URL, drillTo target: URL? = nil, deferBrowse: Bool = false) {
+        cardHomePending = false
         indexScopeTasks.removeAll()
         volumeTitle = nil
         pathStack = target.map { Self.pathStack(from: root, to: $0) } ?? [root]
@@ -1271,6 +1302,7 @@ final class LibraryModel {
     /// the whole library (the item/GB totals). Use after external changes.
     func refresh() {
         guard source != .nas || mounted else { return }
+        if source == .card, cardHomePending, let path = cardRootPath { openCardRoot(path); return }
         indexScopeTasks.removeAll()
         refreshSuggestions()
         Task { await refreshFaceState() }
@@ -1285,6 +1317,7 @@ final class LibraryModel {
     func reloadCurrentFolder() {
         guard currentDir != nil else { return }
         guard source != .nas || mounted else { return }
+        if source == .card, cardHomePending, let path = cardRootPath { openCardRoot(path); return }
         loadEntries()
     }
 

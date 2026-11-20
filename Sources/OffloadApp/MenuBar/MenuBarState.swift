@@ -7,6 +7,8 @@ enum MenuBarState: Equatable {
     case scanning
     case transferring(Int)
     case verifying(Int)
+    case erasing(Int)
+    case ejecting
     case uploading(Int)     // card already free, NAS leg still draining
     case paused(Int)
     case doneFlash
@@ -18,6 +20,8 @@ enum MenuBarState: Equatable {
         case .scanning: "sdcard.fill"
         case .transferring: "sdcard.fill"
         case .verifying: "checkmark.shield"
+        case .erasing: "eraser"
+        case .ejecting: "eject"
         case .uploading: "externaldrive"
         case .paused: "pause.circle"
         case .doneFlash: "checkmark.circle.fill"
@@ -27,7 +31,7 @@ enum MenuBarState: Equatable {
 
     var percent: Int? {
         switch self {
-        case .transferring(let p), .verifying(let p), .uploading(let p), .paused(let p):
+        case .transferring(let p), .verifying(let p), .erasing(let p), .uploading(let p), .paused(let p):
             min(100, max(0, p))
         default:
             nil
@@ -49,6 +53,8 @@ enum MenuBarState: Equatable {
         case .scanning: "SD Offload: card detected, scanning"
         case .transferring(let p): "SD Offload: transferring, \(p) percent"
         case .verifying(let p): "SD Offload: verifying, \(p) percent"
+        case .erasing(let p): "SD Offload: erasing card, \(p) percent"
+        case .ejecting: "SD Offload: ejecting card"
         case .uploading(let p): "SD Offload: uploading to NAS, \(p) percent, card is free"
         case .paused(let p): "SD Offload: paused at \(p) percent"
         case .doneFlash: "SD Offload: card offloaded"

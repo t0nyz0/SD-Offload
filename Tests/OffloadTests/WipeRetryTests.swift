@@ -178,6 +178,107 @@ final class WipeRetryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
     }
 
+    func testReinsertPreservesConcurrentNASCheckpointAtWipeConsent() async throws {
+        try await checkReinsertWhileNASFinishes(hasPendingFile: false)
+    }
+
+    func testReinsertPreservesConcurrentNASCheckpointAndResumesPendingCopy() async throws {
+        try await checkReinsertWhileNASFinishes(hasPendingFile: true)
+    }
+
+    private func checkReinsertWhileNASFinishes(hasPendingFile: Bool) async throws {
+        var f = try await fixture()
+        f.config.wipePolicy = .askEachTime
+        let second = f.card.appendingPathComponent("DCIM/z-second.JPG")
+        if hasPendingFile {
+            // The first staged file fills the budget while its upload is parked.
+            // Card loss leaves this second file pending until reinsertion.
+            f.config.stagingBudgetCapBytes = f.record.files[0].size
+            try Data("second photo bytes".utf8).write(to: second)
+        }
+        let fixed = f.config
+        let offline = root.appendingPathComponent("offline-nas", isDirectory: true)
+        try FileManager.default.moveItem(at: f.nas, to: offline)
+        let events = Events()
+        let card = f.volume.info
+        let returned = CardInfo(volumeUUID: card.volumeUUID, bsdName: "fixture-changed-device",
+            mountPath: card.mountPath, volumeName: card.volumeName, capacityBytes: card.capacityBytes,
+            freeBytes: card.freeBytes, hasMediaRoot: true)
+        let finalPresenceCheck = expectation(description: "rescan read the old checkpoint")
+        let releaseCheck = DispatchSemaphore(value: 0)
+        defer { releaseCheck.signal() }
+        let calls = ReinsertPresenceCalls()
+        let c = Coordinator(configProvider: { fixed }, configMutator: { _ in }, journal: f.journal,
+            cardPresenceCheck: { info in
+                if info.bsdName == returned.bsdName, calls.increment() == 3 {
+                    finalPresenceCheck.fulfill()
+                    _ = releaseCheck.wait(timeout: .now() + 14)
+                }
+                return info.mountPath == card.mountPath
+            }, emit: { events.record($0) })
+        await c.handle(.volumeMounted(f.volume))
+        await c.consent(cardUUID: card.volumeUUID)
+        let active = await c.runner
+        let runner = try XCTUnwrap(active)
+        let waitForNAS = ContinuousClock.now + .seconds(4)
+        while !events.phases.contains(.waitingForNAS), ContinuousClock.now < waitForNAS {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertTrue(events.phases.contains(.waitingForNAS))
+        await c.handle(.volumeUnmounted(volumeUUID: card.volumeUUID, bsdName: card.bsdName))
+        let before = await f.journal.session(id: runner.sessionID)
+        XCTAssertEqual(before?.files.first?.state, .stagedVerified)
+        if hasPendingFile { XCTAssertEqual(before?.files.last?.state, .pending) }
+
+        await c.handle(.volumeMounted(CandidateVolume(info: returned, isRemovable: true,
+            isEjectable: true, isInternal: false, isNetwork: false)))
+        let reinsert = Task { await c.consent(cardUUID: card.volumeUUID) }
+        await fulfillment(of: [finalPresenceCheck], timeout: 4)
+        try FileManager.default.moveItem(at: offline, to: f.nas)
+        let waitForUpload = ContinuousClock.now + .seconds(9)
+        var uploaded = await f.journal.session(id: runner.sessionID)
+        while ContinuousClock.now < waitForUpload {
+            if uploaded?.files.first?.state == .nasVerified &&
+                (hasPendingFile || events.phases.contains(.awaitingWipeConsent)) { break }
+            try await Task.sleep(for: .milliseconds(15))
+            uploaded = await f.journal.session(id: runner.sessionID)
+        }
+        XCTAssertEqual(uploaded?.files.first?.state, .nasVerified)
+        XCTAssertEqual(events.phases.contains(.awaitingWipeConsent), !hasPendingFile)
+        releaseCheck.signal()
+        await reinsert.value
+
+        let after = await f.journal.session(id: runner.sessionID)
+        XCTAssertEqual(after?.files.first?.state, .nasVerified, "Reinsertion must preserve the NAS verification that finished during the scan")
+        let waitForConsent = ContinuousClock.now + .seconds(4)
+        while !events.phases.contains(.awaitingWipeConsent), ContinuousClock.now < waitForConsent {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertTrue(events.phases.contains(.awaitingWipeConsent))
+        await runner.confirmWipe()
+        await fulfillment(of: [events.finished], timeout: 4)
+        XCTAssertEqual(events.completion?.state, .done)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.source.path))
+        if hasPendingFile { XCTAssertFalse(FileManager.default.fileExists(atPath: second.path)) }
+        let progress = events.all.compactMap { event -> ErasureProgress? in
+            if case .erasureProgress(let progress) = event { return progress }
+            return nil
+        }
+        let total = hasPendingFile ? 2 : 1
+        XCTAssertEqual(progress.map(\.filesCleared), Array(0...total))
+        XCTAssertEqual(progress.map(\.filesTotal), Array(repeating: total, count: total + 1))
+    }
+
+    private final class ReinsertPresenceCalls: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            count += 1
+            return count
+        }
+    }
+
     func testMissingNASCopyBlocksRetryWithoutRecopying() async throws {
         let f = try await fixture(), events = Events()
         try FileManager.default.removeItem(at: f.backup)

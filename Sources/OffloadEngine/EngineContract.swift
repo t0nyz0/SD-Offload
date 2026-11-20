@@ -49,6 +49,18 @@ public struct AttentionItem: Sendable, Equatable {
     }
 }
 
+public struct ErasureProgress: Sendable, Equatable {
+    public let filesCleared: Int
+    public let filesTotal: Int
+
+    public var fraction: Double { filesTotal > 0 ? Double(min(filesTotal, max(0, filesCleared))) / Double(filesTotal) : 1 }
+
+    public init(filesCleared: Int, filesTotal: Int) {
+        self.filesCleared = filesCleared
+        self.filesTotal = filesTotal
+    }
+}
+
 public struct NASGlance: Sendable, Equatable {
     public var mounted: Bool
     public var healthy: Bool
@@ -82,6 +94,7 @@ public enum EngineEvent: Sendable {
     case progress(ProgressSnapshot)
     case speedSample(SpeedSample)              // 1 Hz, for the sparkline
     case wipeCountdown(secondsRemaining: Int)
+    case erasureProgress(ErasureProgress)
     case attention(AttentionItem)
     case safeToRemove(cardName: String)
     case completed(SessionRecord)
