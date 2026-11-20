@@ -68,6 +68,20 @@ final class WipePromptTests: XCTestCase {
     }
 
     @MainActor
+    func testEmptyCardScanDismissesSessionAndKeepsCardAvailable() async throws {
+        let engine = Engine(), app = AppState(engine: engine)
+        defer { engine.continuation.finish() }
+        let id = UUID()
+        engine.continuation.yield(.sessionStarted(sessionID: id, card: card, resumed: false))
+        try await waitUntil { app.session?.sessionID == id }
+
+        engine.continuation.yield(.phase(.idle))
+        try await waitUntil { app.menuBar == .idle }
+        XCTAssertNil(app.session, "An empty scan must remove the Library transfer banner")
+        XCTAssertEqual(app.cardMountPath, card.mountPath)
+    }
+
+    @MainActor
     func testClosingBeforeConfirmationEventResumesUnseenPrompt() async throws {
         // Each app owns only an injected mock, never the real card watcher.
         let engine = Engine(), id = UUID(), state = AppState(engine: engine)

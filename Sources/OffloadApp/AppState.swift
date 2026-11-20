@@ -152,6 +152,13 @@ final class AppState {
             session?.plannedBytes = bytes
 
         case .phase(let phase):
+            if phase == .idle {
+                // An empty or interrupted scan has no session to display.
+                session = nil
+                tickTask?.cancel()
+                recomputeMenuBar()
+                return
+            }
             session?.phase = phase
             // Closing can beat the engine's acknowledgement of Wipe Now. Never
             // leave an unseen confirmation holding the countdown indefinitely.
