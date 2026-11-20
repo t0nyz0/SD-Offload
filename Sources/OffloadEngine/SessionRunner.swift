@@ -50,6 +50,7 @@ public actor SessionRunner {
     private var wipeCountdownGeneration = 0
     private var power: PowerAssertion?
     private var cardPresent = true
+    private var cardDevice: String
     private var userPaused = false
     private var cancelled = false
     private var wipeCancelled = false
@@ -71,6 +72,7 @@ public actor SessionRunner {
                 emit: @escaping @Sendable (EngineEvent) -> Void) {
         self.sessionID = sessionID
         self.card = card
+        self.cardDevice = card.bsdName
         self.wipeOnly = wipeOnly
         self.config = config
         self.journal = journal
@@ -857,13 +859,13 @@ public actor SessionRunner {
         // bursts, so its EWMA rate decays toward zero between bursts, and
         // B/rate then explodes into a nonsense multi-thousand-hour ETA.
         let rSD = ETAMath.stageRemaining(bytesRemaining: sdRemaining, filesRemaining: sdFiles,
-                                         rate: meter.rate(.sdRead), overheadSeconds: meter.overheadSeconds(.sdRead),
+                                         rate: meter.etaRate(.sdRead), overheadSeconds: meter.overheadSeconds(.sdRead),
                                          workers: max(1, config.hop1Workers))
         let rSV = ETAMath.stageRemaining(bytesRemaining: svRemaining, filesRemaining: svFiles,
-                                         rate: meter.rate(.stagingVerify), overheadSeconds: meter.overheadSeconds(.stagingVerify),
+                                         rate: meter.etaRate(.stagingVerify), overheadSeconds: meter.overheadSeconds(.stagingVerify),
                                          workers: 2)
         let rNW = ETAMath.stageRemaining(bytesRemaining: nwRemaining, filesRemaining: nwFiles,
-                                         rate: meter.rate(.nasWrite), overheadSeconds: meter.overheadSeconds(.nasWrite),
+                                         rate: meter.etaRate(.nasWrite), overheadSeconds: meter.overheadSeconds(.nasWrite),
                                          workers: max(1, config.hop2Workers))
 
         // Last-file drain: after the final byte lands on the NAS it still has to
@@ -872,7 +874,7 @@ public actor SessionRunner {
         // bursty nasVerify EWMA, which is ~0 between bursts and would blow the
         // tail up the same way a verify max() term would.
         var tail: TimeInterval = 0
-        if nwFiles > 0, let rw = meter.rate(.nasWrite), rw > 0 {
+        if nwFiles > 0, let rw = meter.etaRate(.nasWrite), rw > 0 {
             let meanSize = Double(nwRemaining) / Double(max(1, nwFiles))
             tail = meter.overheadSeconds(.nasWrite) + meter.overheadSeconds(.nasVerify) + meanSize * (2 / rw)
         }
@@ -1055,7 +1057,7 @@ public actor SessionRunner {
             await markPhase("eject")
             await journal.setSessionState(.ejecting, in: sessionID)
             publishWipePhase(.ejecting)
-            try? await cardWatcher.unmountAndEject(bsdName: card.bsdName)
+            try? await cardWatcher.unmountAndEject(bsdName: cardDevice)
             await markPhaseEnd("eject")
         }
         emit(.safeToRemove(cardName: card.volumeName))
@@ -1163,7 +1165,8 @@ public actor SessionRunner {
 
     /// Card re-inserted: the controller has already re-scanned and merged the
     /// manifest into the journal. Rebuild the copy queue from journal state.
-    public func cardReturned() async {
+    public func cardReturned(bsdName: String? = nil) async {
+        if let bsdName { cardDevice = bsdName }
         cardPresent = true
         if wipeOnly || isWipeRetry || wipeCountdownContinuation != nil {
             // Reinsertion cannot expand a wipe retry into a new transfer. Its
@@ -1261,6 +1264,7 @@ public actor SessionRunner {
     }
 
     public func ejectCard() async {
-        try? await cardWatcher.unmountAndEject(bsdName: card.bsdName)
+        guard cardPresent else { return }
+        try? await cardWatcher.unmountAndEject(bsdName: cardDevice)
     }
 }

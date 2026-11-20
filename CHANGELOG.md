@@ -5,6 +5,14 @@ the app version lives in `VERSION`, the build number is the git commit count.
 
 ## [Unreleased]
 
+## [1.7.29] — 2026-11-20
+
+### Fixed
+- Keep the card icon, percentage, and estimate rows aligned as the transfer status changes. Wait for sustained transfer activity before estimating time remaining, and drop stale estimates after a stall.
+- Let the same card start a new transfer after auto-eject. Check the original card’s identity before resuming an interrupted transfer and before accepting the new scan into its saved file list.
+- Avoid checking the NAS filesystem when drawing Library thumbnails. Show folder loading progress and an elapsed wait when the NAS is slow, with options to stop waiting and retry the folder.
+- Keep the Library and viewer responsive while Finder or another app opens a file on a slow volume. Run file handoffs off the UI thread and drop repeat requests while one is pending.
+
 ## [1.7.28] — 2026-11-09
 
 ### Added

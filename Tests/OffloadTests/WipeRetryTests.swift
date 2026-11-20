@@ -15,10 +15,13 @@ final class WipeRetryTests: XCTestCase {
     private final class Events: @unchecked Sendable {
         let lock = NSLock()
         let finished = XCTestExpectation(description: "wipe attempt finished")
+        let countdown: XCTestExpectation?
         private var items: [EngineEvent] = []
+        init(countdown: XCTestExpectation? = nil) { self.countdown = countdown }
         func record(_ event: EngineEvent) {
             lock.lock(); items.append(event); lock.unlock()
             if case .completed = event { finished.fulfill() }
+            if case .phase(.wipeCountdown) = event { countdown?.fulfill() }
         }
         var all: [EngineEvent] { lock.lock(); defer { lock.unlock() }; return items }
         var completion: SessionRecord? {
@@ -101,6 +104,78 @@ final class WipeRetryTests: XCTestCase {
         XCTAssertEqual(WipeGate.liveStat(f.backup.path), originalBackup)
         XCTAssertTrue(events.phases.contains(.verifyingDestination))
         try assertNoTransfer(f, events: events)
+    }
+
+    func testUnmountBeforeRunnerFinishesDoesNotSuppressNextInsertion() async throws {
+        var f = try await fixture()
+        f.config.wipeCountdownSeconds = 60
+        let countdown = expectation(description: "runner reached the wipe countdown")
+        let events = Events(countdown: countdown)
+        let c = await coordinator(f, events: events)
+        let card = f.volume.info
+        await c.retryWipe(sessionID: f.record.id)
+        await fulfillment(of: [countdown], timeout: 5)
+        let active = await c.runner
+        let runner = try XCTUnwrap(active)
+
+        // Auto-eject can deliver the unmount before runnerFinished, with no
+        // second unmount when the already-ejected card is physically removed.
+        await c.handle(.volumeUnmounted(volumeUUID: card.volumeUUID, bsdName: card.bsdName))
+        await runner.cancelWipe()
+        await fulfillment(of: [events.finished], timeout: 5)
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await c.runner != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let remainingRunner = await c.runner
+        XCTAssertNil(remainingRunner)
+
+        await c.handle(.volumeMounted(f.volume))
+        await c.handle(.volumeMounted(f.volume))
+        let consentPrompts = events.all.filter { if case .cardAwaitingConsent = $0 { return true }; return false }
+        XCTAssertEqual(consentPrompts.count, 2, "Reinsertion must be classified again after an unmount")
+    }
+
+    func testDifferentCardCannotChangeAnActiveTransferManifestOnReinsert() async throws {
+        var f = try await fixture()
+        f.config.wipeCountdownSeconds = 60
+        let countdown = expectation(description: "ordinary transfer reached the countdown")
+        countdown.assertForOverFulfill = false
+        let events = Events(countdown: countdown)
+        let c = await coordinator(f, events: events)
+        let card = f.volume.info
+        await c.consent(cardUUID: card.volumeUUID)
+        await fulfillment(of: [countdown], timeout: 5)
+        let active = await c.runner
+        let runner = try XCTUnwrap(active)
+        let before = await f.journal.session(id: runner.sessionID)
+        let original = try XCTUnwrap(before)
+        let token = try XCTUnwrap(original.cardSessionToken)
+        let marker = f.card.appendingPathComponent(Paths.cardSessionMarkerName)
+        let replacementPhoto = f.card.appendingPathComponent("DCIM/replacement.JPG")
+
+        await c.handle(.volumeUnmounted(volumeUUID: card.volumeUUID, bsdName: card.bsdName))
+        try Data("different-card-token".utf8).write(to: marker)
+        try Data("replacement photo".utf8).write(to: replacementPhoto)
+        await c.handle(.volumeMounted(f.volume))
+        await c.consent(cardUUID: card.volumeUUID)
+        let afterMismatch = await f.journal.session(id: runner.sessionID)
+        XCTAssertEqual(afterMismatch?.files.map(\.id), original.files.map(\.id))
+        XCTAssertEqual(events.phases.last, .pausedCardGone)
+
+        await c.handle(.volumeUnmounted(volumeUUID: card.volumeUUID, bsdName: card.bsdName))
+        try FileManager.default.removeItem(at: replacementPhoto)
+        try Data(token.utf8).write(to: marker)
+        let returned = CardInfo(volumeUUID: card.volumeUUID, bsdName: "fixture-reassigned-device",
+            mountPath: card.mountPath, volumeName: card.volumeName, capacityBytes: card.capacityBytes,
+            freeBytes: card.freeBytes, hasMediaRoot: card.hasMediaRoot)
+        await c.handle(.volumeMounted(CandidateVolume(info: returned, isRemovable: true,
+            isEjectable: true, isInternal: false, isNetwork: false)))
+        await c.consent(cardUUID: card.volumeUUID)
+        XCTAssertEqual(events.phases.last, .wipeCountdown)
+        await runner.cancelWipe()
+        await fulfillment(of: [events.finished], timeout: 5)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
     }
 
     func testMissingNASCopyBlocksRetryWithoutRecopying() async throws {

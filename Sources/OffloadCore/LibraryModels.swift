@@ -60,7 +60,9 @@ public struct LibraryEntry: Identifiable, Sendable, Hashable {
         self.id = id; self.name = name; self.kind = kind; self.size = size; self.modified = modified
     }
 
-    public var url: URL { URL(fileURLWithPath: id) }
+    // The browser already classified this entry. Supplying its kind keeps URL
+    // construction from querying the NAS while SwiftUI renders Library tiles.
+    public var url: URL { URL(fileURLWithPath: id, isDirectory: isFolder) }
     public var isFolder: Bool { if case .folder = kind { return true }; return false }
 }
 

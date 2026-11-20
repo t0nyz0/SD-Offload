@@ -68,12 +68,9 @@ actor Coordinator {
     // can stack several readers and walk away.
     private var queue: [CandidateVolume] = []
     private var lastVolume: CandidateVolume?
-    // volumeUUIDs already acted on during their CURRENT insertion (session run to a
-    // terminal state, set awaiting-consent, or found empty). A repeat volumeMounted
-    // for one of these — with no incomplete session and no live runner — is a
-    // duplicate DiskArbitration signal, not a real re-insert, so we ignore it
-    // instead of re-scanning a card just sitting in the reader. Cleared on a REAL
-    // volumeUnmounted so genuine re-insertion re-checks.
+    // Cards already acted on during the current insertion (started a transfer,
+    // asked for consent, or found no files). Ignore repeat mount signals after
+    // the runner ends. Unmount clears the mark so reinsertion is checked again.
     private var handledThisInsertion: Set<String> = []
     private var awaitingReinsert: Set<String> = []
     private var eventsTask: Task<Void, Never>?
@@ -130,10 +127,11 @@ actor Coordinator {
     }
 
     // Per-card session marker (hidden file on the card). See Paths.cardSessionMarkerName.
-    private func markerURL(_ mountPath: String) -> URL {
-        URL(fileURLWithPath: mountPath).appendingPathComponent(Paths.cardSessionMarkerName)
+    private nonisolated func markerURL(_ mountPath: String) -> URL {
+        URL(fileURLWithPath: mountPath, isDirectory: true)
+            .appendingPathComponent(Paths.cardSessionMarkerName, isDirectory: false)
     }
-    private func readCardToken(_ mountPath: String) -> String? {
+    private nonisolated func readCardToken(_ mountPath: String) -> String? {
         (try? String(contentsOf: markerURL(mountPath), encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -149,7 +147,7 @@ actor Coordinator {
     /// session is unaffected — the runner-match and incomplete-session guards in
     /// handle() still win, so an in-progress offload can't be disturbed.
     func rescan() async {
-        handledThisInsertion.removeAll()
+        handledThisInsertion = handledThisInsertion.filter { $0 == runner?.card.volumeUUID }
         watcher.rescan()
     }
 
@@ -180,6 +178,7 @@ actor Coordinator {
             // Suppress duplicate mount signals. A real unmount clears this marker
             // so the next insertion is classified under the current setting.
             if runner == nil, !startingSession, handledThisInsertion.contains(volume.info.volumeUUID) {
+                emit(.cardDetectionRemoved(bsdName: volume.info.bsdName))
                 return
             }
             switch CardClassifier.classify(volume, config: config) {
@@ -426,6 +425,9 @@ actor Coordinator {
         maintenanceProtection.setBusy(true)
         cleanupTask?.cancel()
         awaitingReinsert.remove(card.volumeUUID)
+        // Mark the current insertion at launch. Auto-eject can clear this mark
+        // before the runner finishes, and finishing must never put it back.
+        handledThisInsertion.insert(card.volumeUUID)
         let runner = SessionRunner(sessionID: sessionID, card: card, config: config,
                                    journal: journal, staging: staging, nas: nas,
                                    cardWatcher: watcher, wipeOnly: wipeOnly, emit: emit)
@@ -439,7 +441,6 @@ actor Coordinator {
 
     private func runnerFinished(_ finished: SessionRunner) async {
         if runner === finished { runner = nil }
-        handledThisInsertion.insert(finished.card.volumeUUID)   // done → don't re-ingest while it sits in the reader
         Task { [weak self] in await self?.emitGlance() }
         // Auto-start the next queued card that is STILL physically present. A card
         // pulled while waiting in the queue is dropped, not started against a ghost
@@ -487,40 +488,60 @@ actor Coordinator {
     }
 
     private func resumeAfterReinsert(_ volume: CandidateVolume) async {
-        guard let runner else { return }
+        guard let runner, let record = await journal.session(id: runner.sessionID) else { return }
+        let card = volume.info
+        let isOriginal = await matchesReinsertedCard(card, runner: runner, token: record.cardSessionToken)
+        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
+        guard isOriginal else {
+            emit(.attention(AttentionItem(severity: .error, title: "Insert the original card",
+                detail: "The session can only resume with the original card in its original reader. Nothing was copied or erased from this card.")))
+            return
+        }
         if runner.wipeOnly {
-            guard let record = await journal.session(id: runner.sessionID),
-                  volume.info.mountPath == runner.card.mountPath, cardPresenceCheck(volume.info),
-                  await Task.detached(priority: .userInitiated, operation: {
-                      (try? String(contentsOf: URL(fileURLWithPath: volume.info.mountPath)
-                        .appendingPathComponent(Paths.cardSessionMarkerName), encoding: .utf8))?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                  }).value == record.cardSessionToken else {
-                emit(.attention(AttentionItem(severity: .error, title: "Insert the original card",
-                    detail: "The wipe retry is still waiting for its original card. Nothing was copied or erased.")))
-                return
-            }
             lastVolume = volume
-            await runner.cardReturned()
-            awaitingReinsert.remove(volume.info.volumeUUID)
+            handledThisInsertion.insert(card.volumeUUID)
+            await runner.cardReturned(bsdName: card.bsdName)
+            awaitingReinsert.remove(card.volumeUUID)
             return
         }
         let config = await configProvider()
+        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
         emit(.phase(.scanning))
         let preparation = PreparationTracker()
         let sampler = samplePreparation(preparation)
         defer { sampler.cancel() }
-        guard let record = await journal.session(id: runner.sessionID) else { return }
         let planner = IngestPlanner(router: DateFolderRouter(layout: config.dateFolderLayout))
         let scope = config.ingestScope
-        let cardRoot = URL(fileURLWithPath: volume.info.mountPath, isDirectory: true)
+        let cardRoot = URL(fileURLWithPath: card.mountPath, isDirectory: true)
         let scanned = await Task.detached(priority: .userInitiated) {
             planner.scan(cardRoot: cardRoot, scope: scope, progress: preparation)
         }.value
         let plan = await planner.merge(scanned: scanned, into: record.files, progress: preparation)
+        // Scanning can suspend long enough for another removal or card swap.
+        let stillOriginal = await matchesReinsertedCard(card, runner: runner, token: record.cardSessionToken)
+        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
+        guard stillOriginal else {
+            emit(.phase(.pausedCardGone))
+            return
+        }
         await journal.replaceFiles(plan.files, in: runner.sessionID)
-        await runner.cardReturned()
-        awaitingReinsert.remove(volume.info.volumeUUID)
+        guard self.runner === runner, awaitingReinsert.contains(card.volumeUUID) else { return }
+        lastVolume = volume
+        handledThisInsertion.insert(card.volumeUUID)
+        await runner.cardReturned(bsdName: card.bsdName)
+        awaitingReinsert.remove(card.volumeUUID)
+    }
+
+    private func matchesReinsertedCard(_ card: CardInfo, runner: SessionRunner, token: String?) async -> Bool {
+        // The runner's source paths stay rooted at the original mount point.
+        guard card.mountPath == runner.card.mountPath, cardPresenceCheck(card) else { return false }
+        // Old transfer records may predate card markers. Preserve that compatibility.
+        if token == nil {
+            guard card.bsdName == runner.card.bsdName else { return false }
+            if !runner.wipeOnly { return true }
+        }
+        let actual = await BackgroundWork.run(priority: .userInitiated) { self.readCardToken(card.mountPath) }
+        return actual == token && cardPresenceCheck(card)
     }
 
     // MARK: - Misc intents

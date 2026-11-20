@@ -395,7 +395,7 @@ private struct LibraryHeader: View {
                     Breadcrumb(model: model)
                     Spacer()
                     Button {
-                        if let folder = model.currentDir { NSWorkspace.shared.open(folder) }
+                        if let folder = model.currentDir { LibraryWorkspace.open(folder) }
                     } label: {
                         Label("Open Folder in Finder", systemImage: "folder")
                     }
@@ -864,7 +864,7 @@ private struct LibraryGrid: View {
             .controlSize(.small)
             .help("Copy the selected photos, then paste into a Finder folder (⌘C)")
             Button {
-                NSWorkspace.shared.activateFileViewerSelecting(model.selectedItems.map { $0.primary.url })
+                LibraryWorkspace.reveal(model.selectedItems.map { $0.primary.url })
             } label: {
                 Label("Show in Finder", systemImage: "folder")
             }
@@ -896,11 +896,22 @@ private struct LibraryGrid: View {
         return ScrollView {
             let folders = model.folderItems
             let photos = model.photoItems
-            if folders.isEmpty && photos.isEmpty {
-                ContentUnavailableView(emptyTitle,
-                                       systemImage: emptySystemImage,
-                                       description: Text(emptyDetail))
+            if folders.isEmpty && photos.isEmpty, let load = model.folderLoad {
+                FolderLoadingView(load: load, source: model.source, stop: model.stopFolderLoad)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, DS.Space.xl)
                     .padding(.top, 60)
+            } else if folders.isEmpty && photos.isEmpty {
+                ContentUnavailableView {
+                    Label(emptyTitle, systemImage: emptySystemImage)
+                } description: {
+                    Text(emptyDetail)
+                } actions: {
+                    if model.loadError != nil && (model.source != .nas || model.mounted) {
+                        Button("Retry Folder", action: model.reloadCurrentFolder)
+                    }
+                }
+                .padding(.top, 60)
             } else {
                 VStack(alignment: .leading, spacing: DS.Space.l) {
                     if !folders.isEmpty {
@@ -983,9 +994,9 @@ private struct LibraryGrid: View {
             }
             Divider()
             Button("Open") { openViewer(item) }
-            Button("Open in Preview") { NSWorkspace.shared.open(item.primary.url) }
+            Button("Open in Preview") { LibraryWorkspace.open(item.primary.url) }
             if let rawURL = item.rawCompanion?.url {
-                Button("Open RAW") { NSWorkspace.shared.open(rawURL) }
+                Button("Open RAW") { LibraryWorkspace.open(rawURL) }
             }
             Button("Reveal in Finder") { reveal(item.primary.url) }
             Button(model.isFavorite(item.primary.id) ? "Remove from Favorites" : "Add to Favorites") {
@@ -1029,12 +1040,11 @@ private struct LibraryGrid: View {
     }
 
     private func reveal(_ url: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        LibraryWorkspace.reveal([url])
     }
 
     private var emptyTitle: String {
         if model.source == .nas && !model.mounted { return "NAS unavailable" }
-        if model.loading { return "Loading photos…" }
         if model.loadError != nil { return "Couldn’t open this folder" }
         if model.minRating > 0 || model.flagFilter != .all { return "No photos match these filters" }
         return (model.isSearching || model.faceFilterLabel != nil) ? "No matches" : "Nothing here"
@@ -1047,18 +1057,62 @@ private struct LibraryGrid: View {
         if model.source == .nas && !model.mounted {
             return "Trying to reconnect to the configured destination…"
         }
-        if let error = model.loadError { return "\(error) Use Refresh to try again." }
+        if let error = model.loadError { return error }
         if model.minRating > 0 || model.flagFilter != .all {
             return "Open View to change the star rating or pick/reject filters."
         }
         if let f = model.faceFilterLabel { return "No photos for “\(f)”." }
         if model.isSearching { return "No saved tags, descriptions, filenames, or names match “\(model.searchText)”. Try another word, or use Analyze with AI to add descriptions." }
-        return model.loading ? "Loading…" : "This folder has no photos or subfolders."
+        return "This folder has no photos or subfolders."
     }
 
     private func open(_ item: DisplayItem) {
         if item.isFolder { model.enter(item.primary) }
         else { openViewer(item) }
+    }
+}
+
+private struct FolderLoadingView: View {
+    let load: LibraryModel.FolderLoad
+    let source: LibraryModel.Source
+    var stop: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            content(elapsed: max(0, Int(context.date.timeIntervalSince(load.updatedAt))))
+        }
+    }
+
+    private func content(elapsed: Int) -> some View {
+        let device = source == .nas ? "the NAS" : "the SD card"
+        let title = elapsed >= 8 ? "Waiting for \(device)" : "Loading photos…"
+        let message = elapsed >= 8 ? "\(detail) No update for \(Fmt.duration(Double(elapsed)))." : detail
+        return VStack(alignment: .leading, spacing: DS.Space.m) {
+            Text(title).font(.title3.weight(.semibold))
+            progressBar
+                .progressViewStyle(.linear)
+                .tint(Theme.accent)
+                .accessibilityLabel("Folder loading progress")
+            Text(message).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            Button("Stop Waiting", action: stop).controlSize(.small)
+        }
+        .frame(maxWidth: 340)
+    }
+
+    @ViewBuilder private var progressBar: some View {
+        if case let .checking(progress) = load.stage, progress.total > 0 {
+            ProgressView(value: Double(progress.checked), total: Double(progress.total))
+        } else {
+            ProgressView()
+        }
+    }
+
+    private var detail: String {
+        switch load.stage {
+        case .findingFolder: "Finding the recent folder."
+        case .listing: "Reading the folder’s contents."
+        case .checking(let progress): "Checked \(progress.checked) of \(progress.total) items."
+        }
     }
 }
 

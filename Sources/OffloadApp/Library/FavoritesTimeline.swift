@@ -78,7 +78,7 @@ struct FavoritesTimeline: View {
                                                     Button("Open") { openViewer(item) }
                                                     Button("Remove from Favorites") { model.toggleFavorite(item) }
                                                     Button("Reveal in Finder") {
-                                                        NSWorkspace.shared.activateFileViewerSelecting([item.primary.url])
+                                                        LibraryWorkspace.reveal([item.primary.url])
                                                     }
                                                 }
                                         }

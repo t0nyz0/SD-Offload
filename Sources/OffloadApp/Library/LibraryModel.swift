@@ -67,11 +67,21 @@ struct DisplayItem: Identifiable, Sendable {
 final class LibraryModel {
     static let deletionRecoveryHint = "Uses macOS Trash, or Deleted Photos on the NAS for recovery."
     enum Source: Equatable { case nas, card, favorites, faces }
+    struct FolderLoad {
+        enum Stage { case findingFolder, listing, checking(LibraryBrowser.BrowseProgress) }
+        let stage: Stage
+        let updatedAt: Date = .now
+    }
+    private enum FolderBrowseUpdate: Sendable {
+        case progress(LibraryBrowser.BrowseProgress)
+        case finished(Result<[LibraryEntry], Error>)
+    }
 
     var source: Source = .nas
     private(set) var pathStack: [URL] = []       // root … current
     private(set) var entries: [LibraryEntry] = [] { didSet { rebuildDisplayed() } }
     private(set) var loading = false
+    private(set) var folderLoad: FolderLoad?
     private(set) var loadError: String?
     // Cached grouping of displayedEntries, rebuilt ONLY when entries/searchResults
     // change — so selection taps, tag updates during Analyze, and grid re-renders
@@ -144,7 +154,7 @@ final class LibraryModel {
     }
 
     private let browser = LibraryBrowser()
-    @ObservationIgnored private let browseDirectory: @Sendable (URL) -> Result<[LibraryEntry], Error>
+    @ObservationIgnored private let browseDirectory: @Sendable (URL, @Sendable (LibraryBrowser.BrowseProgress) -> Void) -> Result<[LibraryEntry], Error>
     let photoIndex = PhotoIndex()
     let faceIndex = FaceIndex()
     let identityIndex = IdentityIndex()
@@ -172,8 +182,8 @@ final class LibraryModel {
          dateFolderLayouts: [DateFolderLayout] = DateFolderLayout.presets,
          activeDateFolderLayout: DateFolderLayout = .nestedNumeric,
          aiConfigProvider: @escaping () -> AppConfig = { AppConfig.load() },
-         browseDirectory: @escaping @Sendable (URL) -> Result<[LibraryEntry], Error> = { url in
-             Result { try LibraryBrowser().browseChecked(url) }
+         browseDirectory: @escaping @Sendable (URL, @Sendable (LibraryBrowser.BrowseProgress) -> Void) -> Result<[LibraryEntry], Error> = { url, progress in
+             Result { try LibraryBrowser().browseChecked(url, progress: progress) }
          }) {
         self.aiConfigProvider = aiConfigProvider
         self.browseDirectory = browseDirectory
@@ -257,6 +267,7 @@ final class LibraryModel {
             freeBytes = 0
             totalVolumeBytes = 0
             loading = false
+            folderLoad = nil
             entries = []
             return
         }
@@ -272,6 +283,7 @@ final class LibraryModel {
         guard newSource != source || pathStack.isEmpty else { return }
         browseTask?.cancel()
         browseEpoch += 1
+        folderLoad = nil
         countTask?.cancel()
         volumeTask?.cancel()
         volumeEpoch += 1
@@ -436,6 +448,7 @@ final class LibraryModel {
         source = .favorites
         browseTask?.cancel()
         browseEpoch += 1
+        folderLoad = nil
         countTask?.cancel()
         volumeTask?.cancel()
         volumeEpoch += 1
@@ -470,6 +483,7 @@ final class LibraryModel {
         source = .faces
         browseTask?.cancel()
         browseEpoch += 1
+        folderLoad = nil
         countTask?.cancel()
         volumeTask?.cancel()
         volumeEpoch += 1
@@ -567,7 +581,14 @@ final class LibraryModel {
         searchText = ""
         searchResults = nil
         refreshVolumeStats(root)
-        if deferBrowse { loading = true; entries = [] } else { loadEntries() }
+        if deferBrowse {
+            loading = true
+            loadError = nil
+            folderLoad = FolderLoad(stage: .findingFolder)
+            entries = []
+        } else {
+            loadEntries()
+        }
         startCount(root)
         refreshSuggestions()
         Task { await refreshFaceState() }
@@ -827,8 +848,8 @@ final class LibraryModel {
         do {
             let root = URL(fileURLWithPath: nasRootPath, isDirectory: true)
             let folder = try await LibraryTrash.openRecoveryFolder(archiveRoot: root)
-            if !NSWorkspace.shared.open(folder) {
-                deleteError = "Couldn't open Deleted Photos in Finder. The files remain on the NAS at \(folder.path)."
+            LibraryWorkspace.open(folder) { [weak self] in
+                self?.deleteError = "Couldn't open Deleted Photos in Finder. The files remain on the NAS at \(folder.path)."
             }
         } catch { deleteError = "Couldn't open Deleted Photos: \(error.localizedDescription)" }
     }
@@ -1281,25 +1302,50 @@ final class LibraryModel {
         browseEpoch += 1
         let epoch = browseEpoch
         clearSelection()
-        guard let dir = currentDir else { entries = []; loading = false; return }
+        guard let dir = currentDir else { entries = []; loading = false; folderLoad = nil; return }
         loading = true
+        folderLoad = FolderLoad(stage: .listing)
         loadError = nil
         entries = []
         let browseDirectory = self.browseDirectory
         browseTask = Task { [weak self] in
-            let result = await BackgroundWork.run(priority: .userInitiated) {
-                browseDirectory(dir)
+            let updates = AsyncStream<FolderBrowseUpdate>(bufferingPolicy: .bufferingNewest(1)) { continuation in
+                let worker = Task {
+                    let result = await BackgroundWork.run(priority: .userInitiated) {
+                        browseDirectory(dir) { continuation.yield(.progress($0)) }
+                    }
+                    continuation.yield(.finished(result))
+                    continuation.finish()
+                }
+                continuation.onTermination = { _ in worker.cancel() }
             }
-            guard let self, !Task.isCancelled, self.browseEpoch == epoch else { return }
-            self.loading = false
-            switch result {
-            case .success(let entries):
-                self.entries = entries
-                self.loadTagOverlays(for: entries)
-            case .failure(let error):
-                self.loadError = error.localizedDescription
+            for await update in updates {
+                guard let self, !Task.isCancelled, self.browseEpoch == epoch else { return }
+                switch update {
+                case .progress(let progress):
+                    self.folderLoad = FolderLoad(stage: .checking(progress))
+                case .finished(let result):
+                    self.loading = false
+                    self.folderLoad = nil
+                    switch result {
+                    case .success(let entries):
+                        self.entries = entries
+                        self.loadTagOverlays(for: entries)
+                    case .failure(let error):
+                        self.loadError = error.localizedDescription
+                    }
+                }
             }
         }
+    }
+
+    func stopFolderLoad() {
+        guard folderLoad != nil else { return }
+        browseTask?.cancel()
+        browseEpoch += 1
+        folderLoad = nil
+        loading = false
+        loadError = "Folder loading stopped."
     }
 
     /// Populate tile tag overlays + the "deep analyzed" badge from the index for the

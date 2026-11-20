@@ -21,7 +21,11 @@ struct ActiveSessionView: View {
                     Text(statusWord)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+                // Reserve room for the longest status so changing words or
+                // percentage digits cannot recenter the card and headline.
+                .frame(width: 164, alignment: .leading)
             }
             .padding(.top, 2)
 
@@ -162,10 +166,14 @@ struct ActiveSessionView: View {
     private func etaLine(_ label: String, _ value: String?) -> some View {
         HStack(spacing: 5) {
             Text(label)
+                .frame(width: 116, alignment: .trailing)
             Text(value ?? "estimating…")
                 .monospacedDigit()
                 .foregroundStyle(value == nil ? .secondary : .primary)
+                // Keep the label/value boundary fixed as estimates change.
+                .frame(width: 104, alignment: .leading)
         }
         .font(.system(size: 14, weight: .semibold))
+        .lineLimit(1)
     }
 }

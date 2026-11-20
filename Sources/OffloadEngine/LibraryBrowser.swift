@@ -5,6 +5,11 @@ import OffloadCore
 /// Browsing is lazy per-directory (fast, even over SMB); counting walks the
 /// whole tree progressively and caches the total.
 public struct LibraryBrowser: Sendable {
+    public struct BrowseProgress: Sendable, Equatable {
+        public let checked: Int
+        public let total: Int
+    }
+
     public init() {}
 
     /// Index IDs retain their original spelling. Resolve the root once, off the
@@ -25,15 +30,24 @@ public struct LibraryBrowser: Sendable {
         (try? browseChecked(directory)) ?? []
     }
 
-    public func browseChecked(_ directory: URL) throws -> [LibraryEntry] {
+    public func browseChecked(_ directory: URL,
+                              progress: @Sendable (BrowseProgress) -> Void = { _ in }) throws -> [LibraryEntry] {
+        try Task.checkCancellation()
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .isHiddenKey]
         let items = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys,
                                               options: [.skipsHiddenFiles])
         var folders: [LibraryEntry] = []
         var media: [LibraryEntry] = []
-        for url in items {
+        progress(BrowseProgress(checked: 0, total: items.count))
+        for (index, url) in items.enumerated() {
             try Task.checkCancellation()
+            defer {
+                let checked = index + 1
+                if checked.isMultiple(of: 16) || checked == items.count {
+                    progress(BrowseProgress(checked: checked, total: items.count))
+                }
+            }
             let name = url.lastPathComponent
             if name.hasPrefix(".") { continue }
             guard let vals = try? url.resourceValues(forKeys: Set(keys)) else { continue }

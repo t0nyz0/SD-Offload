@@ -34,6 +34,17 @@ final class LibraryQATests: XCTestCase {
         XCTAssertThrowsError(try browser.browseChecked(root.appendingPathComponent("missing")))
     }
 
+    func testLibraryEntryURLUsesRecordedKindWhenFilesystemDiffers() {
+        let vanishedPath = root.appendingPathComponent("removed-folder").path
+        let folder = LibraryEntry(id: vanishedPath, name: "removed-folder", kind: .folder, size: 0, modified: Date())
+        let replacedPhoto = LibraryEntry(id: root.path, name: "photo.JPG", kind: .media(.photo), size: 1, modified: Date())
+
+        XCTAssertEqual(folder.url.path, vanishedPath)
+        XCTAssertTrue(folder.url.hasDirectoryPath)
+        XCTAssertEqual(replacedPhoto.url.path, root.path)
+        XCTAssertFalse(replacedPhoto.url.hasDirectoryPath)
+    }
+
     func testCountIncludesNestedMediaButNotHiddenOrNonMedia() throws {
         let nested = root.appendingPathComponent("2026/09/26")
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
@@ -225,7 +236,7 @@ final class LibraryQATests: XCTestCase {
         let slow = root.appendingPathComponent("slow")
         let fast = root.appendingPathComponent("fast")
         for dir in [slow, fast] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-        let model = LibraryModel(nasRootPath: root.path, cardRootPath: nil, browseDirectory: { url in
+        let model = LibraryModel(nasRootPath: root.path, cardRootPath: nil, browseDirectory: { url, _ in
             if url.path == slow.path { started.fulfill(); Thread.sleep(forTimeInterval: 0.15) }
             return .success(["a.JPG", "b.JPG"].map {
                 LibraryEntry(id: url.appendingPathComponent($0).path, name: $0, kind: .media(.photo), size: 100, modified: Date())
@@ -244,5 +255,43 @@ final class LibraryQATests: XCTestCase {
         XCTAssertEqual(model.photoItems.first?.id, b.id)
         // Allow the local persistence tasks to finish before removing the fixture.
         try await Task.sleep(for: .milliseconds(50))
+    }
+
+    @MainActor
+    func testFolderProgressAndStopWhileAReadIsWaiting() async throws {
+        let folder = root.appendingPathComponent("browse")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        for index in 1...2 {
+            try Data().write(to: folder.appendingPathComponent("photo\(index).JPG"))
+        }
+        let waiting = expectation(description: "folder worker reported progress")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let model = LibraryModel(nasRootPath: root.path, cardRootPath: nil, browseDirectory: { url, progress in
+            Result {
+                try LibraryBrowser().browseChecked(url) { update in
+                    progress(update)
+                    if update.checked == 0 {
+                        waiting.fulfill()
+                        _ = release.wait(timeout: .now() + 3)
+                    }
+                }
+            }
+        })
+
+        model.openPinned(folder.path)
+        guard case .listing? = model.folderLoad?.stage else { return XCTFail("Expected initial listing state") }
+        await fulfillment(of: [waiting], timeout: 2)
+        for _ in 0..<100 {
+            if case .checking = model.folderLoad?.stage { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        guard case .checking(let progress)? = model.folderLoad?.stage else { return XCTFail("Expected measured progress") }
+        XCTAssertEqual(progress.checked, 0)
+        XCTAssertEqual(progress.total, 2)
+        model.stopFolderLoad()
+        XCTAssertFalse(model.loading)
+        XCTAssertNil(model.folderLoad)
+        XCTAssertEqual(model.loadError, "Folder loading stopped.")
     }
 }

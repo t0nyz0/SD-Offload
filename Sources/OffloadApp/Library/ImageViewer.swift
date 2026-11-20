@@ -137,7 +137,7 @@ struct ImageViewer: View {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle)
                 Text("Video unavailable").font(.headline)
                 Text(videoError).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Open in Default Video App") { NSWorkspace.shared.open(item.primary.url) }
+                Button("Open in Default Video App") { LibraryWorkspace.open(item.primary.url) }
             }
             .padding(32)
         } else {
@@ -214,10 +214,10 @@ struct ImageViewer: View {
                 .tint(showInfo ? Color.accentColor : nil)
                 .modifier(ViewerControlHint(text: "Photo info — show or hide tags, camera details, and metadata (i)", activeHint: $hoveredControlHint))
                 if let raw = item.rawCompanion?.url {
-                    Button { NSWorkspace.shared.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
+                    Button { LibraryWorkspace.open(raw) } label: { Label("Open RAW", systemImage: "camera.aperture") }
                         .modifier(ViewerControlHint(text: "Open RAW — open the original camera file in its default app", activeHint: $hoveredControlHint))
                 }
-                Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
+                Button { LibraryWorkspace.reveal([item.primary.url]) } label: {
                     Label("Show in Finder", systemImage: "folder")
                 }
                 .modifier(ViewerControlHint(text: "Show in Finder — locate this photo in its folder", activeHint: $hoveredControlHint))
@@ -257,7 +257,7 @@ struct ImageViewer: View {
             }
             .buttonStyle(.plain)
             .help("Back to Library (Esc)")
-            Button { NSWorkspace.shared.activateFileViewerSelecting([item.primary.url]) } label: {
+            Button { LibraryWorkspace.reveal([item.primary.url]) } label: {
                 Label("Show in Finder", systemImage: "folder")
             }
             .buttonStyle(.plain)

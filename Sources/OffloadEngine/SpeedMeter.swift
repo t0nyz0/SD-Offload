@@ -14,6 +14,41 @@ public final class SpeedMeter: @unchecked Sendable {
     private var filesDone = [Int](repeating: 0, count: 4)
     private var lastSampleBytes = [Int64](repeating: 0, count: 4)
     private var rates: [EWMA] = (0..<4).map { _ in EWMA(tau: 5) }
+    private var etaWindows = (0..<4).map { _ in ETAWindow() }
+
+    /// Estimate throughput between actual progress samples. Zero-byte samples
+    /// still lower the displayed speed, but cannot inflate an ETA while a NAS
+    /// open/flush operation is waiting. A long stall starts a new warm-up window.
+    private struct ETAWindow {
+        static let stallSeconds: TimeInterval = 10
+        var first: Date?
+        var last: Date?
+        var bytes: Int64 = 0
+        var initialFiles = 0
+        var rate = EWMA(tau: 5)
+
+        mutating func observe(bytes delta: Int64, files: Int, now: Date) {
+            guard delta > 0 else { return }
+            if let last, now.timeIntervalSince(last) < Self.stallSeconds {
+                let dt = now.timeIntervalSince(last)
+                if dt > 0 { rate.add(sample: Double(delta) / dt, dt: dt) }
+                bytes += delta
+            } else {
+                first = now
+                bytes = 0
+                initialFiles = files
+                rate.reset()
+            }
+            last = now
+        }
+
+        func estimate(files: Int, now: Date) -> Double? {
+            guard let first, let last, now.timeIntervalSince(last) < Self.stallSeconds,
+                  ETAMath.isWarm(sampledSeconds: last.timeIntervalSince(first),
+                                 bytesObserved: bytes, filesObserved: files - initialFiles) else { return nil }
+            return rate.value
+        }
+    }
     private var overheads: [OverheadModel] = [
         OverheadModel(seed: 0.015),   // sdRead: FSKit-exFAT metadata is not cheap
         OverheadModel(seed: 0.005),   // stagingVerify
@@ -62,6 +97,7 @@ public final class SpeedMeter: @unchecked Sendable {
             let instantaneous = delta / dt
             rates[i].add(sample: instantaneous, dt: dt)
             peaks[i] = max(peaks[i], instantaneous)
+            etaWindows[i].observe(bytes: bytes[i] - lastSampleBytes[i], files: filesDone[i], now: now)
         }
         lastSampleAt = now
         lastSampleBytes = bytes
@@ -91,6 +127,12 @@ public final class SpeedMeter: @unchecked Sendable {
     public func overheadSeconds(_ stage: Stage) -> Double {
         lock.lock(); defer { lock.unlock() }
         return overheads[stage.rawValue].seconds
+    }
+
+    /// A warmed, recent throughput estimate, excluding the cold connection wait.
+    public func etaRate(_ stage: Stage, now: Date = Date()) -> Double? {
+        lock.lock(); defer { lock.unlock() }
+        return etaWindows[stage.rawValue].estimate(files: filesDone[stage.rawValue], now: now)
     }
 
     public func bytesTotal(_ stage: Stage) -> Int64 {
